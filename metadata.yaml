@@ -1,0 +1,6 @@
+name: astrbot_plugin_mcwatcher
+display_name: Mcwatcher
+desc: Minecraft 服务器信息监控与展示插件
+version: v1.0.0
+author: poso
+repo: https://github.com/banxxx/astrbot_plugin_mcwatcher
