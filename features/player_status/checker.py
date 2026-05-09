@@ -11,12 +11,17 @@ async def query_one(server_info: dict) -> Dict[str, Any]:
         players = []
         if status.players.sample:
             players = [p.name for p in status.players.sample]
+        # 版本信息
+        version = status.version.name if status.version else "未知"
+        latency = status.latency if status.latency else 0.0
         return {
             "name": name,
             "host": host,
             "online": status.players.online,
             "max": status.players.max,
             "players": players,
+            "version": version,
+            "latency": latency,
             "error": None
         }
     except Exception as e:
@@ -26,6 +31,8 @@ async def query_one(server_info: dict) -> Dict[str, Any]:
             "online": 0,
             "max": 0,
             "players": [],
+            "version": "未知",
+            "latency": 0.0,
             "error": str(e)
         }
 

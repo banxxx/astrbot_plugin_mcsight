@@ -1,0 +1,52 @@
+{
+    "enable_group_owner": {
+        "description": "是否允许群主使用功能",
+        "type": "boolean",
+        "default": true
+    },
+    "enable_group_admin": {
+        "description": "是否允许管理员使用功能",
+        "type": "boolean",
+        "default": true
+    },
+    "show_server_version": {
+        "description": "是否在卡片上显示服务器版本",
+        "type": "boolean",
+        "default": false
+    },
+    "show_server_latency": {
+        "description": "是否在卡片上显示服务器延迟",
+        "type": "boolean",
+        "default": false
+    },
+    "super_admins": {
+        "description": "超级管理员",
+        "type": "list",
+        "hint": "可管理白名单。填写用户 QQ 号（或其他平台唯一ID）",
+        "default": [],
+        "items": {
+            "type": "string",
+            "description": "用户ID"
+        }
+    },
+    "whitelist_admins": {
+        "description": "白名单管理员",
+        "type": "list",
+        "hint": "与群主、管理员拥有同等权限。填写用户 QQ 号（或其他平台唯一ID）",
+        "default": [],
+        "items": {
+            "type": "string",
+            "description": "用户ID"
+        }
+    },
+    "blacklist": {
+        "description": "黑名单",
+        "type": "list",
+        "hint": "黑名单中的用户无法使用插件的所有功能。填写用户 QQ 号（或其他平台唯一ID）",
+        "default": [],
+        "items": {
+            "type": "string",
+            "description": "用户ID"
+        }
+    },
+}
