@@ -1,22 +1,22 @@
 {
     "enable_group_owner": {
         "description": "是否允许群主使用功能",
-        "type": "boolean",
+        "type": "bool",
         "default": true
     },
     "enable_group_admin": {
         "description": "是否允许管理员使用功能",
-        "type": "boolean",
+        "type": "bool",
         "default": true
     },
     "show_server_version": {
         "description": "是否在卡片上显示服务器版本",
-        "type": "boolean",
+        "type": "bool",
         "default": false
     },
     "show_server_latency": {
         "description": "是否在卡片上显示服务器延迟",
-        "type": "boolean",
+        "type": "bool",
         "default": false
     },
     "super_admins": {
@@ -48,5 +48,5 @@
             "type": "string",
             "description": "用户ID"
         }
-    },
+    }
 }

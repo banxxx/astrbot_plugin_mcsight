@@ -1,32 +1,32 @@
 import os
 from PIL import Image, ImageDraw, ImageFont
 
-# 样式常量（与 HTML 保持一致）
-CONTAINER_WIDTH = 660
-CONTAINER_PADDING = 24
+# ========== 样式常量（高清优化版）==========
+CONTAINER_WIDTH = 1080         # 提升画布宽度，消除模糊
+CONTAINER_PADDING = 36         # 外框内边距
 CONTAINER_BG = '#F9F9F8'
-CONTAINER_RADIUS = 16
+CONTAINER_RADIUS = 24
 
 TITLE_TEXT = "📋 命令帮助"
 TITLE_COLOR = '#5b6abf'
-TITLE_SIZE = 28
-TITLE_MARGIN_BOTTOM = 20
+TITLE_SIZE = 40                # 标题字号加大
+TITLE_MARGIN_BOTTOM = 24
 
 CARD_BG = '#FFFFFF'
-CARD_RADIUS = 12
-CARD_PADDING = 24
+CARD_RADIUS = 16
+CARD_PADDING = 36              # 卡片内边距加大
 CARD_MARGIN_BOTTOM = 0
 
 SECTION_TITLE_COLOR = '#444444'
-SECTION_TITLE_SIZE = 16
+SECTION_TITLE_SIZE = 22        # 分区标题字号加大
 SECTION_ITEM_NAME_COLOR = '#5b6abf'
 SECTION_ITEM_DESC_COLOR = '#666666'
-SECTION_ITEM_SIZE = 14
-LINE_SPACING = 6
+SECTION_ITEM_SIZE = 18         # 命令文字字号加大
+LINE_SPACING = 10              # 行间距加大
 DIVIDER_COLOR = '#e0e0e0'
 NOTE_COLOR = '#999999'
-NOTE_SIZE = 13
-NOTE_MARGIN_TOP = 16
+NOTE_SIZE = 18
+NOTE_MARGIN_TOP = 24
 
 # 命令列表数据（静态）
 COMMAND_SECTIONS = [
@@ -87,43 +87,52 @@ def draw_help_image() -> Image.Image:
     FONT_ITEM = _load_font(SECTION_ITEM_SIZE)
     FONT_NOTE = _load_font(NOTE_SIZE)
 
-    # 计算卡片高度
+    # 卡片可用宽度
     card_inner_width = CONTAINER_WIDTH - CONTAINER_PADDING * 2 - CARD_PADDING * 2
-    command_name_width = 200
+    # 命令名固定宽度（加大以容纳更长命令）
+    command_name_width = 260
+    # 描述宽度
     command_desc_width = card_inner_width - command_name_width
 
+    # 计算每个分区高度
     section_heights = []
     for section in COMMAND_SECTIONS:
         sec_h = 0
-        sec_h += FONT_SECTION_TITLE.size + 6
+        sec_h += FONT_SECTION_TITLE.size + 10  # 标题行
         for _ in section["items"]:
             sec_h += SECTION_ITEM_SIZE + LINE_SPACING
         section_heights.append(sec_h)
 
+    # 分割线高度与间距
     DIVIDER_HEIGHT = 1
-    DIVIDER_MARGIN = 14
+    DIVIDER_MARGIN = 18
 
+    # 卡片内容总高度
     card_content_height = 0
     for i, h in enumerate(section_heights):
         card_content_height += h
         if i < len(section_heights) - 1:
             card_content_height += DIVIDER_MARGIN * 2 + DIVIDER_HEIGHT
 
+    # 卡片高度（上下内边距 + 内容 + 备注）
     card_height = CARD_PADDING * 2 + card_content_height
     if NOTE_TEXT:
         card_height += NOTE_MARGIN_TOP + NOTE_SIZE
 
+    # 总画布高度
     total_height = CONTAINER_PADDING + TITLE_SIZE + TITLE_MARGIN_BOTTOM + card_height + CONTAINER_PADDING
 
+    # 创建画布
     img = Image.new('RGB', (CONTAINER_WIDTH, total_height), CONTAINER_BG)
     draw = ImageDraw.Draw(img)
 
+    # 绘制圆角容器背景
     draw.rounded_rectangle(
         [(0, 0), (CONTAINER_WIDTH, total_height)],
         radius=CONTAINER_RADIUS, fill=CONTAINER_BG
     )
 
-    # 标题
+    # 居中标题
     title_bbox = draw.textbbox((0, 0), TITLE_TEXT, font=FONT_TITLE)
     title_w = title_bbox[2] - title_bbox[0]
     title_x = (CONTAINER_WIDTH - title_w) // 2
@@ -135,18 +144,21 @@ def draw_help_image() -> Image.Image:
     card_x1 = CONTAINER_WIDTH - CONTAINER_PADDING
     card_y1 = card_y0 + card_height
 
+    # 绘制卡片圆角背景
     draw.rounded_rectangle(
         [card_x0, card_y0, card_x1, card_y1],
         radius=CARD_RADIUS, fill=CARD_BG
     )
 
+    # 绘制各分区
     y_cursor = card_y0 + CARD_PADDING
-
     for idx, section in enumerate(COMMAND_SECTIONS):
+        # 分区标题
         title = f"{section['icon']} {section['title']}"
         draw.text((card_x0 + CARD_PADDING, y_cursor), title, fill=SECTION_TITLE_COLOR, font=FONT_SECTION_TITLE)
-        y_cursor += FONT_SECTION_TITLE.size + 6
+        y_cursor += FONT_SECTION_TITLE.size + 10
 
+        # 命令项
         for name, desc in section["items"]:
             name_x = card_x0 + CARD_PADDING
             name_y = y_cursor
@@ -157,15 +169,17 @@ def draw_help_image() -> Image.Image:
 
             y_cursor += SECTION_ITEM_SIZE + LINE_SPACING
 
+        # 非最后一个分区，画分割线
         if idx < len(COMMAND_SECTIONS) - 1:
             y_cursor += DIVIDER_MARGIN
             line_y = y_cursor
             draw.line(
                 [(card_x0 + CARD_PADDING, line_y), (card_x1 - CARD_PADDING, line_y)],
-                fill=DIVIDER_COLOR, width=1
+                fill=DIVIDER_COLOR, width=2
             )
             y_cursor += DIVIDER_HEIGHT + DIVIDER_MARGIN
 
+    # 底部署注
     if NOTE_TEXT:
         y_cursor += NOTE_MARGIN_TOP
         note_bbox = draw.textbbox((0, 0), NOTE_TEXT, font=FONT_NOTE)

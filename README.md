@@ -20,7 +20,7 @@
 
 发送 `/mc status` 或 `/在线`，机器人会回复一张类似下图的卡片：
 
-![预览效果](https://raw.githubusercontent.com/banxxx/astrbot_plugin_mcwatcher/main/preview.png)
+![预览效果](https://cos.poso.cc.cd/PixPin_2026-05-10_08-08-22.png)
 
 
 ---
