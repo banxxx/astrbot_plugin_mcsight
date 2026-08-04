@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import List, Dict, Any
 from ...utils.avatar_cache import download_avatar
 from ...config.whitelist_config import WhitelistManager
-from .avatar_cache import download_avatar
+from ...utils.avatar_cache import download_avatar
 
 # ========== 样式常量（高清优化版）==========
 CONTAINER_WIDTH = 1080          # 提升画布宽度，增加清晰度
