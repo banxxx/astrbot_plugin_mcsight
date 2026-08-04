@@ -8,7 +8,6 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import List, Dict, Any
 from ...utils.avatar_cache import download_avatar
 from ...config.whitelist_config import WhitelistManager
-from ...utils.avatar_cache import download_avatar
 
 # ========== 样式常量（高清优化版）==========
 CONTAINER_WIDTH = 1080          # 提升画布宽度，增加清晰度
@@ -214,7 +213,7 @@ async def draw_multi_server_image(servers_data: List[Dict[str, Any]]) -> Image.I
             radius=CARD_RADIUS, fill=CARD_BG
         )
 
-        # 状态圆点 + 服务器名 + 版本
+        # 状态圆点 + 服务器名
         dot_x = card_x0 + CARD_PADDING_SIDE
         dot_center_y = card_y0 + CARD_PADDING_TOP + FONT_SERVER_NAME.size // 2
         dot_y = dot_center_y - STATUS_DOT_SIZE // 2
@@ -228,23 +227,25 @@ async def draw_multi_server_image(servers_data: List[Dict[str, Any]]) -> Image.I
         name_y = card_y0 + CARD_PADDING_TOP
         draw.text((name_x, name_y), card["name"], fill=SERVER_NAME_COLOR, font=FONT_SERVER_NAME)
 
-        next_x = name_x + draw.textbbox((0,0), card["name"], font=FONT_SERVER_NAME)[2] + 8
+        # ----- 修改：右侧信息区：版本（可选）→ 延迟（可选）→ 在线人数 -----
+        right_items = []
+        # 1. 版本信息（如果启用）
         if show_version:
             ver_text = card["version"]
-            draw.text((next_x, name_y + 4), ver_text, fill=SERVER_VERSION_COLOR, font=FONT_SERVER_VERSION)
-            next_x += draw.textbbox((0,0), ver_text, font=FONT_SERVER_VERSION)[2] + 12
-
-        # 右侧在线人数 + 延迟
-        right_items = []
-        cnt_text = f"{card['online_str']}/{card['max_str']} 人在线"
-        cnt_w = draw.textbbox((0,0), cnt_text, font=FONT_SERVER_COUNT)[2]
-        right_items.append((cnt_text, FONT_SERVER_COUNT, SERVER_COUNT_COLOR, cnt_w))
+            ver_w = draw.textbbox((0,0), ver_text, font=FONT_SERVER_VERSION)[2]
+            right_items.append((ver_text, FONT_SERVER_VERSION, SERVER_VERSION_COLOR, ver_w))
+        # 2. 延迟信息（如果启用）
         if show_latency:
             lat_val = card["latency"]
             lat_text = f"{lat_val:.0f}ms" if lat_val else "?ms"
             lat_w = draw.textbbox((0,0), lat_text, font=FONT_LATENCY)[2]
             right_items.append((lat_text, FONT_LATENCY, get_latency_color(lat_val), lat_w))
+        # 3. 在线人数（始终显示）
+        cnt_text = f"{card['online_str']}/{card['max_str']} 人在线"
+        cnt_w = draw.textbbox((0,0), cnt_text, font=FONT_SERVER_COUNT)[2]
+        right_items.append((cnt_text, FONT_SERVER_COUNT, SERVER_COUNT_COLOR, cnt_w))
 
+        # 计算右侧所有项的总宽度
         total_right_w = sum(w + 14 for _,_,_,w in right_items) - 14
         cursor_x = card_x1 - CARD_PADDING_SIDE - total_right_w
         for txt, font, color, w in right_items:
@@ -265,9 +266,11 @@ async def draw_multi_server_image(servers_data: List[Dict[str, Any]]) -> Image.I
                 # player 可以是字符串（旧格式）或字典（新格式）
                 if isinstance(player, dict):
                     player_name = player.get("name")
+                    player_uuid = player.get("uuid")
                     is_premium = player.get("is_premium")
                 else:
                     player_name = player
+                    player_uuid = None
                     is_premium = None  # 未知，视为 True
 
                 row = i // cols
@@ -276,7 +279,7 @@ async def draw_multi_server_image(servers_data: List[Dict[str, Any]]) -> Image.I
                 seat_y = grid_start_y + row * (AVATAR_SIZE + TEXT_NAME_SIZE + GAP_V)
 
                 # 下载头像，传入 is_premium
-                avatar = await download_avatar(session, player_name, AVATAR_SIZE, is_premium)
+                avatar = await download_avatar(session, player_name, AVATAR_SIZE, is_premium, uuid=player_uuid)
                 rounded = make_rounded(avatar, AVATAR_RADIUS)
                 img.paste(rounded, (int(seat_x), int(seat_y)), rounded)
 

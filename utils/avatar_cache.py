@@ -19,8 +19,8 @@ DOWNLOAD_TIMEOUT = 5.0          # 单个头像下载超时（秒）
 
 # 头像 API 源（按优先级依次尝试）
 AVATAR_API_TEMPLATES = [
-    "https://minotar.net/avatar/{username}/{size}",    # 首选
-    "https://crafthead.net/avatar/{username}/{size}",  # 备选
+    "https://minotar.net/avatar/{identifier}/{size}",    # 首选
+    "https://crafthead.net/avatar/{identifier}/{size}",  # 备选
 ]
 
 # ================= 内存缓存（LRU） =================
@@ -115,7 +115,11 @@ def get_default_avatar(size: int = 36) -> Image.Image:
     return img
 
 # ================= 核心下载函数 =================
-async def download_avatar(session: aiohttp.ClientSession, username: str, size: int = 36, is_premium: Optional[bool] = None) -> Image.Image:
+async def download_avatar(session: aiohttp.ClientSession, 
+                          username: str, 
+                          size: int = 36, 
+                          is_premium: Optional[bool] = None, 
+                          uuid: Optional[str] = None) -> Image.Image:
     """
     获取玩家头像（优先内存 → 磁盘 → 网络多源回退，全部失败则返回默认灰色头像）
     如果 is_premium 为 False，直接返回默认灰色头像（Steve），跳过网络请求。
@@ -124,8 +128,10 @@ async def download_avatar(session: aiohttp.ClientSession, username: str, size: i
         # 如果是明确离线玩家，直接返回默认头像
     if is_premium is False:
         return get_default_avatar(size)  # 需要实现此函数
-    
-    cache_key = f"{username}_{size}"
+
+    # 确定查询标识符（优先 UUID）
+    identifier = uuid if uuid else username
+    cache_key = f"{identifier}_{size}"
 
     # 1. 内存缓存
     cached = _memory_cache.get(cache_key)
@@ -152,7 +158,7 @@ async def download_avatar(session: aiohttp.ClientSession, username: str, size: i
     # 3. 网络下载，依次尝试所有配置的 API 模板
     data = None
     for template in AVATAR_API_TEMPLATES:
-        url = template.format(username=username, size=size)
+        url = template.format(identifier=identifier, size=size)
         data = await _download_avatar_data(session, url)
         if data is not None:
             break   # 成功即停止尝试
