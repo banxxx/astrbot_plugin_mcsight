@@ -2,7 +2,7 @@ import logging
 from astrbot.api.event import AstrMessageEvent
 from ..config.whitelist_config import WhitelistManager
 
-logger = logging.getLogger("astrbot_plugin_mcwatcher")
+logger = logging.getLogger("astrbot_plugin_mcsight")
 
 # 权限等级定义
 LEVEL_BLACKLIST = 0

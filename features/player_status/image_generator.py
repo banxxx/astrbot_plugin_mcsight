@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import List, Dict, Any
 from ...utils.avatar_cache import download_avatar
 from ...config.whitelist_config import WhitelistManager
+from .avatar_cache import download_avatar
 
 # ========== 样式常量（高清优化版）==========
 CONTAINER_WIDTH = 1080          # 提升画布宽度，增加清晰度
@@ -150,19 +151,12 @@ async def draw_multi_server_image(servers_data: List[Dict[str, Any]]) -> Image.I
                       DIVIDER_MARGIN_TOP + 1 + DIVIDER_MARGIN_BOTTOM +
                       grid_h + CARD_PADDING_BOTTOM)
 
-            # 下载头像（仅当有列表时）
-            if has_players:
-                tasks = [download_avatar(session, p, AVATAR_SIZE) for p in players]
-                avatar_imgs = await asyncio.gather(*tasks)
-            else:
-                avatar_imgs = []
 
             card_infos.append({
                 "name": name,
                 "online_str": online_str,
                 "max_str": max_str,
                 "players": players,
-                "avatars": avatar_imgs,
                 "online": online,
                 "has_players": has_players,
                 "grid_h": grid_h,
@@ -268,15 +262,27 @@ async def draw_multi_server_image(servers_data: List[Dict[str, Any]]) -> Image.I
         grid_start_y = line_y + DIVIDER_MARGIN_BOTTOM
         if card["has_players"]:
             for i, player in enumerate(card["players"]):
+                # player 可以是字符串（旧格式）或字典（新格式）
+                if isinstance(player, dict):
+                    player_name = player.get("name")
+                    is_premium = player.get("is_premium")
+                else:
+                    player_name = player
+                    is_premium = None  # 未知，视为 True
+
                 row = i // cols
                 col = i % cols
                 seat_x = card_x0 + CARD_PADDING_SIDE + col * (SEAT_WIDTH + GAP_H)
                 seat_y = grid_start_y + row * (AVATAR_SIZE + TEXT_NAME_SIZE + GAP_V)
-                rounded = make_rounded(card["avatars"][i], AVATAR_RADIUS)
+
+                # 下载头像，传入 is_premium
+                avatar = await download_avatar(session, player_name, AVATAR_SIZE, is_premium)
+                rounded = make_rounded(avatar, AVATAR_RADIUS)
                 img.paste(rounded, (int(seat_x), int(seat_y)), rounded)
+
                 name_tx = seat_x + AVATAR_SIZE + 10
                 name_ty = seat_y + (AVATAR_SIZE - TEXT_NAME_SIZE) // 2
-                draw.text((int(name_tx), int(name_ty)), player, fill=TEXT_NAME_COLOR, font=FONT_NAME)
+                draw.text((int(name_tx), int(name_ty)), player_name, fill=TEXT_NAME_COLOR, font=FONT_NAME)
         else:
             # 无玩家列表时区分两种状态
             if card["online"] > 0:

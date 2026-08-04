@@ -48,5 +48,25 @@
             "type": "string",
             "description": "用户ID"
         }
+    },
+    "enable_mod_api": {
+        "description": "是否启用模组 API 获取玩家数据（若开启，会优先尝试连接服务器上的模组 HTTP 接口）",
+        "type": "bool",
+        "default": false
+    },
+    "mod_api_port": {
+        "description": "模组 API 监听的端口（所有服务器统一使用）",
+        "type": "int",
+        "default": 25580
+    },
+    "use_plugin_api": {
+        "description": "是否启用服务端插件 API 数据源（优先于 mcstatus 查询）",
+        "type": "bool",
+        "default": true
+    },
+    "plugin_api_port": {
+        "description": "服务端插件 HTTP API 监听的端口（所有服务器统一使用）",
+        "type": "int",
+        "default": 8080
     }
 }

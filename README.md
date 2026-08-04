@@ -30,7 +30,7 @@
 1. 将本插件文件夹放入 AstrBot 的插件目录：
 
    ```
-   AstrBot/data/plugins/astrbot_plugin_mcwatcher/
+   AstrBot/data/plugins/astrbot_plugin_mcsight/
    ```
 
 2. 安装依赖：
@@ -99,7 +99,7 @@
 ## 🏗️ 项目结构
 
 ```
-astrbot_plugin_mcwatcher/
+astrbot_plugin_mcsight/
 ├── main.py                  # 插件入口，命令注册
 ├── metadata.yaml            # 插件元数据
 ├── requirements.txt         # 依赖

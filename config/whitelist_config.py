@@ -90,3 +90,26 @@ class WhitelistManager:
     def is_blacklisted(self, user_id: str) -> bool:
         """检查用户是否在黑名单中"""
         return user_id in self.blacklist
+
+    # ---------- 模组 API 配置 ----------
+    @property
+    def enable_mod_api(self) -> bool:
+        return self._get_config_value("enable_mod_api", False)
+
+    @property
+    def mod_api_port(self) -> int:
+        return self._get_config_value("mod_api_port", 25580)
+
+    # ---------- 服务端插件 API 配置 ----------
+    @property
+    def use_plugin_api(self) -> bool:
+        return self._get_config_value("use_plugin_api", True)
+
+    @property
+    def plugin_api_port(self) -> int:
+        """服务端插件 HTTP API 端口（默认 8080）"""
+        value = self._get_config_value("plugin_api_port", 8080)
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return 8080

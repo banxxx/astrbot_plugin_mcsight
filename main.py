@@ -5,7 +5,7 @@ from .commands.mc_handler import handle_mc_command
 from .features.player_status.controller import run_player_status
 from .config.whitelist_config import WhitelistManager
 
-@register("astrbot_plugin_mcwatcher", "poso", "Minecraft 多服务器状态监控插件", "v1.0.0")
+@register("astrbot_plugin_mcsight", "poso", "Minecraft 多服务器状态监控插件", "v1.0.0")
 class MCWatcher(Star):
     def __init__(self, context: Context):
         super().__init__(context)
