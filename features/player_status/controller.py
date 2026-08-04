@@ -6,6 +6,8 @@ from .image_generator import draw_multi_server_image
 from .checker import fetch_from_plugin, query_one, query_all_servers, query_via_api
 from ...config.whitelist_config import WhitelistManager
 
+logger = logging.getLogger("astrbot_plugin_mcsight")
+
 async def run_player_status(event: AstrMessageEvent, config_manager):
     """获取在线玩家状态，优先使用服务端插件 API"""
     servers = config_manager.get_all_servers()
