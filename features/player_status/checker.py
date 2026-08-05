@@ -170,3 +170,19 @@ async def query_via_api(host: str, port: int, timeout: float = 5.0) -> Optional[
     except Exception:
         pass
     return None
+
+
+async def ping_server(host: str, timeout: float = 3.0) -> float:
+    """
+    通过 mcstatus 的 ping 方法获取服务器延迟（毫秒）。
+    如果失败或超时，返回 0.0。
+    """
+    try:
+        server = await asyncio.to_thread(JavaServer.lookup, host)
+        latency = await asyncio.wait_for(
+            asyncio.to_thread(server.ping),
+            timeout=timeout
+        )
+        return latency * 1000  # 转换为毫秒
+    except Exception:
+        return 0.0

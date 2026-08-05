@@ -4,7 +4,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Image as AstrImage
 from .image_generator import draw_multi_server_image
-from .checker import fetch_from_plugin, query_one, query_all_servers, query_via_api, fetch_player_stats
+from .checker import fetch_from_plugin, query_one, query_all_servers, query_via_api, fetch_player_stats, ping_server
 from ...config.whitelist_config import WhitelistManager
 from .player_stats_generator import draw_player_stats_image
 from ...utils.avatar_cache import download_avatar
@@ -44,6 +44,16 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
 
         # 2. 如果插件数据有效，则使用它
         if plugin_data:
+            # 并发获取该服务器的真实延迟
+            ping_task = asyncio.create_task(ping_server(host))
+            # 等待延迟结果（不阻塞主流程）
+            try:
+                real_latency = await asyncio.wait_for(ping_task, timeout=3.0)
+                if real_latency > 0:
+                    plugin_data["latency"] = real_latency
+            except Exception:
+                pass  # 保持原有延迟（0）
+
             # 标准化插件数据（与之前 standardized 的格式一致）
             standardized.append({
                 "name": plugin_data.get("name", name),
