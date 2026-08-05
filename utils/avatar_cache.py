@@ -1,14 +1,13 @@
 import os
 import time
 import asyncio
-import logging
 from collections import OrderedDict
 from typing import Optional
+from astrbot.api import logger
 
 import aiohttp
 from PIL import Image
 
-logger = logging.getLogger("astrbot_plugin_mcsight")
 
 # ================= 配置常量 =================
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'avatar_cache')
@@ -77,9 +76,11 @@ async def _download_avatar_data(session: aiohttp.ClientSession, url: str) -> Opt
                 return await resp.read()
             else:
                 logger.debug(f"下载头像失败，HTTP {resp.status}: {url}")
+    except aiohttp.ClientError as e:
+        logger.error(f"客户端错误: {url} - {e}")
     except Exception as e:
-        logger.debug(f"下载头像网络错误: {url} - {e}")
-    return None
+        logger.error(f"下载头像异常: {url} - {e}")
+    raise  # 重新抛出以便上层处理
 
 def get_default_avatar(size: int = 36) -> Image.Image:
     """
@@ -125,13 +126,15 @@ async def download_avatar(session: aiohttp.ClientSession,
     如果 is_premium 为 False，直接返回默认灰色头像（Steve），跳过网络请求。
     如果 is_premium 为 True 或 None，走正常缓存+网络逻辑。
     """
-        # 如果是明确离线玩家，直接返回默认头像
+    # 如果是明确离线玩家，直接返回默认头像
+    logger.warning(f"头像is_premium {is_premium} ")
     if is_premium is False:
         return get_default_avatar(size)  # 需要实现此函数
 
     # 确定查询标识符（优先 UUID）
     identifier = uuid if uuid else username
     cache_key = f"{identifier}_{size}"
+    logger.warning(f"头像identifier {identifier} ")
 
     # 1. 内存缓存
     cached = _memory_cache.get(cache_key)

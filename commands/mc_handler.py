@@ -1,14 +1,17 @@
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Image as AstrImage
 from ..config.server_config import ConfigManager
-from ..features.player_status.controller import run_player_status
+from ..features.player_status.controller import run_player_status, run_player_stats
 from ..features.help_image.image_generator import draw_help_image
 from ..utils.permission import check_permission
 from ..config.whitelist_config import WhitelistManager
 
 async def handle_mc_command(event: AstrMessageEvent):
-    session_id = event.session_id
-    config = ConfigManager(session_id)
+    group_id = event.get_group_id()
+    if group_id:
+        config = ConfigManager(group_id=group_id)
+    else:
+        config = ConfigManager(session_id=event.session_id)
 
     msg = event.message_str.strip()
     if msg.startswith('/'):
@@ -25,7 +28,7 @@ async def handle_mc_command(event: AstrMessageEvent):
 
         # ---------- 白名单管理命令（超级管理员专属）----------
     if sub_cmd == "whitelist":
-        if not check_permission(event, "whitelist"):
+        if not await check_permission(event, "whitelist"):
             yield event.plain_result("权限不足：该命令仅限超级管理员使用。")
             return
         wm = WhitelistManager()
@@ -60,13 +63,13 @@ async def handle_mc_command(event: AstrMessageEvent):
     # 定义需要权限检查的子命令
     admin_cmds = {"add", "remove", "edit", "batchadd", "batchremove", "move", "swap"}
     if sub_cmd in admin_cmds:
-        if not check_permission(event, sub_cmd):
+        if not await check_permission(event, sub_cmd):
             yield event.plain_result("权限不足：该操作需要群管理员或插件管理员权限。")
             return
     elif sub_cmd == "help":
         pass  # 所有人可查看
-    elif sub_cmd in ("status", "list"):
-        if not check_permission(event, sub_cmd):
+    elif sub_cmd in ("status", "list", "stats"):
+        if not await check_permission(event, sub_cmd):
             yield event.plain_result("权限不足。")
             return
 
@@ -81,6 +84,17 @@ async def handle_mc_command(event: AstrMessageEvent):
 
     elif sub_cmd == "status":
         async for result in run_player_status(event, config):
+            yield result
+
+    elif sub_cmd == "stats":
+        if len(parts) < 2:
+            yield event.plain_result("用法: /mc stats <玩家名> [-s <服务器名>]")
+            return
+        player_name = parts[1]
+        target_server = None
+        if len(parts) >= 4 and parts[2] == "-s":
+            target_server = parts[3]
+        async for result in run_player_stats(event, config, player_name, target_server):
             yield result
 
     elif sub_cmd == "add":

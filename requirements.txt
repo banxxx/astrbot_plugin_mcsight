@@ -1,3 +1,6 @@
 mcstatus
 Pillow
 aiohttp
+pilmoji
+matplotlib
+numpy

@@ -1,8 +1,7 @@
-import logging
+from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
+from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from ..config.whitelist_config import WhitelistManager
-
-logger = logging.getLogger("astrbot_plugin_mcsight")
 
 # 权限等级定义
 LEVEL_BLACKLIST = 0
@@ -27,7 +26,7 @@ PERMISSION_REQUIRED = {
 }
 
 
-def get_user_permission_level(event: AstrMessageEvent) -> int:
+async def get_user_permission_level(event: AstrMessageEvent) -> int:
     wm = WhitelistManager()
     user_id = str(event.get_sender_id())
 
@@ -51,32 +50,81 @@ def get_user_permission_level(event: AstrMessageEvent) -> int:
         logger.debug(f"用户 {user_id} 是插件白名单管理员")
         return LEVEL_WHITELIST_ADMIN
 
-    # 5. 群主/管理员（受开关控制）
-    if is_group_admin(event):
-        role = get_group_role(event)
+    # 5. 群管理员（包括群主）
+    if await is_group_admin(event):
+        role = await get_group_role(event)
         if role == 'owner' and wm.enable_group_owner:
             logger.debug(f"用户 {user_id} 是群主，且开关已启用")
             return LEVEL_GROUP_ADMIN
-        elif role == 'admin' and wm.enable_group_admin:
+        elif role in ('admin', 'owner') and wm.enable_group_admin:
             logger.debug(f"用户 {user_id} 是群管理员，且开关已启用")
             return LEVEL_GROUP_ADMIN
 
     return LEVEL_MEMBER
 
 
-def get_group_role(event: AstrMessageEvent) -> str:
-    """获取用户在群中的角色：owner / admin / member / unknown"""
+async def get_group_role(event: AstrMessageEvent) -> str:
+    """异步获取用户在群中的真实角色"""
+    # 获取群号（使用 get_group_id() 方法）
+    group_id = event.get_group_id()
+    if not group_id:
+        logger.debug("无法获取群号，返回 member")
+        return 'member'
+
+    user_id = int(event.get_sender_id())
+
+    # 如果是 AiocqhttpMessageEvent，使用其 bot.get_group_member_info
+    if isinstance(event, AiocqhttpMessageEvent):
+        try:
+            result = await event.bot.get_group_member_info(
+                group_id=group_id,
+                user_id=user_id
+            )
+            if result and isinstance(result, dict):
+                role = result.get('role', 'member')
+                logger.debug(f"从 AiocqhttpMessageEvent 获取角色: {role}")
+                return role
+        except Exception as e:
+            logger.debug(f"AiocqhttpMessageEvent 获取角色失败: {e}")
+
+    # 通用方法：使用 api.call_action
     try:
-        if hasattr(event, 'is_admin') and callable(event.is_admin):
-            # 注意：is_admin 通常返回管理员角色，但不能区分群主
-            return 'admin' if event.is_admin() else 'member'
-        if hasattr(event, 'message_obj') and hasattr(event.message_obj, 'sender'):
-            sender = event.message_obj.sender
-            if hasattr(sender, 'role'):
-                return sender.role  # 'owner', 'admin', 'member'
+        if hasattr(event, 'bot') and hasattr(event.bot, 'api'):
+            result = await event.bot.api.call_action(
+                'get_group_member_info',
+                group_id=group_id,
+                user_id=user_id
+            )
+            if result and isinstance(result, dict):
+                role = result.get('role', 'member')
+                logger.debug(f"从 call_action 获取角色: {role}")
+                return role
+    except Exception as e:
+        logger.debug(f"call_action 获取角色失败: {e}")
+
+    # 尝试 event.bot.get_group_member_info（如果存在）
+    try:
+        if hasattr(event.bot, 'get_group_member_info'):
+            result = await event.bot.get_group_member_info(
+                group_id=group_id,
+                user_id=user_id
+            )
+            if result and isinstance(result, dict):
+                role = result.get('role', 'member')
+                logger.debug(f"从 bot.get_group_member_info 获取角色: {role}")
+                return role
+    except Exception as e:
+        logger.debug(f"bot.get_group_member_info 获取角色失败: {e}")
+
+    # 回退到 event.is_admin()
+    try:
+        if event.is_admin():
+            logger.debug("回退到 event.is_admin() 返回 admin")
+            return 'admin'
     except Exception:
         pass
-    return 'unknown'
+    logger.debug("无法获取角色，返回 member")
+    return 'member'
 
 
 def is_astrbot_super_admin(event: AstrMessageEvent) -> bool:
@@ -94,22 +142,17 @@ def is_astrbot_super_admin(event: AstrMessageEvent) -> bool:
     return False
 
 
-def is_group_admin(event: AstrMessageEvent) -> bool:
+async def is_group_admin(event: AstrMessageEvent) -> bool:
     try:
-        if hasattr(event, 'is_admin') and callable(event.is_admin):
-            return event.is_admin()
-        if hasattr(event, 'message_obj') and hasattr(event.message_obj, 'sender'):
-            sender = event.message_obj.sender
-            if hasattr(sender, 'role'):
-                return sender.role in ('admin', 'owner')
-        if hasattr(event, 'get_role') and callable(event.get_role):
-            return event.get_role() in ('admin', 'owner')
+        role = await get_group_role(event)
+        if role in ('owner', 'admin'):
+            return True
     except Exception:
         pass
     return False
 
 
-def check_permission(event: AstrMessageEvent, command: str) -> bool:
-    level = get_user_permission_level(event)
+async def check_permission(event: AstrMessageEvent, command: str) -> bool:
+    level = await get_user_permission_level(event)
     required = PERMISSION_REQUIRED.get(command, LEVEL_GROUP_ADMIN)
     return level >= required

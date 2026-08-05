@@ -1,12 +1,10 @@
 import asyncio
-import logging
+import aiohttp
+from astrbot.api import logger
 from mcstatus import JavaServer
 from typing import List, Dict, Any
-import aiohttp
 import json
 from typing import Dict, Any, Optional
-
-logger = logging.getLogger("astrbot_plugin_mcsight")
 
 async def fetch_from_plugin(api_url: str, timeout: float = 5.0) -> Optional[List[Dict[str, Any]]]:
     """
@@ -15,7 +13,7 @@ async def fetch_from_plugin(api_url: str, timeout: float = 5.0) -> Optional[List
     """
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{api_url}/api/status", timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("success"):
@@ -32,7 +30,49 @@ async def fetch_from_plugin(api_url: str, timeout: float = 5.0) -> Optional[List
     except Exception as e:
         logger.error(f"请求插件 API 异常: {e}")
         return None
+    except aiohttp.ClientConnectorError as e:
+        logger.error(f"连接失败（可能防火墙/代理拦截）: {api_url} - {e}")
+        return None
+    except asyncio.TimeoutError:
+        logger.error(f"连接超时: {api_url}")
+        return None
+    except Exception as e:
+        logger.error(f"未知错误: {api_url} - {e}")
+        return None
 
+
+async def fetch_player_stats(api_base_url: str, player_name: str, timeout: float = 5.0) -> Optional[Dict[str, Any]]:
+    """
+    从服务端插件获取玩家统计数据。
+    api_base_url: 例如 http://192.168.1.100:8612
+    player_name: 玩家名称
+    返回: 统计字典，若失败返回 None
+    """
+    url = f"{api_base_url}/api/stats/{player_name}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    # 检查是否有错误字段
+                    if data.get('error'):
+                        logger.warning(f"获取玩家 {player_name} 统计返回错误: {data['error']}")
+                        return None
+                    return data
+                else:
+                    logger.warning(f"获取玩家统计返回非 200 状态码: {resp.status}")
+                    return None
+    except asyncio.TimeoutError:
+        logger.warning(f"获取玩家 {player_name} 统计超时")
+        return None
+    except aiohttp.ClientConnectorError as e:
+        logger.error(f"连接玩家统计 API 失败: {url} - {e}")
+        return None
+    except Exception as e:
+        logger.error(f"获取玩家统计异常: {url} - {e}")
+        return None
+
+    
 async def query_one(server_info: dict) -> Dict[str, Any]:
     """
     查询单个 Minecraft 服务器的状态。

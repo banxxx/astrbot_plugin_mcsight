@@ -1,14 +1,21 @@
 import json
 import os
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 
 class ConfigManager:
-    def __init__(self, session_id: str, base_path: str = None):
+    def __init__(self, group_id: Optional[int] = None, session_id: Optional[str] = None, base_path: str = None):
         if base_path is None:
             base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
         self.config_dir = os.path.join(base_path, 'group_configs')
         os.makedirs(self.config_dir, exist_ok=True)
-        self.config_file = os.path.join(self.config_dir, f'servers_{session_id}.json')
+        # 优先使用 group_id，如果为 None 则使用 session_id（私聊场景）
+        if group_id is not None:
+            self.config_file = os.path.join(self.config_dir, f'servers_{group_id}.json')
+        elif session_id is not None:
+            self.config_file = os.path.join(self.config_dir, f'servers_{session_id}.json')
+        else:
+            raise ValueError("必须提供 group_id 或 session_id")
+
         if not os.path.exists(self.config_file):
             self._save({"servers": []})
 
