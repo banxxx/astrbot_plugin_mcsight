@@ -88,12 +88,21 @@ async def handle_mc_command(event: AstrMessageEvent):
 
     elif sub_cmd == "stats":
         if len(parts) < 2:
-            yield event.plain_result("用法: /mc stats <玩家名> [-s <服务器名>]")
+            yield event.plain_result("用法: /mc stats <玩家名> <服务器名> 或 /mc stats <玩家名> -s <服务器名>")
             return
         player_name = parts[1]
         target_server = None
-        if len(parts) >= 4 and parts[2] == "-s":
-            target_server = parts[3]
+        if len(parts) >= 3:
+            if parts[2] == "-s":
+                # 使用 -s 选项
+                if len(parts) >= 4:
+                    target_server = parts[3]
+                else:
+                    yield event.plain_result("用法: /mc stats <玩家名> -s <服务器名>")
+                    return
+            else:
+                # 直接指定服务器名
+                target_server = parts[2]
         async for result in run_player_stats(event, config, player_name, target_server):
             yield result
 

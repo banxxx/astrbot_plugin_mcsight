@@ -127,14 +127,12 @@ async def download_avatar(session: aiohttp.ClientSession,
     如果 is_premium 为 True 或 None，走正常缓存+网络逻辑。
     """
     # 如果是明确离线玩家，直接返回默认头像
-    logger.warning(f"头像is_premium {is_premium} ")
     if is_premium is False:
         return get_default_avatar(size)  # 需要实现此函数
 
     # 确定查询标识符（优先 UUID）
     identifier = uuid if uuid else username
     cache_key = f"{identifier}_{size}"
-    logger.warning(f"头像identifier {identifier} ")
 
     # 1. 内存缓存
     cached = _memory_cache.get(cache_key)

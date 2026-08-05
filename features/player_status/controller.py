@@ -36,7 +36,6 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
             if api_url:
                 try:
                     plugin_result = await fetch_from_plugin(api_url, timeout=5.0)
-                    logger.info(f"插件响应: {plugin_result}")
                     if plugin_result and isinstance(plugin_result, list) and len(plugin_result) > 0:
                         # 插件返回的是列表，取第一个（因为每个服务器独立，列表应只有一项）
                         plugin_data = plugin_result[0]
@@ -63,7 +62,6 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
                     for p in plugin_data.get("players", [])
                 ]
             })
-            logger.info(f"players {plugin_data.get("players", [])}")
         else:
             # 3. 插件失败，回退到 mcstatus 或模组 API
             # 使用原有的回退逻辑（模组 API 或 SLP）
@@ -168,13 +166,21 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
             return
         base_url = api_url.replace("/api/status", "")
         data = await fetch_player_stats(base_url, player_name)
-        if data and 'error' not in data:
-            found_data = data
-            found_server_name = target_srv["name"]
-            all_servers_with_data.append((found_server_name, data))
-        else:
+        if data is None:
+            # 连接失败，可能是插件未安装或网络不通
+            yield event.plain_result(
+                f"无法连接到服务器「{target_server}」的插件服务"
+                "请确认插件已安装且端口可访问。"
+            )
+            return
+        if data.get('error'):
+            # 插件返回错误（玩家未进服等）
             yield event.plain_result(f"服务器「{target_server}」未找到玩家 {player_name} 的统计数据。")
             return
+        # 有效数据
+        found_data = data
+        found_server_name = target_srv["name"]
+        all_servers_with_data.append((found_server_name, data))
     else:
         # 遍历所有服务器，取第一个有效数据
         for srv in servers:
@@ -184,28 +190,43 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
                 continue  # 跳过无效服务器
             base_url = api_url.replace("/api/status", "")
             data = await fetch_player_stats(base_url, player_name)
-            if data and 'error' not in data:
-                all_servers_with_data.append((srv["name"], data))
-                if found_data is None:
-                    found_data = data
-                    found_server_name = srv["name"]
-                    # 继续遍历以收集所有有数据的服务器
+            if data is None:
+                # 连接失败，跳过该服务器
+                continue
+            if data.get('error'):
+                # 插件返回错误（玩家无数据），跳过该服务器
+                continue
+            # 有效数据
+            all_servers_with_data.append((srv["name"], data))
+            if found_data is None:
+                found_data = data
+                found_server_name = srv["name"]
+                # 继续遍历以收集所有有数据的服务器（可选）
         if not found_data:
-            yield event.plain_result(f"未找到玩家 {player_name} 的统计数据，请确认该玩家是否曾进入过服务器且服务器已安装数据统计插件。")
+            yield event.plain_result(
+                f"未找到玩家 {player_name} 的统计数据。"
+                "可能原因：玩家未曾进入任何已配置的服务器，或服务器未安装插件。"
+            )
             return
 
     # 获取玩家头像（异步）
     async with aiohttp.ClientSession() as session:
         avatar = await download_avatar(session, player_name, 72, is_premium=None, uuid=None)
 
+    # 获取群组服务器数量
+    servers = config_manager.get_all_servers()
+    show_server_label = len(servers) > 1   # 只有多个服务器时才显示标签
+
     # 生成图片
+    is_online = found_data.get('online', False)
     try:
         img = await draw_player_stats_image(
             found_data,
             player_name,
             server_name=found_server_name,
-            is_online=True,
-            avatar_img=avatar
+            is_online=is_online,
+            avatar_img=avatar,
+            show_server_label=show_server_label   # 传入标志
         )
         img.save("player_stats_temp.png")
         yield event.chain_result([AstrImage(file="player_stats_temp.png")])

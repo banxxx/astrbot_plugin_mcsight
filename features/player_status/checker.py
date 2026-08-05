@@ -41,12 +41,12 @@ async def fetch_from_plugin(api_url: str, timeout: float = 5.0) -> Optional[List
         return None
 
 
-async def fetch_player_stats(api_base_url: str, player_name: str, timeout: float = 5.0) -> Optional[Dict[str, Any]]:
+async def fetch_player_stats(api_base_url: str, player_name: str, timeout: float = 5.0):
     """
     从服务端插件获取玩家统计数据。
     api_base_url: 例如 http://192.168.1.100:8612
     player_name: 玩家名称
-    返回: 统计字典，若失败返回 None
+    返回: 统计字典（即使包含 error 字段），若连接失败则返回 None
     """
     url = f"{api_base_url}/api/stats/{player_name}"
     try:
@@ -54,10 +54,7 @@ async def fetch_player_stats(api_base_url: str, player_name: str, timeout: float
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    # 检查是否有错误字段
-                    if data.get('error'):
-                        logger.warning(f"获取玩家 {player_name} 统计返回错误: {data['error']}")
-                        return None
+                    # 直接返回数据，无论是否有 error
                     return data
                 else:
                     logger.warning(f"获取玩家统计返回非 200 状态码: {resp.status}")
@@ -120,7 +117,6 @@ async def query_one(server_info: dict) -> Dict[str, Any]:
                     players = query_resp.players.names
                     online = query_resp.players.online
                     max_players = query_resp.players.max
-                    logger.info(f"服务器 {host} 使用 Query 获取到 {len(players)} 名玩家")
                 else:
                     logger.warning(f"Query 返回空列表，保留 SLP 数据")
             except Exception as qe:

@@ -2,14 +2,12 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from .commands.mc_handler import handle_mc_command
-from .features.player_status.controller import run_player_status
 from .config.whitelist_config import WhitelistManager
 
 @register("astrbot_plugin_mcsight", "poso", "Minecraft 多服务器状态监控插件", "v1.0.0")
 class MCWatcher(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-        # 将 AstrBot 上下文注入白名单管理器，使其可以读取/写入插件配置
         WhitelistManager().set_context(context)
 
     @filter.command("mc")
@@ -18,14 +16,26 @@ class MCWatcher(Star):
             yield result
 
     @filter.command("在线", aliases=["online"])
-    async def player_status_shortcut(self, event: AstrMessageEvent):
-        from .utils.permission import check_permission
-        if not check_permission(event, "status"):
-            yield event.plain_result("权限不足。")
-            return
-        from .config.server_config import ConfigManager
-        config = ConfigManager(event.session_id)
-        async for result in run_player_status(event, config):
+    async def online(self, event: AstrMessageEvent):
+        # 将消息转换为 "/mc status"
+        event.message_str = "/mc status"
+        async for result in handle_mc_command(event):
+            yield result
+
+    @filter.command("查询")
+    async def query(self, event: AstrMessageEvent):
+        # 提取 "查询" 后面的参数
+        raw_msg = event.message_str.strip()
+        if raw_msg.startswith("/"):
+            raw_msg = raw_msg[1:]  # 去掉可能的前缀
+        # 注意：此时消息可能是 "查询 POSOO" 或 "查询 POSOO 土豆"
+        # 转换为 "/mc stats ..."
+        rest = raw_msg[len("查询"):].strip()
+        if rest:
+            event.message_str = f"/mc stats {rest}"
+        else:
+            event.message_str = "/mc stats"
+        async for result in handle_mc_command(event):
             yield result
 
     async def terminate(self):
