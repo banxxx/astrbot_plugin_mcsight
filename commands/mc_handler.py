@@ -1,10 +1,13 @@
+import asyncio
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Image as AstrImage
 from ..config.server_config import ConfigManager
-from ..features.player_status.controller import run_player_status, run_player_stats
+from ..features.player_status.checker import send_broadcast, fetch_tps
+from ..features.player_status.controller import run_player_status, run_player_stats, build_plugin_api_url
 from ..features.help_image.image_generator import draw_help_image
 from ..utils.permission import check_permission
 from ..config.whitelist_config import WhitelistManager
+from ..features.player_status.tps_image_generator import draw_tps_image
 
 async def handle_mc_command(event: AstrMessageEvent):
     group_id = event.get_group_id()
@@ -195,6 +198,142 @@ async def handle_mc_command(event: AstrMessageEvent):
             return
         success = config.swap_servers(parts[1], parts[2])
         yield event.plain_result(f"交换{'成功' if success else '失败（请检查名称是否正确）'}。")
+
+    elif sub_cmd == "say":
+        if len(parts) < 2:
+            yield event.plain_result("用法: /mc say <消息> 或 /mc say -s <服务器名> <消息>")
+            return
+        # 检查是否有 -s 选项
+        target_server = None
+        msg_start = 1
+        if parts[1] == "-s":
+            if len(parts) < 4:
+                yield event.plain_result("用法: /mc say -s <服务器名> <消息>")
+                return
+            target_server = parts[2]
+            msg_start = 3
+        # 提取消息
+        message = " ".join(parts[msg_start:])
+        if not message:
+            yield event.plain_result("消息内容不能为空")
+            return
+        # 长度限制
+        MAX_LENGTH = 40
+        if len(message) > MAX_LENGTH:
+            yield event.plain_result(f"广播消息过长（最多 {MAX_LENGTH} 个字符），当前长度：{len(message)}")
+            return
+        # 获取服务器列表
+        servers = config.get_all_servers()
+        if not servers:
+            yield event.plain_result("还没有添加任何服务器。")
+            return
+        wm = WhitelistManager()
+        plugin_api_port = wm.plugin_api_port
+        # 确定广播目标
+        if target_server:
+            # 查找指定服务器
+            target = None
+            for s in servers:
+                if s["name"] == target_server:
+                    target = s
+                    break
+            if not target:
+                yield event.plain_result(f"未找到名为「{target_server}」的服务器。")
+                return
+            servers_to_broadcast = [target]
+        else:
+            servers_to_broadcast = servers
+        # 遍历广播
+        success_count = 0
+        fail_count = 0
+        for srv in servers_to_broadcast:
+            host = srv["host"]
+            api_url = build_plugin_api_url(host, plugin_api_port)
+            if not api_url:
+                fail_count += 1
+                continue
+            base_url = api_url.replace("/api/status", "")
+            success = await send_broadcast(base_url, message)
+            if success:
+                success_count += 1
+            else:
+                fail_count += 1
+        if fail_count == 0:
+            if target_server:
+                yield event.plain_result(f"✅ 已在服务器「{target_server}」发送广播。")
+            else:
+                yield event.plain_result(f"✅ 已在所有 {success_count} 个服务器发送广播。")
+        else:
+            yield event.plain_result(f"❌ 广播发送完成，成功 {success_count} 个，失败 {fail_count} 个。")
+
+
+    elif sub_cmd == "tps":
+        target_server = None
+        if len(parts) >= 2:
+            if parts[1] == "-s":
+                if len(parts) >= 3:
+                    target_server = parts[2]
+                else:
+                    yield event.plain_result("用法: /mc tps [-s 服务器名]")
+                    return
+            else:
+                target_server = parts[1]
+
+        servers = config.get_all_servers()
+        if not servers:
+            yield event.plain_result("还没有添加任何服务器。")
+            return
+
+        wm = WhitelistManager()
+        plugin_api_port = wm.plugin_api_port
+
+        if target_server:
+            target = None
+            for s in servers:
+                if s["name"] == target_server:
+                    target = s
+                    break
+            if not target:
+                yield event.plain_result(f"未找到名为「{target_server}」的服务器。")
+                return
+            targets = [target]
+        else:
+            targets = servers
+
+        # 并发获取 TPS
+        tasks = []
+        for srv in targets:
+            host = srv["host"]
+            api_url = build_plugin_api_url(host, plugin_api_port)
+            if not api_url:
+                continue
+            base_url = api_url.replace("/api/status", "")
+            tasks.append(fetch_tps(base_url))
+
+        if not tasks:
+            yield event.plain_result("没有有效的服务器可查询。")
+            return
+
+        results = await asyncio.gather(*tasks)
+
+        # 组装数据
+        server_data = []
+        for srv, tps in zip(targets, results):
+            server_data.append({
+                "name": srv["name"],
+                "tps": tps  # 可能为 None
+            })
+
+        # 生成图片
+        try:
+            img = draw_tps_image(server_data)
+            # 保存为临时文件并发送
+            img.save("tps_temp.png")
+            yield event.chain_result([AstrImage(file="tps_temp.png")])
+        except Exception as e:
+            logger.error(f"生成 TPS 图片失败: {e}")
+            yield event.plain_result(f"生成图片失败: {e}")
+
 
     else:
         yield event.plain_result(f"未知子命令: {sub_cmd}，使用 /mc help 查看帮助。")

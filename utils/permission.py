@@ -23,6 +23,8 @@ PERMISSION_REQUIRED = {
     "move": LEVEL_GROUP_ADMIN,
     "swap": LEVEL_GROUP_ADMIN,
     "whitelist": LEVEL_SUPER_ADMIN,
+    "say": LEVEL_GROUP_ADMIN,
+    "tps": LEVEL_MEMBER,
 }
 
 

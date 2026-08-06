@@ -186,3 +186,59 @@ async def ping_server(host: str, timeout: float = 3.0) -> float:
         return latency * 1000  # 转换为毫秒
     except Exception:
         return 0.0
+
+
+async def send_broadcast(api_base_url: str, message: str, timeout: float = 5.0) -> bool:
+    """
+    向服务端插件发送广播请求。
+    api_base_url: 例如 http://192.168.1.100:8612
+    message: 要广播的消息（支持 MiniMessage 格式）
+    返回: 成功返回 True，失败返回 False
+    """
+    url = f"{api_base_url}/api/broadcast"
+    payload = {"message": message}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                if resp.status == 200:
+                    return True
+                else:
+                    logger.warning(f"广播 API 返回非 200 状态码: {resp.status}")
+                    return False
+    except asyncio.TimeoutError:
+        logger.warning("广播请求超时")
+        return False
+    except aiohttp.ClientConnectorError as e:
+        logger.error(f"连接广播 API 失败: {url} - {e}")
+        return False
+    except Exception as e:
+        logger.error(f"发送广播请求异常: {e}")
+        return False
+
+
+
+async def fetch_tps(api_base_url: str, timeout: float = 5.0) -> Optional[float]:
+    """
+    从服务端插件获取当前服务器的 TPS。
+    api_base_url: 例如 http://192.168.1.100:8612
+    返回: TPS 值（浮点数），若失败返回 None
+    """
+    url = f"{api_base_url}/api/tps"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get("tps")
+                else:
+                    logger.warning(f"获取 TPS 返回非 200: {resp.status}")
+                    return None
+    except asyncio.TimeoutError:
+        logger.warning("获取 TPS 超时")
+        return None
+    except aiohttp.ClientConnectorError as e:
+        logger.error(f"连接 TPS API 失败: {url} - {e}")
+        return None
+    except Exception as e:
+        logger.error(f"获取 TPS 异常: {e}")
+        return None

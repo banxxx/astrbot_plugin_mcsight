@@ -7,7 +7,7 @@ CONTAINER_PADDING = 36         # 外框内边距
 CONTAINER_BG = '#F9F9F8'
 CONTAINER_RADIUS = 24
 
-TITLE_TEXT = "📋 命令帮助"
+TITLE_TEXT = "命令帮助"
 TITLE_COLOR = '#5b6abf'
 TITLE_SIZE = 40                # 标题字号加大
 TITLE_MARGIN_BOTTOM = 24
@@ -31,7 +31,7 @@ NOTE_MARGIN_TOP = 24
 # 命令列表数据（静态）
 COMMAND_SECTIONS = [
     {
-        "icon": "🔧",
+        "icon": "",
         "title": "服务器管理",
         "items": [
             ("/mc add 名称 IP", "添加服务器"),
@@ -43,10 +43,12 @@ COMMAND_SECTIONS = [
             ("/mc list", "查看已添加的服务器"),
             ("/mc move 名称 位置序号", "移动服务器到指定位置(从0开始)"),
             ("/mc swap 名称1 名称2", "交换两个服务器的位置"),
+            ("/mc say <消息>", "向所有服务器发送广播"),
+            ("/广播 [服务器名] <消息>", "向指定服务器广播，省略服务器名则广播至全部"),
         ]
     },
     {
-        "icon": "📊",
+        "icon": "",
         "title": "状态查询与玩家数据",
         "items": [
             ("/mc status", "查询所有服务器在线情况（图片）"),
@@ -56,7 +58,7 @@ COMMAND_SECTIONS = [
         ]
     },
     {
-        "icon": "❓",
+        "icon": "",
         "title": "帮助",
         "items": [
             ("/mc help", "显示本帮助（图片）"),
