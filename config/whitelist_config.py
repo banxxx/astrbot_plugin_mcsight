@@ -289,3 +289,8 @@ class WhitelistManager:
             return int(value)
         except (ValueError, TypeError):
             return 8612
+
+    @property
+    def mod_api_token(self) -> str:
+        """模组 API 鉴权 Token（必须与模组配置的 API_TOKEN 一致）"""
+        return self._get_config_value("mod_api_token", "")

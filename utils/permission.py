@@ -25,6 +25,9 @@ PERMISSION_REQUIRED = {
     "whitelist": LEVEL_SUPER_ADMIN,
     "say": LEVEL_GROUP_ADMIN,
     "tps": LEVEL_MEMBER,
+    "bind": LEVEL_MEMBER,          # 允许普通玩家绑定自己
+    "unbind": LEVEL_GROUP_ADMIN,   # 解绑需要管理员权限
+    "check": LEVEL_MEMBER,         # 公开查询
 }
 
 
