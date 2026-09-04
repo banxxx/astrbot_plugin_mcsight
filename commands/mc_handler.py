@@ -65,16 +65,17 @@ async def handle_mc_command(event: AstrMessageEvent):
 
     # 定义需要权限检查的子命令
     admin_cmds = {"add", "remove", "edit", "batchadd", "batchremove", "move", "swap"}
+    public_cmds = {"help", "status", "list", "stats"}  # 完全公开
     if sub_cmd in admin_cmds:
         if not await check_permission(event, sub_cmd):
             yield event.plain_result("权限不足：该操作需要群管理员或插件管理员权限。")
             return
-    elif sub_cmd == "help":
-        pass  # 所有人可查看
-    elif sub_cmd in ("status", "list", "stats"):
-        if not await check_permission(event, sub_cmd):
-            yield event.plain_result("权限不足。")
-            return
+    # elif sub_cmd == "help":
+    #     pass  # 所有人可查看
+    # elif sub_cmd in ("status", "list", "stats"):
+    #     if not await check_permission(event, sub_cmd):
+    #         yield event.plain_result("权限不足。")
+    #         return
 
     # ---------- 命令逻辑 ----------
     if sub_cmd == "help":

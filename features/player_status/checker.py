@@ -54,20 +54,18 @@ async def fetch_player_stats(api_base_url: str, player_name: str, timeout: float
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    # 直接返回数据，无论是否有 error
-                    return data
+                    return data  # 可能包含 error 字段，也可能不包含
                 else:
-                    logger.warning(f"获取玩家统计返回非 200 状态码: {resp.status}")
-                    return None
+                    return {"error": f"HTTP {resp.status}"}
     except asyncio.TimeoutError:
         logger.warning(f"获取玩家 {player_name} 统计超时")
-        return None
+        return {"error": "查询超时，请稍后重试"}
     except aiohttp.ClientConnectorError as e:
         logger.error(f"连接玩家统计 API 失败: {url} - {e}")
-        return None
+        return {"error": f"无法连接到服务器（{e}）"}
     except Exception as e:
         logger.error(f"获取玩家统计异常: {url} - {e}")
-        return None
+        return {"error": f"获取统计异常: {e}"}
 
     
 async def query_one(server_info: dict) -> Dict[str, Any]:
@@ -183,7 +181,7 @@ async def ping_server(host: str, timeout: float = 3.0) -> float:
             asyncio.to_thread(server.ping),
             timeout=timeout
         )
-        return latency * 1000  # 转换为毫秒
+        return latency
     except Exception:
         return 0.0
 

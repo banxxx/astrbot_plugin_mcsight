@@ -8,6 +8,7 @@ from .checker import fetch_from_plugin, query_one, query_all_servers, query_via_
 from ...config.whitelist_config import WhitelistManager
 from .player_stats_generator import draw_player_stats_image
 from ...utils.avatar_cache import download_avatar
+from io import BytesIO
 
 async def run_player_status(event: AstrMessageEvent, config_manager):
     """获取在线玩家状态，优先使用服务端插件 API"""
@@ -91,7 +92,8 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
     # 所有服务器数据收集完毕，生成图片
     try:
         img = await draw_multi_server_image(standardized)
-        img.save("mc_status_temp.png")
+        # 保存临时文件并压缩（PNG 无损压缩）
+        img.save("mc_status_temp.png", optimize=True, compress_level=9)
         yield event.chain_result([AstrImage(file="mc_status_temp.png")])
     except Exception as e:
         logger.error(f"生成图片失败: {e}")
@@ -175,48 +177,82 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
             yield event.plain_result(f"服务器「{target_server}」的地址无效。")
             return
         base_url = api_url.replace("/api/status", "")
-        data = await fetch_player_stats(base_url, player_name)
+        try:
+            data = await asyncio.wait_for(
+                fetch_player_stats(base_url, player_name, timeout=3.0),
+                timeout=3.5
+            )
+        except asyncio.TimeoutError:
+            yield event.plain_result(f"服务器「{target_server}」响应超时，请检查服务器是否在线。")
+            return
+        except Exception as e:
+            yield event.plain_result(f"查询服务器「{target_server}」时出错: {e}")
+            return
+
         if data is None:
-            # 连接失败，可能是插件未安装或网络不通
             yield event.plain_result(
-                f"无法连接到服务器「{target_server}」的插件服务"
+                f"无法连接到服务器「{target_server}」的插件服务，"
                 "请确认插件已安装且端口可访问。"
             )
             return
+        # 优先使用插件返回的 error 字段
         if data.get('error'):
-            # 插件返回错误（玩家未进服等）
-            yield event.plain_result(f"服务器「{target_server}」未找到玩家 {player_name} 的统计数据。")
+            yield event.plain_result(f"服务器「{target_server}」返回错误：{data.get('error')}")
             return
         # 有效数据
         found_data = data
         found_server_name = target_srv["name"]
         all_servers_with_data.append((found_server_name, data))
     else:
-        # 遍历所有服务器，取第一个有效数据
+        # ---------- 未指定服务器：并发请求所有服务器 ----------
+        tasks = []
         for srv in servers:
             host = srv["host"]
             api_url = build_plugin_api_url(host, plugin_api_port)
             if not api_url:
-                continue  # 跳过无效服务器
+                continue
             base_url = api_url.replace("/api/status", "")
-            data = await fetch_player_stats(base_url, player_name)
-            if data is None:
-                # 连接失败，跳过该服务器
-                continue
-            if data.get('error'):
-                # 插件返回错误（玩家无数据），跳过该服务器
-                continue
-            # 有效数据
-            all_servers_with_data.append((srv["name"], data))
-            if found_data is None:
-                found_data = data
-                found_server_name = srv["name"]
-                # 继续遍历以收集所有有数据的服务器（可选）
-        if not found_data:
-            yield event.plain_result(
-                f"未找到玩家 {player_name} 的统计数据。"
-                "可能原因：玩家未曾进入任何已配置的服务器，或服务器未安装插件。"
+            # 每个任务设置 3 秒超时
+            task = asyncio.create_task(
+                asyncio.wait_for(
+                    fetch_player_stats(base_url, player_name, timeout=3.0),
+                    timeout=3.5
+                )
             )
+            tasks.append((srv["name"], task))
+
+        # 并发执行所有任务，收集结果（区分有效数据和错误）
+        valid_results = []   # 存储 (name, data)
+        error_results = []   # 存储 (name, error_message)
+
+        for name, task in tasks:
+            try:
+                data = await task
+                if data is not None:
+                    if data.get('error'):
+                        error_results.append((name, data.get('error')))
+                    else:
+                        valid_results.append((name, data))
+            except asyncio.TimeoutError:
+                error_results.append((name, "请求超时"))
+            except Exception as e:
+                error_results.append((name, str(e)))
+
+        if valid_results:
+            # 有有效数据，取第一个
+            found_server_name, found_data = valid_results[0]
+            all_servers_with_data = valid_results
+        else:
+            # 全部失败，显示第一个错误信息
+            if error_results:
+                name, err_msg = error_results[0]
+                yield event.plain_result(f"服务器「{name}」返回错误：{err_msg}")
+            else:
+                # 保底消息（理论上不会到达这里）
+                yield event.plain_result(
+                    f"未找到玩家 {player_name} 的统计数据。"
+                    "可能原因：玩家未曾进入任何已配置的服务器，或所有服务器均未响应。"
+                )
             return
 
     # 获取玩家头像（异步）
@@ -238,7 +274,8 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
             avatar_img=avatar,
             show_server_label=show_server_label   # 传入标志
         )
-        img.save("player_stats_temp.png")
+        # 保存临时文件并压缩（PNG 无损压缩）
+        img.save("player_stats_temp.png", optimize=True, compress_level=9)
         yield event.chain_result([AstrImage(file="player_stats_temp.png")])
     except Exception as e:
         logger.error(f"生成玩家统计图片失败: {e}")
