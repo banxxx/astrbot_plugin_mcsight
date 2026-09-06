@@ -4,109 +4,20 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Image as AstrImage
 from .image_generator import draw_multi_server_image
-from .checker import fetch_from_plugin, query_one, query_all_servers, query_via_api, fetch_player_stats, ping_server
+from .checker import (
+    fetch_from_plugin, query_one, query_all_servers, query_via_api,
+    fetch_player_stats, ping_server,
+    build_mod_api_url, fetch_from_mod_api,
+    send_broadcast_via_mod, fetch_tps_via_mod
+)
 from ...config.whitelist_config import WhitelistManager
 from .player_stats_generator import draw_player_stats_image
 from ...utils.avatar_cache import download_avatar
-from io import BytesIO
 
-async def run_player_status(event: AstrMessageEvent, config_manager):
-    """获取在线玩家状态，优先使用服务端插件 API"""
-    servers = config_manager.get_all_servers()
-    if not servers:
-        yield event.plain_result("还没有添加任何服务器。")
-        return
-
-    wm = WhitelistManager()
-    use_mod_api = wm.enable_mod_api
-    mod_api_port = wm.mod_api_port
-    use_plugin_api = wm.use_plugin_api
-    plugin_api_port = wm.plugin_api_port
-
-    standardized = []  # 最终用于图片渲染的数据
-
-    # 对每个服务器独立处理
-    for srv in servers:
-        name = srv["name"]
-        host = srv["host"]
-
-        # 1. 如果启用插件 API，尝试从插件获取数据
-        plugin_data = None
-        if use_plugin_api:
-            api_url = build_plugin_api_url(host, plugin_api_port)
-            if api_url:
-                try:
-                    plugin_result = await fetch_from_plugin(api_url, timeout=5.0)
-                    if plugin_result and isinstance(plugin_result, list) and len(plugin_result) > 0:
-                        # 插件返回的是列表，取第一个（因为每个服务器独立，列表应只有一项）
-                        plugin_data = plugin_result[0]
-                except Exception as e:
-                    logger.warning(f"服务器 {name} 插件请求异常: {e}")
-
-        # 2. 如果插件数据有效，则使用它
-        if plugin_data:
-            # 并发获取该服务器的真实延迟
-            ping_task = asyncio.create_task(ping_server(host))
-            # 等待延迟结果（不阻塞主流程）
-            try:
-                real_latency = await asyncio.wait_for(ping_task, timeout=3.0)
-                if real_latency > 0:
-                    plugin_data["latency"] = real_latency
-            except Exception:
-                pass  # 保持原有延迟（0）
-
-            # 标准化插件数据（与之前 standardized 的格式一致）
-            standardized.append({
-                "name": plugin_data.get("name", name),
-                "host": plugin_data.get("host", host),
-                "online": plugin_data.get("online", 0),
-                "max": plugin_data.get("max", 0),
-                "version": plugin_data.get("version", "未知"),
-                "latency": plugin_data.get("latency", 0.0),
-                "error": plugin_data.get("error"),
-                "players": [
-                    {
-                        "name": p.get("name"),
-                        "uuid": p.get("uuid"),   # 插件会返回 uuid
-                        "is_premium": p.get("is_premium")
-                    }
-                    for p in plugin_data.get("players", [])
-                ]
-            })
-        else:
-            # 3. 插件失败，回退到 mcstatus 或模组 API
-            # 使用原有的回退逻辑（模组 API 或 SLP）
-            async def fetch_server_data(srv):
-                if use_mod_api:
-                    api_data = await query_via_api(host, mod_api_port)
-                    if api_data:
-                        return api_data
-                return await query_one(srv)
-
-            raw = await fetch_server_data(srv)
-            if "server" in raw and "players" in raw:
-                standardized.append(standardize_from_api(raw))
-            else:
-                standardized.append(standardize_from_ping(raw))
-
-    # 所有服务器数据收集完毕，生成图片
-    try:
-        img = await draw_multi_server_image(standardized)
-        # 保存临时文件并压缩（PNG 无损压缩）
-        img.save("mc_status_temp.png", optimize=True, compress_level=9)
-        yield event.chain_result([AstrImage(file="mc_status_temp.png")])
-    except Exception as e:
-        logger.error(f"生成图片失败: {e}")
-        yield event.plain_result(f"生成图片失败: {e}")
-
+# ========== 工具函数 ==========
 def build_plugin_api_url(host: str, port: int) -> str:
-    """
-    根据 MC 服务器地址和服务端插件 API 端口构建 API URL。
-    如果 host 为 'self' 或无效，返回 None。
-    """
     if not host or host == "self":
         return None
-    # 解析 IP 和端口
     if ":" in host:
         ip, _ = host.split(":", 1)
     else:
@@ -135,23 +46,127 @@ def standardize_from_ping(result: dict) -> dict:
     result["extra"] = {}
     return result
 
-# ===== 玩家统计功能 =====
+# ========== 在线玩家状态查询 ==========
+async def run_player_status(event: AstrMessageEvent, config_manager):
+    """获取在线玩家状态，优先使用模组 API，若未启用则使用插件 API 或 mcstatus"""
+    servers = config_manager.get_all_servers()
+    if not servers:
+        yield event.plain_result("还没有添加任何服务器。")
+        return
+
+    wm = WhitelistManager()
+    use_mod_api = wm.enable_mod_api
+    mod_api_port = wm.mod_api_port
+    mod_token = wm.mod_api_token
+    use_plugin_api = wm.use_plugin_api
+    plugin_api_port = wm.plugin_api_port
+
+    standardized = []
+
+    for srv in servers:
+        name = srv["name"]
+        host = srv["host"]
+
+        # ---- 优先：模组 API ----
+        mod_data = None
+        if use_mod_api:
+            api_url = build_mod_api_url(host, mod_api_port, "/api/status")
+            if api_url:
+                try:
+                    headers = {}
+                    if mod_token:
+                        headers["Authorization"] = f"Bearer {mod_token}"
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(api_url, headers=headers, timeout=5.0) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                if data.get("success"):
+                                    mod_data = data.get("server")
+                except Exception as e:
+                    logger.warning(f"模组 API 请求异常: {e}")
+
+        if mod_data:
+            standardized.append({
+                "name": name,
+                "host": host,
+                "online": mod_data.get("online_players", 0),
+                "max": mod_data.get("max_players", 0),
+                "version": mod_data.get("version", "未知"),
+                "latency": mod_data.get("latency", 0.0),
+                "error": None,
+                "players": [
+                    {"name": p.get("name"), "uuid": p.get("uuid"), "is_premium": p.get("is_premium", True)}
+                    for p in mod_data.get("players", [])
+                ]
+            })
+            continue
+
+        # ---- 旧逻辑：插件 API ----
+        plugin_data = None
+        if use_plugin_api:
+            api_url = build_plugin_api_url(host, plugin_api_port)
+            if api_url:
+                try:
+                    plugin_result = await fetch_from_plugin(api_url, timeout=5.0)
+                    if plugin_result and isinstance(plugin_result, list) and len(plugin_result) > 0:
+                        plugin_data = plugin_result[0]
+                except Exception as e:
+                    logger.warning(f"服务器 {name} 插件请求异常: {e}")
+
+        if plugin_data:
+            ping_task = asyncio.create_task(ping_server(host))
+            try:
+                real_latency = await asyncio.wait_for(ping_task, timeout=3.0)
+                if real_latency > 0:
+                    plugin_data["latency"] = real_latency
+            except Exception:
+                pass
+            standardized.append({
+                "name": plugin_data.get("name", name),
+                "host": plugin_data.get("host", host),
+                "online": plugin_data.get("online", 0),
+                "max": plugin_data.get("max", 0),
+                "version": plugin_data.get("version", "未知"),
+                "latency": plugin_data.get("latency", 0.0),
+                "error": plugin_data.get("error"),
+                "players": [
+                    {"name": p.get("name"), "uuid": p.get("uuid"), "is_premium": p.get("is_premium", True)}
+                    for p in plugin_data.get("players", [])
+                ]
+            })
+        else:
+            # 最终回退到 mcstatus
+            raw = await query_one(srv)
+            standardized.append(standardize_from_ping(raw))
+
+    # 生成图片
+    try:
+        img = await draw_multi_server_image(standardized)
+        img.save("mc_status_temp.png", optimize=True, compress_level=9)
+        yield event.chain_result([AstrImage(file="mc_status_temp.png")])
+    except Exception as e:
+        logger.error(f"生成图片失败: {e}")
+        yield event.plain_result(f"生成图片失败: {e}")
+
+# ========== 玩家统计数据查询 ==========
 async def run_player_stats(event: AstrMessageEvent, config_manager, player_name: str, target_server: str = None):
-    """
-    查询玩家统计数据并生成图片
-    """
+    """查询玩家统计数据，优先使用模组 API，若未启用则使用插件 API"""
     if not player_name:
         yield event.plain_result("请指定玩家名称，例如：/mc stats 玩家名")
         return
 
     wm = WhitelistManager()
+    use_mod_api = wm.enable_mod_api
+    mod_api_port = wm.mod_api_port
+    mod_token = wm.mod_api_token
     use_plugin_api = wm.use_plugin_api
     plugin_api_port = wm.plugin_api_port
-    if not use_plugin_api:
-        yield event.plain_result("未启用服务端插件API，无法查询玩家统计数据。")
+
+    # 如果既没启用模组 API 也没启用插件 API，则直接报错
+    if not use_mod_api and not use_plugin_api:
+        yield event.plain_result("未启用任何玩家数据查询方式，请检查配置。")
         return
 
-    # 获取服务器列表
     servers = config_manager.get_all_servers()
     if not servers:
         yield event.plain_result("还没有添加任何服务器。")
@@ -159,111 +174,135 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
 
     found_data = None
     found_server_name = None
-    all_servers_with_data = []  # 存储 (server_name, data)
+    all_servers_with_data = []
 
-    # 如果要查询指定服务器
+    # 确定目标服务器列表
     if target_server:
-        target_srv = None
-        for srv in servers:
-            if srv["name"] == target_server:
-                target_srv = srv
-                break
+        target_srv = next((s for s in servers if s["name"] == target_server), None)
         if not target_srv:
             yield event.plain_result(f"未找到名为「{target_server}」的服务器，请检查配置。")
             return
-        host = target_srv["host"]
-        api_url = build_plugin_api_url(host, plugin_api_port)
-        if not api_url:
-            yield event.plain_result(f"服务器「{target_server}」的地址无效。")
-            return
-        base_url = api_url.replace("/api/status", "")
-        try:
-            data = await asyncio.wait_for(
-                fetch_player_stats(base_url, player_name, timeout=3.0),
-                timeout=3.5
-            )
-        except asyncio.TimeoutError:
-            yield event.plain_result(f"服务器「{target_server}」响应超时，请检查服务器是否在线。")
-            return
-        except Exception as e:
-            yield event.plain_result(f"查询服务器「{target_server}」时出错: {e}")
-            return
-
-        if data is None:
-            yield event.plain_result(
-                f"无法连接到服务器「{target_server}」的插件服务，"
-                "请确认插件已安装且端口可访问。"
-            )
-            return
-        # 优先使用插件返回的 error 字段
-        if data.get('error'):
-            yield event.plain_result(f"服务器「{target_server}」返回错误：{data.get('error')}")
-            return
-        # 有效数据
-        found_data = data
-        found_server_name = target_srv["name"]
-        all_servers_with_data.append((found_server_name, data))
+        targets = [target_srv]
     else:
-        # ---------- 未指定服务器：并发请求所有服务器 ----------
-        tasks = []
-        for srv in servers:
+        targets = servers
+
+    # ---- 步骤1：优先使用模组 API ----
+    if use_mod_api:
+        for srv in targets:
             host = srv["host"]
-            api_url = build_plugin_api_url(host, plugin_api_port)
+            api_url = build_mod_api_url(host, mod_api_port, f"/api/stats/{player_name}")
             if not api_url:
                 continue
+            try:
+                headers = {}
+                if mod_token:
+                    headers["Authorization"] = f"Bearer {mod_token}"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(api_url, headers=headers, timeout=5.0) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            if data.get("success"):
+                                found_data = data
+                                found_server_name = srv["name"]
+                                all_servers_with_data.append((found_server_name, data))
+                                break  # 找到第一个有效数据即跳出
+                        else:
+                            logger.warning(f"模组 stats API 返回非 200: {resp.status}")
+            except Exception as e:
+                logger.warning(f"请求模组 stats 失败: {e}")
+                continue
+
+    # ---- 步骤2：如果模组 API 未返回数据且启用了插件 API，则使用旧逻辑 ----
+    if found_data is None and use_plugin_api:
+        # ---- 完整保留原有插件 API 逻辑 ----
+        if target_server:
+            # 指定服务器的情况（单服务器）
+            target_srv = targets[0]
+            host = target_srv["host"]
+            api_url = build_plugin_api_url(host, plugin_api_port)
+            if not api_url:
+                yield event.plain_result(f"服务器「{target_server}」的地址无效。")
+                return
             base_url = api_url.replace("/api/status", "")
-            # 每个任务设置 3 秒超时
-            task = asyncio.create_task(
-                asyncio.wait_for(
+            try:
+                data = await asyncio.wait_for(
                     fetch_player_stats(base_url, player_name, timeout=3.0),
                     timeout=3.5
                 )
-            )
-            tasks.append((srv["name"], task))
-
-        # 并发执行所有任务，收集结果（区分有效数据和错误）
-        valid_results = []   # 存储 (name, data)
-        error_results = []   # 存储 (name, error_message)
-
-        for name, task in tasks:
-            try:
-                data = await task
-                if data is not None:
-                    if data.get('error'):
-                        error_results.append((name, data.get('error')))
-                    else:
-                        valid_results.append((name, data))
             except asyncio.TimeoutError:
-                error_results.append((name, "请求超时"))
+                yield event.plain_result(f"服务器「{target_server}」响应超时，请检查服务器是否在线。")
+                return
             except Exception as e:
-                error_results.append((name, str(e)))
+                yield event.plain_result(f"查询服务器「{target_server}」时出错: {e}")
+                return
 
-        if valid_results:
-            # 有有效数据，取第一个
-            found_server_name, found_data = valid_results[0]
-            all_servers_with_data = valid_results
-        else:
-            # 全部失败，显示第一个错误信息
-            if error_results:
-                name, err_msg = error_results[0]
-                yield event.plain_result(f"服务器「{name}」返回错误：{err_msg}")
-            else:
-                # 保底消息（理论上不会到达这里）
+            if data is None:
                 yield event.plain_result(
-                    f"未找到玩家 {player_name} 的统计数据。"
-                    "可能原因：玩家未曾进入任何已配置的服务器，或所有服务器均未响应。"
+                    f"无法连接到服务器「{target_server}」的插件服务，请确认插件已安装且端口可访问。"
                 )
-            return
+                return
+            if data.get('error'):
+                yield event.plain_result(f"服务器「{target_server}」返回错误：{data.get('error')}")
+                return
+            found_data = data
+            found_server_name = target_srv["name"]
+            all_servers_with_data.append((found_server_name, data))
+        else:
+            # 未指定服务器：并发请求所有服务器
+            tasks = []
+            for srv in servers:
+                host = srv["host"]
+                api_url = build_plugin_api_url(host, plugin_api_port)
+                if not api_url:
+                    continue
+                base_url = api_url.replace("/api/status", "")
+                task = asyncio.create_task(
+                    asyncio.wait_for(
+                        fetch_player_stats(base_url, player_name, timeout=3.0),
+                        timeout=3.5
+                    )
+                )
+                tasks.append((srv["name"], task))
 
-    # 获取玩家头像（异步）
+            valid_results = []
+            error_results = []
+
+            for name, task in tasks:
+                try:
+                    data = await task
+                    if data is not None:
+                        if data.get('error'):
+                            error_results.append((name, data.get('error')))
+                        else:
+                            valid_results.append((name, data))
+                except asyncio.TimeoutError:
+                    error_results.append((name, "请求超时"))
+                except Exception as e:
+                    error_results.append((name, str(e)))
+
+            if valid_results:
+                found_server_name, found_data = valid_results[0]
+                all_servers_with_data = valid_results
+            else:
+                if error_results:
+                    name, err_msg = error_results[0]
+                    yield event.plain_result(f"服务器「{name}」返回错误：{err_msg}")
+                else:
+                    yield event.plain_result(
+                        f"未找到玩家 {player_name} 的统计数据。"
+                        "可能原因：玩家未曾进入任何已配置的服务器，或所有服务器均未响应。"
+                    )
+                return
+
+    # 如果所有方式都失败
+    if found_data is None:
+        yield event.plain_result(f"未找到玩家 {player_name} 的统计数据。")
+        return
+
+    # 获取头像并生成图片
     async with aiohttp.ClientSession() as session:
         avatar = await download_avatar(session, player_name, 72, is_premium=None, uuid=None)
 
-    # 获取群组服务器数量
-    servers = config_manager.get_all_servers()
-    show_server_label = len(servers) > 1   # 只有多个服务器时才显示标签
-
-    # 生成图片
     is_online = found_data.get('online', False)
     try:
         img = await draw_player_stats_image(
@@ -272,16 +311,15 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
             server_name=found_server_name,
             is_online=is_online,
             avatar_img=avatar,
-            show_server_label=show_server_label   # 传入标志
+            show_server_label=(len(servers) > 1)
         )
-        # 保存临时文件并压缩（PNG 无损压缩）
         img.save("player_stats_temp.png", optimize=True, compress_level=9)
         yield event.chain_result([AstrImage(file="player_stats_temp.png")])
     except Exception as e:
         logger.error(f"生成玩家统计图片失败: {e}")
         yield event.plain_result(f"生成图片失败: {e}")
 
-    # 如果有多个服务器都有数据，且未指定 target_server，发送提示
+    # 多服务器提示
     if not target_server and len(all_servers_with_data) > 1:
         other_servers = [name for name, _ in all_servers_with_data if name != found_server_name]
         msg = f"检测到玩家 {player_name} 在多个服务器有数据，当前展示的是「{found_server_name}」的数据。\n"

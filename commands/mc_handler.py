@@ -7,7 +7,7 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Image as AstrImage
 from astrbot.api import logger  # 添加 logger 导入
 from ..config.server_config import ConfigManager
-from ..features.player_status.checker import send_broadcast, fetch_tps
+from ..features.player_status.checker import send_broadcast, fetch_tps, send_broadcast_via_mod, fetch_tps_via_mod
 from ..features.player_status.controller import run_player_status, run_player_stats, build_plugin_api_url
 from ..features.help_image.image_generator import draw_help_image
 from ..utils.permission import check_permission, is_group_admin, LEVEL_GROUP_ADMIN
@@ -216,34 +216,39 @@ async def handle_mc_command(event: AstrMessageEvent):
         if not servers:
             yield event.plain_result("还没有添加任何服务器。")
             return
+
         wm = WhitelistManager()
+        use_mod_api = wm.enable_mod_api
+        mod_api_port = wm.mod_api_port
+        mod_token = wm.mod_api_token
         plugin_api_port = wm.plugin_api_port
+
         if target_server:
-            target = None
-            for s in servers:
-                if s["name"] == target_server:
-                    target = s
-                    break
+            target = next((s for s in servers if s["name"] == target_server), None)
             if not target:
                 yield event.plain_result(f"未找到名为「{target_server}」的服务器。")
                 return
             servers_to_broadcast = [target]
         else:
             servers_to_broadcast = servers
+
         success_count = 0
         fail_count = 0
         for srv in servers_to_broadcast:
             host = srv["host"]
-            api_url = build_plugin_api_url(host, plugin_api_port)
-            if not api_url:
-                fail_count += 1
-                continue
-            base_url = api_url.replace("/api/status", "")
-            success = await send_broadcast(base_url, message)
+            success = False
+            if use_mod_api:
+                success = await send_broadcast_via_mod(host, mod_api_port, mod_token, message)
+            else:
+                api_url = build_plugin_api_url(host, plugin_api_port)
+                if api_url:
+                    base_url = api_url.replace("/api/status", "")
+                    success = await send_broadcast(base_url, message)
             if success:
                 success_count += 1
             else:
                 fail_count += 1
+
         if fail_count == 0:
             if target_server:
                 yield event.plain_result(f"✔️ 已在服务器「{target_server}」发送广播。")
@@ -267,31 +272,39 @@ async def handle_mc_command(event: AstrMessageEvent):
         if not servers:
             yield event.plain_result("还没有添加任何服务器。")
             return
+
         wm = WhitelistManager()
+        use_mod_api = wm.enable_mod_api
+        mod_api_port = wm.mod_api_port
+        mod_token = wm.mod_api_token
         plugin_api_port = wm.plugin_api_port
+
         if target_server:
-            target = None
-            for s in servers:
-                if s["name"] == target_server:
-                    target = s
-                    break
+            target = next((s for s in servers if s["name"] == target_server), None)
             if not target:
                 yield event.plain_result(f"未找到名为「{target_server}」的服务器。")
                 return
             targets = [target]
         else:
             targets = servers
+
         tasks = []
         for srv in targets:
             host = srv["host"]
-            api_url = build_plugin_api_url(host, plugin_api_port)
-            if not api_url:
-                continue
-            base_url = api_url.replace("/api/status", "")
-            tasks.append(fetch_tps(base_url))
+            if use_mod_api:
+                tasks.append(fetch_tps_via_mod(host, mod_api_port, mod_token))
+            else:
+                api_url = build_plugin_api_url(host, plugin_api_port)
+                if api_url:
+                    base_url = api_url.replace("/api/status", "")
+                    tasks.append(fetch_tps(base_url))
+                else:
+                    continue
+
         if not tasks:
             yield event.plain_result("没有有效的服务器可查询。")
             return
+
         results = await asyncio.gather(*tasks)
         server_data = []
         for srv, tps in zip(targets, results):
