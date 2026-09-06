@@ -410,12 +410,13 @@ async def handle_mc_command(event: AstrMessageEvent):
 
         # ---- 步骤2：向目标服务器发送绑定请求（携带 qq 和 gameId） ----
         # 注意：这里使用传统模式，传递 gameId，因为已经通过验证接口确认了令牌对应此 gameId
-        ok, msg = await call_mod_api(
+        ok, result = await call_mod_api(
             target_host, port, api_token, "/api/bind", "POST",
             {"qq": qq, "gameId": target_game_id}
         )
 
         if ok:
+            msg = result.get("message", "绑定成功")
             yield event.plain_result(
                 f"✅ 绑定成功！\n"
                 f"服务器：{found_server_name}\n"
@@ -425,7 +426,7 @@ async def handle_mc_command(event: AstrMessageEvent):
         else:
             yield event.plain_result(
                 f"❌ 绑定失败（服务器：{found_server_name}）\n"
-                f"错误：{msg}"
+                f"错误：{result}"
             )
 
     # ---------- unbind 命令（混合模式：自动检测 + 手动指定）----------
@@ -508,10 +509,11 @@ async def handle_mc_command(event: AstrMessageEvent):
                 yield event.plain_result(f"未找到名为「{target_server_name}」的服务器。")
                 return
             # 只向该服务器发送解绑请求
-            ok, msg = await call_mod_api(
+            ok, result = await call_mod_api(
                 target["host"], port, api_token, "/api/unbind", "POST", {"gameId": game_id}
             )
             if ok:
+                msg = result.get("message", "解绑成功")
                 yield event.plain_result(
                     f"✅ 解绑成功！\n"
                     f"服务器：{target_server_name}\n"
@@ -570,10 +572,11 @@ async def handle_mc_command(event: AstrMessageEvent):
         elif len(bound_servers) == 1:
             # 只有唯一绑定，直接解绑
             target = bound_servers[0]
-            ok, msg = await call_mod_api(
+            ok, result = await call_mod_api(
                 target["host"], port, api_token, "/api/unbind", "POST", {"gameId": game_id}
             )
             if ok:
+                msg = result.get("message", "解绑成功")
                 yield event.plain_result(
                     f"✅ 解绑成功！\n"
                     f"服务器：{target['name']}\n"
@@ -584,7 +587,7 @@ async def handle_mc_command(event: AstrMessageEvent):
             else:
                 yield event.plain_result(
                     f"❌ 解绑失败（服务器：{target['name']}）\n"
-                    f"错误：{msg}"
+                    f"错误：{result}"
                 )
 
         else:
@@ -759,7 +762,9 @@ async def handle_mc_command(event: AstrMessageEvent):
 async def call_mod_api(host: str, port: int, token: str, endpoint: str, method: str = "POST", data: dict = None):
     """
     调用模组 HTTP API
-    :return: (是否成功, 消息)
+    :return: (是否成功, 响应内容)
+             成功时返回 (True, 完整JSON响应字典)
+             失败时返回 (False, 错误消息字符串)
     """
     if not host or host == "self":
         return False, "无效的服务器地址"
@@ -776,17 +781,19 @@ async def call_mod_api(host: str, port: int, token: str, endpoint: str, method: 
             if method.upper() == "POST":
                 async with session.post(url, json=data, headers=headers, timeout=5.0) as resp:
                     result = await resp.json()
-                    if resp.status == 200 and result.get("success"):
-                        return True, result.get("message", "操作成功")
+                    if resp.status == 200 and result.get("success") is True:
+                        return True, result
                     else:
                         return False, result.get("message", f"API 返回错误 (HTTP {resp.status})")
             elif method.upper() == "GET":
                 async with session.get(url, params=data, headers=headers, timeout=5.0) as resp:
                     result = await resp.json()
                     if resp.status == 200:
+                        if result.get("success") is False:
+                            return False, result.get("message", "API 返回错误")
                         return True, result
                     else:
-                        return False, f"检查失败 (HTTP {resp.status})"
+                        return False, f"请求失败 (HTTP {resp.status})"
     except aiohttp.ClientError as e:
         return False, f"连接失败: {e}"
     except asyncio.TimeoutError:

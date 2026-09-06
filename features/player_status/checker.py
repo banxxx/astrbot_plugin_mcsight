@@ -34,7 +34,6 @@ async def fetch_from_mod_api(api_url: str, token: str = "", timeout: float = 5.0
         return None
 
 async def send_broadcast_via_mod(host: str, port: int, token: str, message: str, timeout: float = 5.0) -> bool:
-    """通过模组 API 发送广播"""
     url = build_mod_api_url(host, port, "/api/broadcast")
     if not url:
         return False
@@ -43,14 +42,15 @@ async def send_broadcast_via_mod(host: str, port: int, token: str, message: str,
         headers["Authorization"] = f"Bearer {token}"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json={"message": message}, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
-                return resp.status == 200
-    except Exception as e:
-        logger.error(f"模组广播请求异常: {e}")
+            async with session.post(url, json={"message": message}, headers=headers, timeout=timeout) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get("success", False)
+                return False
+    except Exception:
         return False
 
 async def fetch_tps_via_mod(host: str, port: int, token: str, timeout: float = 5.0) -> Optional[float]:
-    """通过模组 API 获取 TPS"""
     url = build_mod_api_url(host, port, "/api/tps")
     if not url:
         return None
@@ -59,15 +59,13 @@ async def fetch_tps_via_mod(host: str, port: int, token: str, timeout: float = 5
         headers["Authorization"] = f"Bearer {token}"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            async with session.get(url, headers=headers, timeout=timeout) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("tps")
-                else:
-                    logger.warning(f"模组 TPS API 返回非 200: {resp.status}")
-                    return None
-    except Exception as e:
-        logger.warning(f"请求模组 TPS 失败: {e}")
+                    if data.get("success") and "data" in data:
+                        return data["data"].get("tps")
+                return None
+    except Exception:
         return None
 
 # ========== 原有函数（保持不变） ==========
@@ -94,24 +92,24 @@ async def fetch_from_plugin(api_url: str, timeout: float = 5.0) -> Optional[List
         return None
 
 async def fetch_player_stats(api_base_url: str, player_name: str, timeout: float = 5.0):
-    """从服务端插件获取玩家统计数据。"""
+    """从服务端插件获取玩家统计数据，返回数据字典或错误字典"""
     url = f"{api_base_url}/api/stats/{player_name}"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data
+                    if data.get("success"):
+                        return data.get("data", {})      # 只返回 data 部分
+                    else:
+                        return {"error": data.get("message", "未知错误")}
                 else:
                     return {"error": f"HTTP {resp.status}"}
     except asyncio.TimeoutError:
-        logger.warning(f"获取玩家 {player_name} 统计超时")
         return {"error": "查询超时，请稍后重试"}
     except aiohttp.ClientConnectorError as e:
-        logger.error(f"连接玩家统计 API 失败: {url} - {e}")
         return {"error": f"无法连接到服务器（{e}）"}
     except Exception as e:
-        logger.error(f"获取玩家统计异常: {url} - {e}")
         return {"error": f"获取统计异常: {e}"}
 
 async def query_one(server_info: dict) -> Dict[str, Any]:

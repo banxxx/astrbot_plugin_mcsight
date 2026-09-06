@@ -82,7 +82,7 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
                                 data = await resp.json()
                                 if data.get("success"):
                                     response_data = data.get("data", {})
-                                    mod_data = response_data.get("server")
+                                    mod_data = response_data
                 except Exception as e:
                     logger.warning(f"模组 API 请求异常: {e}")
 

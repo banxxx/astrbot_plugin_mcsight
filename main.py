@@ -140,7 +140,7 @@ class MCWatcher(Star):
         async for result in handle_mc_command(event):
             yield result
 
-        # ---------- 绑定帮助命令 ----------
+    # ---------- 绑定帮助命令 ----------
     @filter.command("绑定帮助", aliases=["bindhelp"])
     async def bindhelp_command(self, event: AstrMessageEvent):
         """显示绑定相关命令的帮助图片"""
