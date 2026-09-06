@@ -13,6 +13,7 @@ from ..features.help_image.image_generator import draw_help_image
 from ..utils.permission import check_permission, is_group_admin, LEVEL_GROUP_ADMIN
 from ..config.whitelist_config import WhitelistManager
 from ..features.player_status.tps_image_generator import draw_tps_image
+from ..features.help_image.bind_help_generator import draw_bind_help_image
 
 async def handle_mc_command(event: AstrMessageEvent):
     group_id = event.get_group_id()
@@ -79,6 +80,14 @@ async def handle_mc_command(event: AstrMessageEvent):
             yield event.chain_result([AstrImage(file="mc_help_temp.png")])
         except Exception as e:
             yield event.plain_result(f"生成帮助图片失败: {e}")
+
+    elif sub_cmd == "bindhelp":
+        try:
+            img = draw_bind_help_image()
+            img.save("bind_help_temp.png")
+            yield event.chain_result([AstrImage(file="bind_help_temp.png")])
+        except Exception as e:
+            yield event.plain_result(f"生成绑定帮助图片失败: {e}")
 
     elif sub_cmd == "status":
         async for result in run_player_status(event, config):
@@ -320,110 +329,146 @@ async def handle_mc_command(event: AstrMessageEvent):
             logger.error(f"生成 TPS 图片失败: {e}")
             yield event.plain_result(f"生成图片失败: {e}")
 
-    # ---------- bind 命令（支持多服务器）----------
+    # ---------- bind 命令（令牌模式：先验证服务器，再绑定）----------
     elif sub_cmd == "bind":
         wm = WhitelistManager()
         if not wm.enable_mod_api:
             yield event.plain_result("❌ 模组 API 功能未启用，请在插件配置中启用「enable_mod_api」。")
             return
         port = wm.mod_api_port
-        token = wm.mod_api_token
-        if not token:
+        api_token = wm.mod_api_token
+        if not api_token:
             yield event.plain_result("模组 API Token 未配置，请联系管理员设置。")
+            return
+
+        # 检查是否提供了令牌（6位数字）
+        if len(parts) < 2:
+            yield event.plain_result(
+                "请从游戏窗口中复制绑定码，格式：\n"
+                "/绑定 <6位数字> 或 /bind <6位数字>\n"
+                "（令牌在游戏内 Title/ActionBar 中显示）"
+            )
+            return
+
+        token_code = parts[1].strip()
+        # 验证是否为6位数字
+        if not re.match(r'^\d{6}$', token_code):
+            yield event.plain_result(
+                f"无效的绑定码「{token_code}」，请输入6位数字绑定码。\n"
+                "请从游戏窗口中复制正确的绑定码。"
+            )
             return
 
         qq = str(event.get_sender_id())
 
-        # 获取游戏ID
-        if len(parts) >= 2:
-            game_id = parts[1]
-        else:
-            sender_name = event.get_sender_name()
-            if not sender_name:
-                yield event.plain_result(
-                    "无法获取您的群昵称，请手动指定游戏ID。\n"
-                    "用法: /绑定 <游戏ID> 或 /bind <游戏ID>"
-                )
-                return
-            match = re.search(r'[（(](.*?)[）)]', sender_name)
-            if match:
-                game_id = match.group(1).strip()
-                if not game_id:
-                    yield event.plain_result(
-                        f"您的群昵称「{sender_name}」中括号内为空，请修改昵称或手动指定。"
-                    )
-                    return
-            else:
-                yield event.plain_result(
-                    f"无法从您的群昵称「{sender_name}」中解析出游戏ID。\n"
-                    "请确保昵称格式为「玩家（游戏ID）」，或手动指定: /绑定 <游戏ID>"
-                )
-                return
-
-        # 获取目标服务器列表
-        target_server_name = parts[2] if len(parts) >= 3 else None
+        # 获取所有已配置的服务器
         servers = config.get_all_servers()
         if not servers:
             yield event.plain_result("还没有添加任何服务器。")
             return
 
-        if target_server_name:
-            target = next((s for s in servers if s["name"] == target_server_name), None)
-            if not target:
-                yield event.plain_result(f"未找到名为「{target_server_name}」的服务器。")
-                return
-            targets = [target]
-        else:
-            targets = servers  # 所有服务器
-
-        # 遍历执行绑定
-        results = []
-        for srv in targets:
+        # ---- 步骤1：并发验证令牌，找到所属服务器 ----
+        validation_tasks = []
+        for srv in servers:
             host = srv["host"]
-            ok, msg = await call_mod_api(host, port, token, "/api/bind", "POST", {"qq": qq, "gameId": game_id})
-            results.append((srv["name"], ok, msg))
+            validation_tasks.append(
+                asyncio.create_task(
+                    call_mod_api(host, port, api_token, "/api/validate_token", "GET", {"token": token_code})
+                )
+            )
 
-        # 汇总结果
-        success_list = [f"✔️ {name}：{msg}" for name, ok, msg in results if ok]
-        fail_list = [f"❌ {name}：{msg}" for name, ok, msg in results if not ok]
+        # 等待所有验证任务完成
+        validation_results = await asyncio.gather(*validation_tasks, return_exceptions=True)
 
-        reply = []
-        if success_list:
-            reply.append("绑定成功：\n" + "\n".join(success_list))
-        if fail_list:
-            reply.append("绑定失败：\n" + "\n".join(fail_list))
-        if not reply:
-            reply = ["没有执行任何绑定操作。"]
+        # 寻找第一个有效的令牌
+        target_host = None
+        target_game_id = None
+        found_server_name = None
+        for idx, (ok, result) in enumerate(validation_results):
+            # 如果任务抛出异常或返回失败，跳过
+            if isinstance((ok, result), Exception):
+                continue
+            if not ok:
+                continue
+            # 新响应格式：业务数据在 data 字段中
+            response_data = result.get("data", {})
+            if response_data.get("valid") is True:
+                target_game_id = response_data.get("gameId")
+                target_server_id = response_data.get("serverId")
+                if target_game_id:
+                    target_host = servers[idx]["host"]
+                    found_server_name = servers[idx]["name"]
+                    break
 
-        yield event.plain_result("\n\n".join(reply))
+        # 如果没有找到有效令牌
+        if target_host is None:
+            yield event.plain_result(
+                "❌ 绑定码无效或已过期，请确认你输入的是游戏窗口内显示的6位数字绑定码。\n"
+                "如果绑定码已过期，请重新登录游戏获取新的绑定码。"
+            )
+            return
 
-    # ---------- unbind 命令（支持多服务器）----------
+        # ---- 步骤2：向目标服务器发送绑定请求（携带 qq 和 gameId） ----
+        # 注意：这里使用传统模式，传递 gameId，因为已经通过验证接口确认了令牌对应此 gameId
+        ok, msg = await call_mod_api(
+            target_host, port, api_token, "/api/bind", "POST",
+            {"qq": qq, "gameId": target_game_id}
+        )
+
+        if ok:
+            yield event.plain_result(
+                f"✅ 绑定成功！\n"
+                f"服务器：{found_server_name}\n"
+                f"游戏ID：{target_game_id}\n"
+                f"消息：{msg}"
+            )
+        else:
+            yield event.plain_result(
+                f"❌ 绑定失败（服务器：{found_server_name}）\n"
+                f"错误：{msg}"
+            )
+
+    # ---------- unbind 命令（混合模式：自动检测 + 手动指定）----------
     elif sub_cmd == "unbind":
         wm = WhitelistManager()
         if not wm.enable_mod_api:
             yield event.plain_result("❌ 模组 API 功能未启用，请在插件配置中启用「enable_mod_api」。")
             return
         port = wm.mod_api_port
-        token = wm.mod_api_token
-        if not token:
+        api_token = wm.mod_api_token
+        if not api_token:
             yield event.plain_result("模组 API Token 未配置，请联系管理员设置。")
             return
 
-        # 判断是否有参数
-        if len(parts) >= 2:
-            # 有参数：需要管理员权限
-            if not await check_permission(event, "unbind"):
-                yield event.plain_result("权限不足：解绑其他玩家需要群管理员或插件管理员权限。")
+        # ---- 解析参数 ----
+        # 支持格式：
+        # /解绑 <gameId> [-s <服务器名>]
+        # /解绑（从群昵称自动提取 gameId）
+        target_server_name = None
+        game_id = None
+        args = parts[1:]  # 去掉子命令
+
+        # 检查是否有 -s 参数（手动指定服务器模式）
+        if "-s" in args:
+            s_index = args.index("-s")
+            if len(args) > s_index + 1:
+                target_server_name = args[s_index + 1]
+                # 移除 -s 和服务器名，剩下的作为 gameId
+                args = args[:s_index] + args[s_index + 2:]
+            else:
+                yield event.plain_result("用法: /解绑 <游戏ID> -s <服务器名>")
                 return
-            game_id = parts[1]
-            target_server_name = parts[2] if len(parts) >= 3 else None
+
+        # 剩余的第一个参数作为 gameId
+        if args:
+            game_id = args[0]
         else:
-            # 无参数：解绑自己（从昵称提取游戏ID）
+            # 无参数：从群昵称提取游戏ID（仅限解绑自己）
             sender_name = event.get_sender_name()
             if not sender_name:
                 yield event.plain_result(
                     "无法获取您的群昵称，请手动指定游戏ID。\n"
-                    "用法: /解绑 <游戏ID> 或 /unbind <游戏ID>（管理员可指定其他玩家）"
+                    "用法: /解绑 <游戏ID> 或 /解绑（自动从昵称提取）"
                 )
                 return
             match = re.search(r'[（(](.*?)[）)]', sender_name)
@@ -440,43 +485,121 @@ async def handle_mc_command(event: AstrMessageEvent):
                     "请确保昵称格式为「玩家（游戏ID）」，或手动指定: /解绑 <游戏ID>"
                 )
                 return
-            target_server_name = None
 
-        # 获取服务器列表
+        # ---- 权限检查 ----
+        # 如果 gameId 来自昵称，说明是玩家自己，无需额外权限
+        # 如果 gameId 来自参数，需要检查是否有管理员权限（解绑他人）
+        if args and args[0] != game_id:
+            # 有参数，需要管理员权限
+            if not await check_permission(event, "unbind"):
+                yield event.plain_result("权限不足：解绑其他玩家需要群管理员或插件管理员权限。")
+                return
+
+        # 获取所有已配置的服务器
         servers = config.get_all_servers()
         if not servers:
             yield event.plain_result("还没有添加任何服务器。")
             return
 
+        # ---- 模式1：手动指定服务器（使用 -s 参数） ----
         if target_server_name:
             target = next((s for s in servers if s["name"] == target_server_name), None)
             if not target:
                 yield event.plain_result(f"未找到名为「{target_server_name}」的服务器。")
                 return
-            targets = [target]
-        else:
-            targets = servers
+            # 只向该服务器发送解绑请求
+            ok, msg = await call_mod_api(
+                target["host"], port, api_token, "/api/unbind", "POST", {"gameId": game_id}
+            )
+            if ok:
+                yield event.plain_result(
+                    f"✅ 解绑成功！\n"
+                    f"服务器：{target_server_name}\n"
+                    f"游戏ID：{game_id}\n"
+                    f"消息：{msg}"
+                )
+            else:
+                yield event.plain_result(
+                    f"❌ 解绑失败（服务器：{target_server_name}）\n"
+                    f"错误：{msg}"
+                )
+            return
 
-        # 遍历执行解绑
-        results = []
-        for srv in targets:
+        # ---- 模式2：自动检测模式（无 -s 参数） ----
+        # 步骤1：并发查询所有服务器，检查 gameId 的绑定状态
+        check_tasks = []
+        for srv in servers:
             host = srv["host"]
-            ok, msg = await call_mod_api(host, port, token, "/api/unbind", "POST", {"gameId": game_id})
-            results.append((srv["name"], ok, msg))
+            check_tasks.append(
+                asyncio.create_task(
+                    call_mod_api(host, port, api_token, "/api/check", "GET", {"gameId": game_id})
+                )
+            )
 
-        # 汇总结果
-        success_list = [f"✔️ {name}：{msg}" for name, ok, msg in results if ok]
-        fail_list = [f"❌ {name}：{msg}" for name, ok, msg in results if not ok]
+        # 等待所有查询完成
+        check_results = await asyncio.gather(*check_tasks, return_exceptions=True)
 
-        reply = []
-        if success_list:
-            reply.append("解绑成功：\n" + "\n".join(success_list))
-        if fail_list:
-            reply.append("解绑失败：\n" + "\n".join(fail_list))
-        if not reply:
-            reply = ["没有执行任何解绑操作。"]
+        # 收集绑定了该 gameId 的服务器列表
+        bound_servers = []
+        for idx, result in enumerate(check_results):
+            # 如果任务抛出异常或返回失败，跳过
+            if isinstance(result, Exception):
+                continue
+            ok, data = result
+            if not ok:
+                continue
+            # 新响应格式：业务数据在 data 字段中
+            response_data = data.get("data", {})
+            if response_data.get("bound") is True:
+                bound_servers.append({
+                    "name": servers[idx]["name"],
+                    "host": servers[idx]["host"],
+                    "qq": response_data.get("qq", ""),
+                    "gameId": response_data.get("gameId", game_id)
+                })
 
-        yield event.plain_result("\n\n".join(reply))
+        # 步骤2：根据查询结果处理
+        if len(bound_servers) == 0:
+            # 没有任何服务器绑定该 gameId
+            yield event.plain_result(
+                f"❌ 未找到游戏ID「{game_id}」的绑定记录。\n"
+                "请确认游戏ID是否正确，或先进行绑定操作。"
+            )
+            return
+
+        elif len(bound_servers) == 1:
+            # 只有唯一绑定，直接解绑
+            target = bound_servers[0]
+            ok, msg = await call_mod_api(
+                target["host"], port, api_token, "/api/unbind", "POST", {"gameId": game_id}
+            )
+            if ok:
+                yield event.plain_result(
+                    f"✅ 解绑成功！\n"
+                    f"服务器：{target['name']}\n"
+                    f"游戏ID：{game_id}\n"
+                    f"绑定的QQ：{target['qq']}\n"
+                    f"消息：{msg}"
+                )
+            else:
+                yield event.plain_result(
+                    f"❌ 解绑失败（服务器：{target['name']}）\n"
+                    f"错误：{msg}"
+                )
+
+        else:
+            # 多个服务器绑定了该 gameId，列出所有服务器，提示用户手动指定
+            server_list = "\n".join([
+                f"  • {s['name']}（QQ：{s['qq']}）"
+                for s in bound_servers
+            ])
+            yield event.plain_result(
+                f"⚠️ 游戏ID「{game_id}」在以下多个服务器存在绑定记录：\n"
+                f"{server_list}\n\n"
+                f"请使用以下命令精确指定要解绑的服务器：\n"
+                f"/解绑 {game_id} -s <服务器名>\n\n"
+                f"例如：/解绑 {game_id} -s {bound_servers[0]['name']}"
+            )
 
     # ---------- check 命令（支持多服务器，支持 ID/QQ 前缀查询）----------
     elif sub_cmd == "check":
@@ -562,9 +685,10 @@ async def handle_mc_command(event: AstrMessageEvent):
             if query_type == "ID":
                 ok, data = await call_mod_api(host, port, token, "/api/check", "GET", {"gameId": query_value})
                 if ok:
-                    bound = data.get("bound", False)
+                    response_data = data.get("data", {})
+                    bound = response_data.get("bound", False)
                     if bound:
-                        qq = data.get("qq", "")
+                        qq = response_data.get("qq", "")
                         results.append((srv["name"], True, f"绑定的QQ：{qq}"))
                     else:
                         results.append((srv["name"], False, "未绑定"))
@@ -574,9 +698,10 @@ async def handle_mc_command(event: AstrMessageEvent):
             elif query_type == "QQ":
                 ok, data = await call_mod_api(host, port, token, "/api/check", "GET", {"qq": query_value})
                 if ok:
-                    bound = data.get("bound", False)
+                    response_data = data.get("data", {})
+                    bound = response_data.get("bound", False)
                     if bound:
-                        game_id = data.get("gameId", "")
+                        game_id = response_data.get("gameId", "")
                         results.append((srv["name"], True, f"绑定的游戏ID：{game_id}"))
                     else:
                         results.append((srv["name"], False, "该QQ号未绑定"))
@@ -586,16 +711,18 @@ async def handle_mc_command(event: AstrMessageEvent):
             elif query_type == "SMART":
                 # 智能查询：先按QQ，未绑定再按ID
                 ok, data = await call_mod_api(host, port, token, "/api/check", "GET", {"qq": query_value})
-                if ok and data.get("bound", False):
-                    game_id = data.get("gameId", "")
+                response_data = data.get("data", {})
+                if ok and response_data.get("bound", False):
+                    game_id = response_data.get("gameId", "")
                     results.append((srv["name"], True, f"绑定的游戏ID：{game_id}"))
                 else:
                     # 按游戏ID查
                     ok2, data2 = await call_mod_api(host, port, token, "/api/check", "GET", {"gameId": query_value})
                     if ok2:
-                        bound2 = data2.get("bound", False)
+                        response_data2 = data2.get("data", {})
+                        bound2 = response_data2.get("bound", False)
                         if bound2:
-                            qq2 = data2.get("qq", "")
+                            qq2 = response_data2.get("qq", "")
                             results.append((srv["name"], True, f"绑定的QQ：{qq2}"))
                         else:
                             results.append((srv["name"], False, "未绑定（QQ和游戏ID均未绑定）"))

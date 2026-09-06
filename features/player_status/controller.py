@@ -81,7 +81,8 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
                             if resp.status == 200:
                                 data = await resp.json()
                                 if data.get("success"):
-                                    mod_data = data.get("server")
+                                    response_data = data.get("data", {})
+                                    mod_data = response_data.get("server")
                 except Exception as e:
                     logger.warning(f"模组 API 请求异常: {e}")
 
@@ -202,10 +203,12 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
                         if resp.status == 200:
                             data = await resp.json()
                             if data.get("success"):
-                                found_data = data
-                                found_server_name = srv["name"]
-                                all_servers_with_data.append((found_server_name, data))
-                                break  # 找到第一个有效数据即跳出
+                                response_data = data.get("data", {})
+                                if response_data:
+                                    found_data = response_data
+                                    found_server_name = srv["name"]
+                                    all_servers_with_data.append((found_server_name, data))
+                                    break  # 找到第一个有效数据即跳出
                         else:
                             logger.warning(f"模组 stats API 返回非 200: {resp.status}")
             except Exception as e:

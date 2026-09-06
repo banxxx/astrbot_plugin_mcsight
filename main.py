@@ -82,7 +82,7 @@ class MCWatcher(Star):
         async for result in handle_mc_command(event):
             yield result
 
-    # ---------- 新增：绑定命令中文别名 ----------
+    # ---------- 绑定命令中文别名 ----------
     @filter.command("绑定", aliases=["bind"])
     async def bind_command(self, event: AstrMessageEvent):
         raw_msg = event.message_str.strip()
@@ -101,7 +101,7 @@ class MCWatcher(Star):
         async for result in handle_mc_command(event):
             yield result
 
-    # ---------- 新增：解绑命令中文别名 ----------
+    # ---------- 解绑命令中文别名 ----------
     @filter.command("解绑", aliases=["unbind"])
     async def unbind_command(self, event: AstrMessageEvent):
         raw_msg = event.message_str.strip()
@@ -120,7 +120,7 @@ class MCWatcher(Star):
         async for result in handle_mc_command(event):
             yield result
 
-    # ---------- 新增：查询绑定状态中文别名 ----------
+    # ---------- 查询绑定状态中文别名 ----------
     @filter.command("查绑定", aliases=["绑定状态", "checkbind"])
     async def checkbind_command(self, event: AstrMessageEvent):
         raw_msg = event.message_str.strip()
@@ -137,6 +137,14 @@ class MCWatcher(Star):
             event.message_str = f"/mc check {rest}"
         else:
             event.message_str = "/mc check"
+        async for result in handle_mc_command(event):
+            yield result
+
+        # ---------- 绑定帮助命令 ----------
+    @filter.command("绑定帮助", aliases=["bindhelp"])
+    async def bindhelp_command(self, event: AstrMessageEvent):
+        """显示绑定相关命令的帮助图片"""
+        event.message_str = "/mc bindhelp"
         async for result in handle_mc_command(event):
             yield result
 

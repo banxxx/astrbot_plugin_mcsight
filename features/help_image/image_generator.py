@@ -61,7 +61,8 @@ COMMAND_SECTIONS = [
         "icon": "",
         "title": "帮助",
         "items": [
-            ("/mc help", "显示本帮助（图片）"),
+            ("/mc help", "显示命令帮助（图片）"),
+            ("/mc bindhelp", "显示绑定相关帮助（图片）"),
         ]
     }
 ]
