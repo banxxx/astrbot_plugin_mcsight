@@ -28,19 +28,20 @@ NOTE_COLOR = '#999999'
 NOTE_SIZE = 18
 NOTE_MARGIN_TOP = 24
 
-# 命令列表数据（静态）
+# ---------- 更新后的命令列表 ----------
 COMMAND_SECTIONS = [
     {
         "icon": "",
         "title": "服务器管理",
         "items": [
-            ("/mc add 名称 IP", "添加服务器"),
+            ("/mc add 名称 IP [端口]", "添加服务器，端口可选（默认为全局端口）"),
             ("/mc remove 名称", "删除服务器"),
             ("/mc edit 名称 name 新名称", "修改服务器名称"),
             ("/mc edit 名称 host 新IP", "修改服务器IP"),
-            ("/mc batchadd 名:IP,名:IP", "批量添加"),
+            ("/mc edit 名称 port 新端口", "修改服务器API端口"),
+            ("/mc batchadd 名:IP[:端口]", "批量添加，端口可选"),
             ("/mc batchremove 名,名", "批量删除"),
-            ("/mc list", "查看已添加的服务器"),
+            ("/mc list", "查看已添加的服务器（显示独立端口）"),
             ("/mc move 名称 位置序号", "移动服务器到指定位置(从0开始)"),
             ("/mc swap 名称1 名称2", "交换两个服务器的位置"),
             ("/mc say <消息>", "向所有服务器发送广播"),
@@ -67,8 +68,7 @@ COMMAND_SECTIONS = [
     }
 ]
 
-NOTE_TEXT = "提示：所有命令均支持别名，可在主配置中自定义"
-
+NOTE_TEXT = "提示：所有命令均支持别名，可在主配置中自定义；端口参数若不指定则使用全局默认端口。"
 
 def _load_font(size):
     """加载字体，优先使用插件自带字体"""
@@ -84,7 +84,6 @@ def _load_font(size):
             continue
     return ImageFont.load_default()
 
-
 def draw_help_image() -> Image.Image:
     """绘制帮助图片并返回 Image 对象"""
     FONT_TITLE = _load_font(TITLE_SIZE)
@@ -95,7 +94,7 @@ def draw_help_image() -> Image.Image:
     # 卡片可用宽度
     card_inner_width = CONTAINER_WIDTH - CONTAINER_PADDING * 2 - CARD_PADDING * 2
     # 命令名固定宽度（加大以容纳更长命令）
-    command_name_width = 260
+    command_name_width = 280   # 稍加宽以容纳 "batchadd" 等长命令
     # 描述宽度
     command_desc_width = card_inner_width - command_name_width
 

@@ -34,6 +34,7 @@ async def fetch_from_mod_api(api_url: str, token: str = "", timeout: float = 5.0
         return None
 
 async def send_broadcast_via_mod(host: str, port: int, token: str, message: str, timeout: float = 5.0) -> bool:
+    """通过模组 API 发送广播，返回是否真正成功（业务层面）"""
     url = build_mod_api_url(host, port, "/api/broadcast")
     if not url:
         return False
@@ -51,6 +52,7 @@ async def send_broadcast_via_mod(host: str, port: int, token: str, message: str,
         return False
 
 async def fetch_tps_via_mod(host: str, port: int, token: str, timeout: float = 5.0) -> Optional[float]:
+    """通过模组 API 获取 TPS，返回 TPS 值或 None"""
     url = build_mod_api_url(host, port, "/api/tps")
     if not url:
         return None
@@ -68,9 +70,9 @@ async def fetch_tps_via_mod(host: str, port: int, token: str, timeout: float = 5
     except Exception:
         return None
 
-# ========== 原有函数（保持不变） ==========
+# ========== 原有函数（保留，但可能不再使用，保持兼容）==========
 async def fetch_from_plugin(api_url: str, timeout: float = 5.0) -> Optional[List[Dict[str, Any]]]:
-    """请求服务端插件的 /api/status 接口，返回服务器状态列表。"""
+    """请求服务端插件的 /api/status 接口，返回服务器状态列表。（已废弃，保留仅作参考）"""
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
@@ -92,7 +94,7 @@ async def fetch_from_plugin(api_url: str, timeout: float = 5.0) -> Optional[List
         return None
 
 async def fetch_player_stats(api_base_url: str, player_name: str, timeout: float = 5.0):
-    """从服务端插件获取玩家统计数据，返回数据字典或错误字典"""
+    """从服务端插件获取玩家统计数据，返回数据字典或错误字典（已废弃，保留仅作参考）"""
     url = f"{api_base_url}/api/stats/{player_name}"
     try:
         async with aiohttp.ClientSession() as session:
@@ -100,7 +102,7 @@ async def fetch_player_stats(api_base_url: str, player_name: str, timeout: float
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("success"):
-                        return data.get("data", {})      # 只返回 data 部分
+                        return data.get("data", {})
                     else:
                         return {"error": data.get("message", "未知错误")}
                 else:
@@ -207,8 +209,9 @@ async def ping_server(host: str, timeout: float = 3.0) -> float:
     except Exception:
         return 0.0
 
+# 以下函数已废弃，保留仅作参考
 async def send_broadcast(api_base_url: str, message: str, timeout: float = 5.0) -> bool:
-    """向服务端插件发送广播请求（旧插件 API）"""
+    """向服务端插件发送广播请求（旧插件 API，已废弃）"""
     url = f"{api_base_url}/api/broadcast"
     payload = {"message": message}
     try:
@@ -230,7 +233,7 @@ async def send_broadcast(api_base_url: str, message: str, timeout: float = 5.0) 
         return False
 
 async def fetch_tps(api_base_url: str, timeout: float = 5.0) -> Optional[float]:
-    """从服务端插件获取当前服务器的 TPS（旧插件 API）"""
+    """从服务端插件获取当前服务器的 TPS（旧插件 API，已废弃）"""
     url = f"{api_base_url}/api/tps"
     try:
         async with aiohttp.ClientSession() as session:

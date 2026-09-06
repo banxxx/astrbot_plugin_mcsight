@@ -33,11 +33,15 @@ class ConfigManager:
     def get_all_servers(self) -> List[Dict[str, str]]:
         return self._load().get("servers", [])
 
-    def add_server(self, name: str, host: str) -> bool:
+    # ---------- 修改：add_server 增加 port 参数 ----------
+    def add_server(self, name: str, host: str, port: int = None) -> bool:
         data = self._load()
         if any(s["name"] == name for s in data["servers"]):
             return False
-        data["servers"].append({"name": name, "host": host})
+        entry = {"name": name, "host": host}
+        if port is not None:
+            entry["api_port"] = port
+        data["servers"].append(entry)
         self._save(data)
         return True
 
@@ -59,6 +63,16 @@ class ConfigManager:
                 return True
         return False
 
+    # ---------- 新增：编辑服务器端口 ----------
+    def edit_server_port(self, name: str, new_port: int) -> bool:
+        data = self._load()
+        for s in data["servers"]:
+            if s["name"] == name:
+                s["api_port"] = new_port
+                self._save(data)
+                return True
+        return False
+
     def rename_server(self, old_name: str, new_name: str) -> bool:
         data = self._load()
         servers = data["servers"]
@@ -71,6 +85,7 @@ class ConfigManager:
                 return True
         return False
 
+    # ---------- 修改：batch_add 支持端口 ----------
     def batch_add(self, servers_str: str) -> Tuple[int, List[str]]:
         data = self._load()
         existing = {s["name"] for s in data["servers"]}
@@ -80,18 +95,32 @@ class ConfigManager:
             pair = pair.strip()
             if not pair:
                 continue
-            if ":" not in pair:
+            parts = pair.split(":")
+            if len(parts) < 2 or len(parts) > 3:
                 failed.append(pair)
                 continue
-            name, host = pair.split(":", 1)
-            name, host = name.strip(), host.strip()
+            name = parts[0].strip()
+            host = parts[1].strip()
+            port = None
+            if len(parts) == 3:
+                port_str = parts[2].strip()
+                try:
+                    port = int(port_str)
+                    if port < 1 or port > 65535:
+                        raise ValueError
+                except ValueError:
+                    failed.append(f"{pair} (无效端口)")
+                    continue
             if not name or not host:
                 failed.append(pair)
                 continue
             if name in existing:
                 failed.append(f"{name} (已存在)")
                 continue
-            data["servers"].append({"name": name, "host": host})
+            entry = {"name": name, "host": host}
+            if port is not None:
+                entry["api_port"] = port
+            data["servers"].append(entry)
             existing.add(name)
             success += 1
         self._save(data)

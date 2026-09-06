@@ -264,33 +264,31 @@ class WhitelistManager:
         """检查用户是否在黑名单中"""
         return user_id in self.blacklist
 
-    # ---------- 模组 API 配置 ----------
+    # ---------- 统一 API 端口配置 ----------
     @property
-    def enable_mod_api(self) -> bool:
-        return self._get_config_value("enable_mod_api", False)
-
-    @property
-    def mod_api_port(self) -> int:
-        value = self._get_config_value("mod_api_port", 25580)
+    def default_api_port(self) -> int:
+        """全局默认 API 端口"""
+        value = self._get_config_value("default_api_port", 25566)
         try:
             return int(value)
         except (ValueError, TypeError):
-            return 25580
-
-    # ---------- 服务端插件 API 配置 ----------
-    @property
-    def use_plugin_api(self) -> bool:
-        return self._get_config_value("use_plugin_api", True)
-
-    @property
-    def plugin_api_port(self) -> int:
-        value = self._get_config_value("plugin_api_port", 8612)
-        try:
-            return int(value)
-        except (ValueError, TypeError):
-            return 8612
+            return 25566
 
     @property
     def mod_api_token(self) -> str:
-        """模组 API 鉴权 Token（必须与模组配置的 API_TOKEN 一致）"""
+        """模组 API 鉴权 Token"""
         return self._get_config_value("mod_api_token", "")
+
+    # ---------- 获取服务器端口 ----------
+    def get_server_port(self, server_dict: dict) -> int:
+        """
+        获取服务器的实际 API 端口。
+        优先使用服务器条目中的 api_port，否则使用全局 default_api_port。
+        """
+        port = server_dict.get("api_port")
+        if port is not None:
+            try:
+                return int(port)
+            except (ValueError, TypeError):
+                pass
+        return self.default_api_port

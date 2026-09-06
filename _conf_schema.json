@@ -49,33 +49,14 @@
             "description": "用户ID"
         }
     },
-    "enable_mod_api": {
-        "description": "是否启用模组 API 获取玩家数据",
-        "hint": "若开启，会优先尝试连接服务器上的模组 HTTP 接口",
-        "type": "bool",
-        "default": false
-    },
-    "mod_api_port": {
-        "description": "模组 API 监听的端口",
-        "hint": "所有服务器统一使用",
+    "default_api_port": {
+        "description": "全局默认 API 端口",
         "type": "int",
-        "default": 25580
-    },
-    "use_plugin_api": {
-        "description": "是否启用服务端插件 API 数据源",
-        "hint": "优先于 mcstatus 查询",
-        "type": "bool",
-        "default": true
-    },
-    "plugin_api_port": {
-        "description": "服务端插件 HTTP API 监听的端口",
-        "hint": "所有服务器统一使用",
-        "type": "int",
-        "default": 8612
+        "default": 25566
     },
     "mod_api_token": {
         "description": "模组 API 鉴权 Token",
-        "hint": "需要与 QQBindMod 配置文件中的 API_TOKEN 完全一致",
+        "hint": "需要与配置文件中的 API_TOKEN 完全一致",
         "type": "string",
         "default": ""
     }
