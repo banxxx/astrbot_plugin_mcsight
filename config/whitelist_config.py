@@ -279,6 +279,41 @@ class WhitelistManager:
         """模组 API 鉴权 Token"""
         return self._get_config_value("mod_api_token", "")
 
+    @property
+    def use_central_db(self) -> bool:
+        """是否启用中心数据库（D1）。若为 False，则回退到调用模组 API 的旧模式"""
+        return self._get_config_value("use_central_db", False)
+
+    @property
+    def db_host(self) -> str:
+        """TiDB 数据库主机地址"""
+        return self._get_config_value("db_host", "")
+
+    @property
+    def db_port(self) -> int:
+        """TiDB 数据库端口"""
+        return int(self._get_config_value("db_port", 4000))
+
+    @property
+    def db_user(self) -> str:
+        """数据库用户名"""
+        return self._get_config_value("db_user", "")
+
+    @property
+    def db_password(self) -> str:
+        """数据库密码"""
+        return self._get_config_value("db_password", "")
+
+    @property
+    def db_name(self) -> str:
+        """数据库名称"""
+        return self._get_config_value("db_name", "qqbind_db")
+
+    @property
+    def db_charset(self) -> str:
+        """字符集"""
+        return self._get_config_value("db_charset", "utf8mb4")
+
     # ---------- 获取服务器端口 ----------
     def get_server_port(self, server_dict: dict) -> int:
         """

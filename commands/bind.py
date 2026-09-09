@@ -1,5 +1,6 @@
 import asyncio
 import re
+from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from ..config.server_config import ConfigManager
 from ..config.whitelist_config import WhitelistManager
@@ -8,6 +9,7 @@ from .common import call_mod_api
 
 async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: list):
     wm = WhitelistManager()
+
     token = wm.mod_api_token
     if not token:
         yield event.plain_result("❌ 模组 API Token 未配置，请联系管理员设置。")
@@ -48,10 +50,10 @@ async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: lis
 
     validation_results = await asyncio.gather(*validation_tasks, return_exceptions=True)
 
-    target_host = None
     target_game_id = None
     found_server_name = None
     found_server_port = None
+    found_server_host = None
     for idx, result in enumerate(validation_results):
         if isinstance(result, Exception):
             continue
@@ -62,37 +64,75 @@ async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: lis
         if response_data.get("valid") is True:
             target_game_id = response_data.get("gameId")
             if target_game_id:
-                target_host = servers[idx]["host"]
+                found_server_host = servers[idx]["host"]
                 found_server_name = servers[idx]["name"]
                 found_server_port = wm.get_server_port(servers[idx])
                 break
 
-    if target_host is None:
+    if target_game_id is None:
         yield event.plain_result(
             "❌ 绑定码无效或已过期，请确认你输入的是游戏窗口内显示的6位数字绑定码。\n"
             "如果绑定码已过期，请重新登录游戏获取新的绑定码。"
         )
         return
 
-    # ---- 步骤2：发送绑定请求 ----
+    # ---- 步骤2：验证QQ群昵称 ----
+    sender_name = event.get_sender_name()
+    if not sender_name:
+        yield event.plain_result(
+            "❌ 无法获取您的群昵称，请确保您在群聊中发送命令。\n"
+            "请将群昵称修改为「玩家（游戏ID）」格式，例如：张三（zhangsan）"
+        )
+        return
+
+    match = re.search(r'[（(](.*?)[）)]', sender_name)
+    if not match:
+        yield event.plain_result(
+            f"❌ 您的群昵称「{sender_name}」不包含括号，请修改为「玩家（游戏ID）」格式。\n"
+            f"例如：张三（zhangsan）"
+        )
+        return
+
+    nickname_game_id = match.group(1).strip()
+    if not nickname_game_id:
+        yield event.plain_result(
+            f"❌ 您的群昵称「{sender_name}」中括号内为空，请填写您的游戏ID。\n"
+            f"例如：张三（zhangsan）"
+        )
+        return
+
+    if nickname_game_id != target_game_id:
+        yield event.plain_result(
+            f"❌ 昵称中的游戏ID「{nickname_game_id}」与当前登录的游戏ID「{target_game_id}」不一致。\n"
+            f"请确保您的群昵称格式为「玩家（{target_game_id}）」，或重新登录游戏获取正确的绑定码。"
+        )
+        return
+
+    # ---- 步骤3：调用模组 API 完成绑定 ----
+    # 注意：存储后端由模组端配置决定（local/hybrid/remote），机器人无需关心
+    if not found_server_host:
+        yield event.plain_result("❌ 未找到有效的服务器地址，请检查配置。")
+        return
+
     ok, result = await call_mod_api(
-        target_host, found_server_port, token, "/api/bind", "POST",
+        found_server_host, found_server_port, token, "/api/bind", "POST",
         {"qq": qq, "gameId": target_game_id}
     )
-
-    if ok:
-        msg = result.get("message", "绑定成功")
-        yield event.plain_result(
-            f"✅ 绑定成功！\n"
-            f"服务器：{found_server_name}\n"
-            f"游戏ID：{target_game_id}\n"
-            f"消息：{msg}"
-        )
-    else:
+    if not ok:
         yield event.plain_result(
             f"❌ 绑定失败（服务器：{found_server_name}）\n"
             f"错误：{result}"
         )
+        return
+    msg = result.get("message", "绑定成功")
+
+    # ---- 步骤4：返回成功消息 ----
+    yield event.plain_result(
+        f"✅ 绑定成功！\n"
+        f"游戏ID：{target_game_id}\n"
+        f"消息：{msg}"
+    )
+
 
 async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: list):
     wm = WhitelistManager()
@@ -105,6 +145,7 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
     game_id = None
     args = parts[1:]
 
+    # ---- 解析参数 ----
     if "-s" in args:
         s_index = args.index("-s")
         if len(args) > s_index + 1:
@@ -117,6 +158,7 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
     if args:
         game_id = args[0]
     else:
+        # 自动从昵称提取
         sender_name = event.get_sender_name()
         if not sender_name:
             yield event.plain_result(
@@ -139,7 +181,7 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
             )
             return
 
-    # 权限检查
+    # 权限检查：如果尝试解绑其他玩家，需要管理员权限
     if args and args[0] != game_id:
         if not await check_permission(event, "unbind"):
             yield event.plain_result("权限不足：解绑其他玩家需要群管理员或插件管理员权限。")
@@ -150,11 +192,14 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
         yield event.plain_result("还没有添加任何服务器。")
         return
 
+    # ---- 情况1：用户指定了服务器名 ----
     if target_server_name:
         target = next((s for s in servers if s["name"] == target_server_name), None)
         if not target:
             yield event.plain_result(f"未找到名为「{target_server_name}」的服务器。")
             return
+
+        # 统一调用模组 API 解绑
         ok, result = await call_mod_api(
             target["host"], wm.get_server_port(target), token, "/api/unbind", "POST", {"gameId": game_id}
         )
@@ -172,7 +217,7 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
             )
         return
 
-    # 自动检测模式
+    # ---- 情况2：未指定服务器，自动检测 ----
     check_tasks = []
     for srv in servers:
         host = srv["host"]
@@ -211,6 +256,7 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
 
     elif len(bound_servers) == 1:
         target = bound_servers[0]
+        # 统一调用模组 API 解绑
         ok, result = await call_mod_api(
             target["host"], target["port"], token, "/api/unbind", "POST", {"gameId": game_id}
         )
@@ -228,6 +274,7 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
                 f"错误：{result}"
             )
     else:
+        # 多个服务器存在绑定，提示用户指定
         server_list = "\n".join([
             f"  • {s['name']}（QQ：{s['qq']}）"
             for s in bound_servers
@@ -239,6 +286,7 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
             f"/解绑 {game_id} -s <服务器名>\n\n"
             f"例如：/解绑 {game_id} -s {bound_servers[0]['name']}"
         )
+
 
 async def handle_check(event: AstrMessageEvent, config: ConfigManager, parts: list):
     wm = WhitelistManager()

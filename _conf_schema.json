@@ -59,5 +59,44 @@
         "hint": "需要与配置文件中的 API_TOKEN 完全一致",
         "type": "string",
         "default": ""
+    },
+    "use_central_db": {
+        "description": "是否启用中心数据库（D1）",
+        "hint": "启用后绑定数据将写入云端数据库，实现跨服共享；关闭则回退到调用模组API的旧模式（各服务器独立）",
+        "type": "bool",
+        "default": false
+    },
+    "db_host": {
+        "description": "TiDB 数据库主机地址",
+        "hint": "格式：gateway01.ap-southeast-1.prod.aws.tidbcloud.com",
+        "type": "string",
+        "default": ""
+    },
+    "db_port": {
+        "description": "TiDB 数据库端口（默认4000）",
+        "type": "int",
+        "default": 4000
+    },
+    "db_user": {
+        "description": "数据库用户名",
+        "hint": "完整用户名，含集群前缀",
+        "type": "string",
+        "default": ""
+    },
+    "db_password": {
+        "description": "数据库密码",
+        "type": "string",
+        "default": ""
+    },
+    "db_name": {
+        "description": "数据库名称（默认 qqbind_db）",
+        "type": "string",
+        "default": "qqbind_db"
+    },
+    "default_group_id": {
+        "description": "默认群号",
+        "hint": "仅在无法从事件获取时使用，通常留空即可",
+        "type": "string",
+        "default": ""
     }
 }

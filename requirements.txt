@@ -4,3 +4,7 @@ aiohttp
 pilmoji
 matplotlib
 numpy
+asyncmy
+aiomysql
+pymysql
+DBUtils
