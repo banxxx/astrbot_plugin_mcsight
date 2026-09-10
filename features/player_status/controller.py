@@ -64,6 +64,15 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
     for srv in servers:
         name = srv["name"]
         host = srv["host"]
+
+        # ---- 判断是否安装了模组 ----
+        # 没有 api_port 字段的服务器视为未安装模组，直接使用 mcstatus 查询
+        if not wm.has_mod_api(srv):
+            logger.info(f"服务器 {name} 未配置 api_port，视为未安装模组，使用 mcstatus 查询。")
+            raw = await query_one(srv)
+            standardized.append(standardize_from_ping(raw))
+            continue
+
         port = wm.get_server_port(srv)
 
         # ---- 请求模组 API ----
@@ -92,6 +101,8 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
                 "version": mod_data.get("version", "未知"),
                 "latency": mod_data.get("latency", 0.0),
                 "error": None,
+                "last_activity_time": mod_data.get("last_activity_time", 0),
+                "last_activity_player": mod_data.get("last_activity_player", ""),
                 "players": [
                     {"name": p.get("name"), "uuid": p.get("uuid"), "is_premium": p.get("is_premium", True)}
                     for p in mod_data.get("players", [])
@@ -104,7 +115,8 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
 
     # 生成图片
     try:
-        img = await draw_multi_server_image(standardized)
+        show_last_online = config_manager.is_last_online_enabled()
+        img = await draw_multi_server_image(standardized, show_last_online=show_last_online)
         img.save("mc_status_temp.png", optimize=True, compress_level=9)
         yield event.chain_result([AstrImage(file="mc_status_temp.png")])
     except Exception as e:
@@ -135,9 +147,15 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
         if not target_srv:
             yield event.plain_result(f"未找到名为「{target_server}」的服务器，请检查配置。")
             return
+        if not wm.has_mod_api(target_srv):
+            yield event.plain_result(f"服务器「{target_server}」未安装模组，无法查询统计数据。")
+            return
         targets = [target_srv]
     else:
-        targets = servers
+        targets = [s for s in servers if wm.has_mod_api(s)]
+        if not targets:
+            yield event.plain_result("没有安装模组的服务器，无法查询统计数据。")
+            return
 
     # ---- 统一使用模组 API ----
     for srv in targets:

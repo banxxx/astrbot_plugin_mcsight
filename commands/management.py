@@ -108,3 +108,37 @@ async def handle_swap(event: AstrMessageEvent, config: ConfigManager, parts: lis
         return
     success = config.swap_servers(parts[1], parts[2])
     yield event.plain_result(f"交换{'成功' if success else '失败（请检查名称是否正确）'}。")
+
+async def handle_lastonline(event: AstrMessageEvent, config: ConfigManager, parts: list):
+    """
+    处理 /上次在线 命令
+    用法：
+      /上次在线          查看当前状态
+      /上次在线 开       开启显示
+      /上次在线 关       关闭显示
+    """
+    # 参数解析
+    action = None
+    if len(parts) >= 2:
+        action = parts[1].strip().lower()
+
+    if action in ("开", "on", "true", "1", "开启"):
+        config.set_last_online_enabled(True)
+        yield event.plain_result("✅ 已开启「上次在线」显示，下次查询服务器时会显示最后活动时间。")
+    elif action in ("关", "off", "false", "0", "关闭"):
+        config.set_last_online_enabled(False)
+        yield event.plain_result("✅ 已关闭「上次在线」显示。")
+    elif action is None or action in ("查询", "status", "state"):
+        enabled = config.is_last_online_enabled()
+        state = "已开启" if enabled else "已关闭"
+        yield event.plain_result(
+            f"当前群组的「上次在线」显示：{state}\n"
+            f"用法：/上次在线 开 或 /上次在线 关"
+        )
+    else:
+        yield event.plain_result(
+            "用法：\n"
+            "/上次在线          查看当前状态\n"
+            "/上次在线 开       开启显示\n"
+            "/上次在线 关       关闭显示"
+        )

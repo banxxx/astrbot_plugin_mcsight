@@ -14,7 +14,7 @@ from ..utils.permission import check_permission
 from ..commands import (
     handle_whitelist, handle_help, handle_bindhelp,
     handle_add, handle_remove, handle_edit, handle_batchadd, handle_batchremove,
-    handle_list, handle_move, handle_swap,
+    handle_list, handle_move, handle_swap, handle_lastonline,
     handle_say, handle_tps, handle_status, handle_stats,
     handle_bind, handle_unbind, handle_check
 )
@@ -40,7 +40,7 @@ async def handle_mc_command(event: AstrMessageEvent):
     sub_cmd = parts[0].lower()
 
     # 权限检查（管理命令）
-    admin_cmds = {"add", "remove", "edit", "batchadd", "batchremove", "move", "swap"}
+    admin_cmds = {"add", "remove", "edit", "batchadd", "batchremove", "move", "swap", "lastonline"}
     if sub_cmd in admin_cmds:
         if not await check_permission(event, sub_cmd):
             yield event.plain_result("权限不足：该操作需要群管理员或插件管理员权限。")
@@ -79,6 +79,9 @@ async def handle_mc_command(event: AstrMessageEvent):
             yield result
     elif sub_cmd == "swap":
         async for result in handle_swap(event, config, parts):
+            yield result
+    elif sub_cmd == "lastonline":
+        async for result in handle_lastonline(event, config, parts):
             yield result
     elif sub_cmd == "say":
         async for result in handle_say(event, config, parts):

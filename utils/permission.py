@@ -28,6 +28,7 @@ PERMISSION_REQUIRED = {
     "bind": LEVEL_MEMBER,          # 允许普通玩家绑定自己
     "unbind": LEVEL_GROUP_ADMIN,   # 解绑需要管理员权限
     "check": LEVEL_MEMBER,         # 公开查询
+    "lastonline": LEVEL_GROUP_ADMIN,
 }
 
 

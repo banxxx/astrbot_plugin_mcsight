@@ -214,6 +214,17 @@ class WhitelistManager:
             return []
         return value
 
+    def has_mod_api(self, server_dict: dict) -> bool:
+        """
+        判断服务器是否安装了模组。
+        通过检查服务器条目中是否存在 api_port 字段来判断。
+        没有 api_port 字段则视为未安装模组。
+
+        :param server_dict: 服务器条目字典
+        :return: 如果配置了 api_port 则返回 True，否则返回 False
+        """
+        return server_dict.get("api_port") is not None
+
     # ---------- 白名单相关属性 ----------
     @property
     def super_admins(self) -> List[str]:

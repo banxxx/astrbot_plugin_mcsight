@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import Dict, Any, Optional, List
 from ...utils.avatar_cache import download_avatar
 from ...config.whitelist_config import WhitelistManager
-from pilmoji import Pilmoji
+from ...utils.text_renderer import draw_text_with_emoji, measure_text_with_emoji
 
 # ========== 样式常量 ==========
 CONTAINER_WIDTH = 1080
@@ -145,18 +145,6 @@ def get_font(size, bold=False):
     if key not in _font_cache:
         _font_cache[key] = _load_font(size, bold)
     return _font_cache[key]
-
-def _load_emoji_font(size):
-    base = os.path.dirname(os.path.abspath(__file__))
-    paths = [
-        os.path.join(base, '..', '..', 'resources', 'fonts', 'NotoColorEmoji.ttf'),
-    ]
-    for p in paths:
-        try:
-            return ImageFont.truetype(p, size)
-        except:
-            continue
-    return get_font(size, bold=False)
 
 # ========== 辅助函数 ==========
 def make_rounded_rect(img, size, radius):
@@ -409,36 +397,45 @@ async def draw_player_stats_image(
     # 玩家信息
     info_x = avatar_x + avatar_size + 24
     info_y = card_y0 + (player_card_height - 50) // 2
-    emoji_font = _load_emoji_font(PLAYER_NAME_SIZE)
 
-    with Pilmoji(img) as pilmoji:
-        # 名称
-        name_text = player_name
-        name_w = draw.textbbox((0,0), name_text, font=get_font(PLAYER_NAME_SIZE, bold=True))[2]
-        pilmoji.text((info_x, info_y), name_text, fill=PLAYER_NAME_COLOR,
-                     font=get_font(PLAYER_NAME_SIZE, bold=True), emoji_font=emoji_font, embedded_color=True)
+    # 名称（可能含 emoji）
+    name_font = get_font(PLAYER_NAME_SIZE, bold=True)
+    name_end_x = draw_text_with_emoji(
+        img, draw, (info_x, info_y),
+        player_name,
+        name_font, PLAYER_NAME_COLOR,
+        emoji_scale=0.9
+    )
 
-        # UUID后缀
-        if uuid_suffix:
-            suffix_x = info_x + name_w + 10
-            suffix_y = info_y + (PLAYER_NAME_SIZE - 14) // 2
-            pilmoji.text((suffix_x, suffix_y), f"#{uuid_suffix}", fill=PLAYER_ID_COLOR,
-                         font=get_font(14, bold=False), emoji_font=emoji_font, embedded_color=True)
+    # UUID后缀（通常无 emoji，但用新函数统一处理更稳）
+    if uuid_suffix:
+        suffix_x = name_end_x + 10
+        suffix_y = info_y + (PLAYER_NAME_SIZE - 14) // 2
+        draw_text_with_emoji(
+            img, draw, (suffix_x, suffix_y),
+            f"#{uuid_suffix}",
+            get_font(14, bold=False), PLAYER_ID_COLOR,
+            emoji_scale=0.9
+        )
 
-        # 摘要信息
-        summary_y = info_y + PLAYER_NAME_SIZE + 6
-        summary_items = [
-            f"🗡️ 击杀 {mobKills}",
-            f"💀 死亡 {deaths}",
-            f"⏱️ 在线 {playtime}"
-        ]
-        summary_spacing = 20
-        curr_x = info_x
-        for item in summary_items:
-            tw = draw.textbbox((0,0), item, font=get_font(PLAYER_SUMMARY_SIZE))[2]
-            pilmoji.text((curr_x, summary_y), item, fill=PLAYER_SUMMARY_COLOR,
-                         font=get_font(PLAYER_SUMMARY_SIZE), emoji_font=emoji_font, embedded_color=True)
-            curr_x += tw + summary_spacing
+    # 摘要信息（含 emoji）
+    summary_y = info_y + PLAYER_NAME_SIZE + 6
+    summary_font = get_font(PLAYER_SUMMARY_SIZE)
+    summary_items = [
+        f"🗡️ 击杀 {mobKills}",
+        f"💀 死亡 {deaths}",
+        f"⏱️ 在线 {playtime}"
+    ]
+    summary_spacing = 20
+    curr_x = info_x
+    for item in summary_items:
+        next_x = draw_text_with_emoji(
+            img, draw, (curr_x, summary_y),
+            item,
+            summary_font, PLAYER_SUMMARY_COLOR,
+            emoji_scale=1.0
+        )
+        curr_x = next_x + summary_spacing
 
     # 服务器名称（右上角）
     if server_name and show_server_label:

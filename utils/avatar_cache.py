@@ -76,11 +76,13 @@ async def _download_avatar_data(session: aiohttp.ClientSession, url: str) -> Opt
                 return await resp.read()
             else:
                 logger.debug(f"下载头像失败，HTTP {resp.status}: {url}")
+                return None
     except aiohttp.ClientError as e:
         logger.error(f"客户端错误: {url} - {e}")
+        return None
     except Exception as e:
         logger.error(f"下载头像异常: {url} - {e}")
-    raise  # 重新抛出以便上层处理
+        return None
 
 def get_default_avatar(size: int = 36) -> Image.Image:
     """
@@ -100,7 +102,6 @@ def get_default_avatar(size: int = 36) -> Image.Image:
     # 方案2：生成一个灰色背景带白色 "S" 字母的占位头像
     img = Image.new("RGBA", (size, size), (128, 128, 128, 255))
     draw = ImageDraw.Draw(img)
-    # 尝试加载字体，若失败则使用默认
     try:
         from .image_generator import _load_font
         font = _load_font(int(size * 0.7))
@@ -116,30 +117,40 @@ def get_default_avatar(size: int = 36) -> Image.Image:
     return img
 
 # ================= 核心下载函数 =================
-async def download_avatar(session: aiohttp.ClientSession, 
-                          username: str, 
-                          size: int = 36, 
-                          is_premium: Optional[bool] = None, 
+async def download_avatar(session: aiohttp.ClientSession,
+                          username: str,
+                          size: int = 36,
+                          is_premium: Optional[bool] = None,
                           uuid: Optional[str] = None) -> Image.Image:
     """
     获取玩家头像（优先内存 → 磁盘 → 网络多源回退，全部失败则返回默认灰色头像）
-    如果 is_premium 为 False，直接返回默认灰色头像（Steve），跳过网络请求。
-    如果 is_premium 为 True 或 None，走正常缓存+网络逻辑。
+    - 如果 is_premium 为 False，直接返回默认灰色头像（Steve），跳过网络请求。
+    - 如果 is_premium 为 True 或 None，走正常缓存+网络逻辑。
+    - 优先使用用户名（对关闭正版验证的服务器更友好），其次使用去连字符的 UUID。
     """
     # 如果是明确离线玩家，直接返回默认头像
     if is_premium is False:
-        return get_default_avatar(size)  # 需要实现此函数
+        return get_default_avatar(size)
 
-    # 确定查询标识符（优先 UUID）
-    identifier = uuid if uuid else username
-    cache_key = f"{identifier}_{size}"
+    # ★ 修改：构建候选标识符列表 —— 用户名优先，UUID 其次
+    identifiers = []
+    if username:
+        identifiers.append(username)
+    if uuid:
+        clean_uuid = uuid.replace("-", "")
+        identifiers.append(clean_uuid)
 
-    # 1. 内存缓存
-    cached = _memory_cache.get(cache_key)
-    if cached is not None:
-        return cached.copy()
+    if not identifiers:
+        return get_default_avatar(size)
 
-    # 2. 磁盘缓存
+    # 先尝试从内存/磁盘缓存命中（对每个 identifier 依次检查）
+    for identifier in identifiers:
+        cache_key = f"{identifier}_{size}"
+        cached = _memory_cache.get(cache_key)
+        if cached is not None:
+            return cached.copy()
+
+    # 磁盘缓存检查（以 username 为文件名，避免同一玩家多个标识符重复存储）
     os.makedirs(CACHE_DIR, exist_ok=True)
     cache_path = os.path.join(CACHE_DIR, f"{username}.png")
 
@@ -148,7 +159,9 @@ async def download_avatar(session: aiohttp.ClientSession,
             img = Image.open(cache_path).convert("RGBA")
             if img.size != (size, size):
                 img = img.resize((size, size), Image.LANCZOS)
-            _memory_cache.put(cache_key, img.copy())
+            # 将每个 identifier 都缓存一份到内存
+            for identifier in identifiers:
+                _memory_cache.put(f"{identifier}_{size}", img.copy())
             return img
         except Exception as e:
             logger.warning(f"读取磁盘缓存失败 {cache_path}: {e}")
@@ -156,27 +169,35 @@ async def download_avatar(session: aiohttp.ClientSession,
     elif os.path.exists(cache_path):
         _clean_expired_cache(cache_path)
 
-    # 3. 网络下载，依次尝试所有配置的 API 模板
+    # 网络下载：依次尝试每个 identifier，每个 identifier 依次尝试所有 API 模板
     data = None
-    for template in AVATAR_API_TEMPLATES:
-        url = template.format(identifier=identifier, size=size)
-        data = await _download_avatar_data(session, url)
+    for identifier in identifiers:
+        for template in AVATAR_API_TEMPLATES:
+            url = template.format(identifier=identifier, size=size)
+            data = await _download_avatar_data(session, url)
+            if data is not None:
+                logger.debug(f"头像下载成功: {url}")
+                break
         if data is not None:
-            break   # 成功即停止尝试
+            break
 
     if data is not None:
         try:
             with open(cache_path, "wb") as f:
                 f.write(data)
             img = Image.open(cache_path).convert("RGBA")
-            _memory_cache.put(cache_key, img.copy())
+            if img.size != (size, size):
+                img = img.resize((size, size), Image.LANCZOS)
+            # 将每个 identifier 都缓存一份到内存
+            for identifier in identifiers:
+                _memory_cache.put(f"{identifier}_{size}", img.copy())
             return img
         except Exception as e:
             logger.error(f"处理头像数据失败 {username}: {e}")
             if os.path.exists(cache_path):
                 os.remove(cache_path)
 
-    # 4. 所有 API 都失败，返回默认灰色头像
+    # 所有 API 都失败，返回默认灰色头像
     if os.path.exists(LOCAL_STEVE_PATH):
         try:
             img = Image.open(LOCAL_STEVE_PATH).convert("RGBA")
@@ -186,6 +207,6 @@ async def download_avatar(session: aiohttp.ClientSession,
         except Exception as e:
             logger.error(f"加载本地 Steve 头像失败: {e}")
 
-    # 5. 本地 Steve 头像也不可用，最后返回纯灰色方块
+    # 最后返回纯灰色方块
     default_img = Image.new("RGBA", (size, size), (128, 128, 128, 255))
     return default_img

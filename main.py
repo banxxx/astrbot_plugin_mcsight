@@ -148,5 +148,19 @@ class MCWatcher(Star):
         async for result in handle_mc_command(event):
             yield result
 
+    # ---------- 上次在线显示开关 ----------
+    @filter.command("上次在线")
+    async def lastonline_command(self, event: AstrMessageEvent):
+        raw_msg = event.message_str.strip()
+        if raw_msg.startswith('/'):
+            raw_msg = raw_msg[1:]
+        rest = raw_msg[len("上次在线"):].strip()
+        if rest:
+            event.message_str = f"/mc lastonline {rest}"
+        else:
+            event.message_str = "/mc lastonline"
+        async for result in handle_mc_command(event):
+            yield result
+
     async def terminate(self):
         logger.info("MCWatcher 插件已卸载")

@@ -38,6 +38,11 @@ async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: lis
         return
 
     # ---- 步骤1：并发验证令牌 ----
+    mod_servers = [s for s in servers if wm.has_mod_api(s)]
+    if not mod_servers:
+        yield event.plain_result("❌ 没有安装模组的服务器，无法验证绑定码。")
+        return
+    
     validation_tasks = []
     for srv in servers:
         host = srv["host"]
@@ -198,6 +203,9 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
         if not target:
             yield event.plain_result(f"未找到名为「{target_server_name}」的服务器。")
             return
+        if not wm.has_mod_api(target):
+            yield event.plain_result(f"服务器「{target_server_name}」未安装模组，无法解绑。")
+            return
 
         # 统一调用模组 API 解绑
         ok, result = await call_mod_api(
@@ -218,6 +226,11 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
         return
 
     # ---- 情况2：未指定服务器，自动检测 ----
+    mod_servers = [s for s in servers if wm.has_mod_api(s)]
+    if not mod_servers:
+        yield event.plain_result("没有安装模组的服务器，无法解绑。")
+        return
+    
     check_tasks = []
     for srv in servers:
         host = srv["host"]
@@ -347,9 +360,15 @@ async def handle_check(event: AstrMessageEvent, config: ConfigManager, parts: li
         if not target:
             yield event.plain_result(f"未找到名为「{target_server_name}」的服务器。")
             return
+        if not wm.has_mod_api(target):
+            yield event.plain_result(f"服务器「{target_server_name}」未安装模组，无法查询绑定状态。")
+            return
         targets = [target]
     else:
-        targets = servers
+        targets = [s for s in servers if wm.has_mod_api(s)]
+        if not targets:
+            yield event.plain_result("没有安装模组的服务器，无法查询绑定状态。")
+            return
 
     results = []
     for srv in targets:
@@ -412,3 +431,17 @@ async def handle_check(event: AstrMessageEvent, config: ConfigManager, parts: li
         reply_lines.append(f"  {name}：{status}")
 
     yield event.plain_result("\n".join(reply_lines))
+
+async def invalidate_mod_cache(event, config, game_id):
+    """通知所有安装了模组的服务器清除该玩家的本地缓存"""
+    wm = WhitelistManager()
+    token = wm.mod_api_token
+    servers = config.get_all_servers()
+    if not token:
+        return
+    for srv in servers:
+        if not wm.has_mod_api(srv):
+            continue
+        host = srv["host"]
+        port = wm.get_server_port(srv)
+        await call_mod_api(host, port, token, "/api/cache/invalidate", "POST", {"gameId": game_id})

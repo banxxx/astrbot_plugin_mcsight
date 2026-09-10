@@ -129,6 +129,8 @@ class ConfigManager:
     def batch_remove(self, names_str: str) -> Tuple[int, List[str]]:
         data = self._load()
         to_remove = [n.strip() for n in names_str.split(",") if n.strip()]
+        # 记录删除前的所有服务器名称，用于判断哪些名称真正不存在
+        original_names = {s["name"] for s in data["servers"]}
         removed = 0
         failed = []
         new_servers = []
@@ -137,9 +139,9 @@ class ConfigManager:
                 removed += 1
             else:
                 new_servers.append(s)
-        found_names = {s["name"] for s in new_servers}
+        # 只有原始列表中不存在的名称才算失败
         for name in to_remove:
-            if name not in found_names and name not in failed:
+            if name not in original_names:
                 failed.append(name)
         data["servers"] = new_servers
         self._save(data)
@@ -176,3 +178,14 @@ class ConfigManager:
         servers[idx1], servers[idx2] = servers[idx2], servers[idx1]
         self._save(data)
         return True
+
+    # ---------- 上次在线显示开关 ----------
+    def is_last_online_enabled(self) -> bool:
+        """当前群组是否开启‘上次在线’显示"""
+        return bool(self._load().get("last_online_enabled", False))
+
+    def set_last_online_enabled(self, enabled: bool):
+        """设置当前群组的‘上次在线’显示开关"""
+        data = self._load()
+        data["last_online_enabled"] = enabled
+        self._save(data)
