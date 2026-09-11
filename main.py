@@ -83,36 +83,30 @@ class MCWatcher(Star):
             yield result
 
     # ---------- 绑定命令中文别名 ----------
-    @filter.command("绑定", aliases=["bind"])
+    @filter.regex(r"^/?\s*(绑定|bind)\s*\d{0,6}$")
     async def bind_command(self, event: AstrMessageEvent):
+        import re
         raw_msg = event.message_str.strip()
-        if raw_msg.startswith('/'):
-            raw_msg = raw_msg[1:]
-        if raw_msg.startswith("绑定"):
-            rest = raw_msg[len("绑定"):].strip()
-        elif raw_msg.startswith("bind"):
-            rest = raw_msg[len("bind"):].strip()
-        else:
-            rest = raw_msg
-        if rest:
-            event.message_str = f"/mc bind {rest}"
+        m = re.match(r"^/?\s*(绑定|bind)\s*(\d{0,6})$", raw_msg)
+        if not m:
+            return
+        token = m.group(2).strip()
+        if token:
+            event.message_str = f"/mc bind {token}"
         else:
             event.message_str = "/mc bind"
         async for result in handle_mc_command(event):
             yield result
 
     # ---------- 解绑命令中文别名 ----------
-    @filter.command("解绑", aliases=["unbind"])
+    @filter.regex(r"^/?\s*(解绑|unbind)(.*)$")
     async def unbind_command(self, event: AstrMessageEvent):
+        import re
         raw_msg = event.message_str.strip()
-        if raw_msg.startswith('/'):
-            raw_msg = raw_msg[1:]
-        if raw_msg.startswith("解绑"):
-            rest = raw_msg[len("解绑"):].strip()
-        elif raw_msg.startswith("unbind"):
-            rest = raw_msg[len("unbind"):].strip()
-        else:
-            rest = raw_msg
+        m = re.match(r"^/?\s*(解绑|unbind)(.*)$", raw_msg)
+        if not m:
+            return
+        rest = m.group(2).strip()
         if rest:
             event.message_str = f"/mc unbind {rest}"
         else:
@@ -121,18 +115,14 @@ class MCWatcher(Star):
             yield result
 
     # ---------- 查询绑定状态中文别名 ----------
-    @filter.command("查绑定", aliases=["绑定状态", "checkbind"])
+    @filter.regex(r"^/?\s*(查绑定|绑定状态|checkbind)(.*)$")
     async def checkbind_command(self, event: AstrMessageEvent):
+        import re
         raw_msg = event.message_str.strip()
-        if raw_msg.startswith('/'):
-            raw_msg = raw_msg[1:]
-        # 支持多个前缀
-        prefixes = ["查绑定", "绑定状态", "checkbind"]
-        rest = raw_msg
-        for p in prefixes:
-            if raw_msg.startswith(p):
-                rest = raw_msg[len(p):].strip()
-                break
+        m = re.match(r"^/?\s*(查绑定|绑定状态|checkbind)(.*)$", raw_msg)
+        if not m:
+            return
+        rest = m.group(2).strip()
         if rest:
             event.message_str = f"/mc check {rest}"
         else:
