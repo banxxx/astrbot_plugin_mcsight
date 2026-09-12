@@ -59,18 +59,34 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
 
     wm = WhitelistManager()
     token = wm.mod_api_token
+
+    # 并发 ping 所有服务器，获取真实网络延迟（机器人 → 服务器）
+    ping_tasks = [
+        asyncio.create_task(ping_server(srv["host"]))
+        for srv in servers
+    ]
+    ping_results = await asyncio.gather(*ping_tasks, return_exceptions=True)
+
     standardized = []
 
-    for srv in servers:
+    for idx, srv in enumerate(servers):
         name = srv["name"]
         host = srv["host"]
 
+        # ---- 从 ping 结果取延迟 ----
+        real_latency = 0.0
+        if idx < len(ping_results) and not isinstance(ping_results[idx], Exception):
+            real_latency = ping_results[idx] or 0.0
+
         # ---- 判断是否安装了模组 ----
-        # 没有 api_port 字段的服务器视为未安装模组，直接使用 mcstatus 查询
         if not wm.has_mod_api(srv):
             logger.info(f"服务器 {name} 未配置 api_port，视为未安装模组，使用 mcstatus 查询。")
             raw = await query_one(srv)
-            standardized.append(standardize_from_ping(raw))
+            data = standardize_from_ping(raw)
+            # 用真实的 ping 延迟覆盖
+            if real_latency > 0:
+                data["latency"] = real_latency
+            standardized.append(data)
             continue
 
         port = wm.get_server_port(srv)
@@ -99,7 +115,7 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
                 "online": mod_data.get("online_players", 0),
                 "max": mod_data.get("max_players", 0),
                 "version": mod_data.get("version", "未知"),
-                "latency": mod_data.get("latency", 0.0),
+                "latency": real_latency,
                 "error": None,
                 "last_activity_time": mod_data.get("last_activity_time", 0),
                 "last_activity_player": mod_data.get("last_activity_player", ""),
@@ -111,7 +127,10 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
         else:
             # 回退到 mcstatus
             raw = await query_one(srv)
-            standardized.append(standardize_from_ping(raw))
+            data = standardize_from_ping(raw)
+            if real_latency > 0:
+                data["latency"] = real_latency
+            standardized.append(data)
 
     # 生成图片
     try:
