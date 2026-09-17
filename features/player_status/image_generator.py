@@ -147,12 +147,10 @@ def format_last_online(ts_ms: int) -> str:
         diff_sec = (now_ms - ts_ms) / 1000.0
     except Exception:
         return "无记录"
-
     if diff_sec < 0:
-        return "刚刚"
-
+        return "不到1分钟"
     if diff_sec < 60:
-        return "刚刚"
+        return "不到1分钟"
     elif diff_sec < 3600:
         return f"{int(diff_sec / 60)}分钟"
     elif diff_sec < 86400:
@@ -351,7 +349,7 @@ async def draw_multi_server_image(servers_data: List[Dict[str, Any]], show_last_
             # 右侧信息区：上次在线（可选）→ 版本（可选）→ 延迟（可选）→ 在线人数
             right_items = []
             if show_last_online and card.get("last_activity_time", 0) > 0:
-                last_online_text = f"上次在线 {format_last_online(card['last_activity_time'])}前"
+                last_online_text = f"上次在线 {format_last_online(card['last_activity_time'])} 前"
                 lo_w = draw.textbbox((0, 0), last_online_text, font=FONT_SERVER_VERSION)[2]
                 right_items.append((last_online_text, FONT_SERVER_VERSION, SERVER_VERSION_COLOR, lo_w))
             if show_version:

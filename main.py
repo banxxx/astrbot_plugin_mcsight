@@ -152,5 +152,21 @@ class MCWatcher(Star):
         async for result in handle_mc_command(event):
             yield result
 
+    # ---------- 检测昵称 ----------
+    @filter.command("检测昵称")
+    async def checknick_command(self, event: AstrMessageEvent):
+        raw_msg = event.message_str.strip()
+        if raw_msg.startswith('/'):
+            raw_msg = raw_msg[1:]
+        rest = raw_msg[len("检测昵称"):].strip()
+        if rest:
+            # 带参数 → 转给开关命令
+            event.message_str = f"/mc nicknamecheck {rest}"
+        else:
+            # 无参数 → 执行检测
+            event.message_str = "/mc checknick"
+        async for result in handle_mc_command(event):
+            yield result
+
     async def terminate(self):
         logger.info("MCWatcher 插件已卸载")

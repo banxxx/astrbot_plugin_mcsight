@@ -189,3 +189,29 @@ class ConfigManager:
         data = self._load()
         data["last_online_enabled"] = enabled
         self._save(data)
+
+    # ---------- 昵称检测开关 ----------
+    def is_nickname_check_enabled(self) -> bool:
+        """当前群组是否开启‘昵称检测’功能"""
+        return bool(self._load().get("nickname_check_enabled", False))
+
+    def set_nickname_check_enabled(self, enabled: bool):
+        """设置当前群组的‘昵称检测’功能开关"""
+        data = self._load()
+        data["nickname_check_enabled"] = enabled
+        self._save(data)
+
+    # ---------- 昵称检测：忽略的 QQ 列表 ----------
+    def get_nickname_check_ignore_ids(self) -> list:
+        """获取昵称检测时需要忽略的 QQ 号列表（字符串）"""
+        data = self._load()
+        lst = data.get("nickname_check_ignore_ids", [])
+        if not isinstance(lst, list):
+            return []
+        return [str(x).strip() for x in lst if str(x).strip()]
+
+    def set_nickname_check_ignore_ids(self, ids: list):
+        """设置昵称检测时需要忽略的 QQ 号列表"""
+        data = self._load()
+        data["nickname_check_ignore_ids"] = [str(x).strip() for x in ids if str(x).strip()]
+        self._save(data)

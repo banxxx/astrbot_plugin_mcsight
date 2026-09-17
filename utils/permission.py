@@ -29,6 +29,8 @@ PERMISSION_REQUIRED = {
     "unbind": LEVEL_GROUP_ADMIN,   # 解绑需要管理员权限
     "check": LEVEL_MEMBER,         # 公开查询
     "lastonline": LEVEL_GROUP_ADMIN,
+    "checknick": LEVEL_GROUP_ADMIN, # 检查昵称需要管理员权限
+    "nicknamecheck": LEVEL_GROUP_ADMIN, # 昵称检测开关需要管理员权限
 }
 
 
