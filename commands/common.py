@@ -31,6 +31,9 @@ async def call_mod_api(host: str, port: int, token: str, endpoint: str, method: 
         async with aiohttp.ClientSession() as session:
             if method.upper() == "POST":
                 async with session.post(url, json=data, headers=headers, timeout=5.0) as resp:
+                    if resp.status == 404:
+                        # 老版本模组没有该接口
+                        return False, f"接口不存在 (HTTP 404)"
                     result = await resp.json()
                     if resp.status == 200 and result.get("success") is True:
                         return True, result
@@ -38,6 +41,8 @@ async def call_mod_api(host: str, port: int, token: str, endpoint: str, method: 
                         return False, result.get("message", f"API 返回错误 (HTTP {resp.status})")
             elif method.upper() == "GET":
                 async with session.get(url, params=data, headers=headers, timeout=5.0) as resp:
+                    if resp.status == 404:
+                        return False, f"接口不存在 (HTTP 404)"
                     result = await resp.json()
                     if resp.status == 200 and result.get("success") is True:
                         return True, result

@@ -1,4 +1,5 @@
 import asyncio
+import re
 import aiohttp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
@@ -15,6 +16,10 @@ from .player_stats_generator import draw_player_stats_image
 from ...utils.avatar_cache import download_avatar
 
 # ========== 工具函数 ==========
+# 合法 Minecraft 玩家名（同时也是 URL 路径/文件名的安全白名单）
+PLAYER_NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,16}$")
+
+
 def build_plugin_api_url(host: str, port: int) -> str:
     """构建插件 API URL（已废弃，保留仅作参考）"""
     if not host or host == "self":
@@ -147,6 +152,10 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
     """查询玩家统计数据，统一使用模组 API"""
     if not player_name:
         yield event.plain_result("请指定玩家名称，例如：/mc stats 玩家名")
+        return
+    # 防止恶意玩家名注入 URL 路径（如 ../../api/unbind）或穿透文件路径
+    if not PLAYER_NAME_RE.match(player_name):
+        yield event.plain_result("玩家名无效：仅支持 1-16 位英文字母、数字和下划线。")
         return
 
     wm = WhitelistManager()

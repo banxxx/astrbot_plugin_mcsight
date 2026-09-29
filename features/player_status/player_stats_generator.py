@@ -1,66 +1,100 @@
-# features/player_stats/player_stats_generator.py
+"""玩家数据统计图片生成器（/查询、/mc stats）
 
-import os
+复用 help_image 引擎：延迟 ops 布局 + 2x 超采样渲染；
+matplotlib 雷达图/环形图按 2x 像素输出后经 'paste' 专有 op 贴入。
+"""
+
 import time
-import asyncio
-import aiohttp
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
-from typing import Dict, Any, Optional, List
-from ...utils.avatar_cache import download_avatar
-from ...config.whitelist_config import WhitelistManager
+from typing import Dict, Any, Optional
+
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from matplotlib.patches import Circle, Patch
+from PIL import Image, ImageDraw
+
+from ...utils.avatar_cache import _smart_resize
 from ...utils.text_renderer import draw_text_with_emoji, measure_text_with_emoji
+from ..help_image.image_generator import (
+    WIDTH, PAD, SCALE,
+    add_text, add_rect, add_ellipse,
+    text_w, _font, build_image,
+)
 
-# ========== 样式常量 ==========
-CONTAINER_WIDTH = 1080
-CONTAINER_PADDING = 36
-CONTAINER_BG = '#F9F9F8'
-CONTAINER_RADIUS = 24
-
-PAGE_TITLE_COLOR = '#5b6abf'
-PAGE_TITLE_SIZE = 36
-PAGE_TITLE_MARGIN_BOTTOM = 12
+# ========== 布局常量（设计单位） ==========
+ACCENT = '#5b6abf'
+TITLE_TEXT = "玩家数据统计"
+TITLE_SIZE = 36
+TITLE_GAP = 20
 
 CARD_BG = '#FFFFFF'
 CARD_RADIUS = 16
-CARD_PADDING_TOP = 20
-CARD_PADDING_SIDE = 28
-CARD_PADDING_BOTTOM = 20
-CARD_MARGIN_BOTTOM = 24
+CARD_GAP = 20
 
-STATUS_DOT_ONLINE = '#5cb85c'
-STATUS_DOT_OFFLINE = '#d9534f'
+# 玩家卡
+P_CARD_PAD_V = 20
+P_CARD_PAD_X = 28
+AVATAR = 72
+AVATAR_R = 12
+DOT_D = 18
+NAME_SIZE = 28
+NAME_COLOR = '#333333'
+UUID_SIZE = 14
+UUID_COLOR = '#aaaaaa'
+CHIP_SIZE = 15
+CHIP_H = 26
+CHIP_PAD_X = 12
+CHIP_FG, CHIP_BG, CHIP_BD = '#666666', '#f4f5fa', '#e7e9f3'
+SUM_GAP = 10
+SRV_FG, SRV_BG, SRV_BD = '#8a7bc0', '#f4f2fb', '#e6e0f5'
+SRV_SIZE = 14
+SRV_H = 24
+DOT_ON = '#5cb85c'
+DOT_OFF = '#d9534f'
 
-PLAYER_NAME_COLOR = '#333333'
-PLAYER_NAME_SIZE = 28
-PLAYER_ID_COLOR = '#aaaaaa'
-PLAYER_ID_SIZE = 14
-PLAYER_SUMMARY_COLOR = '#888888'
-PLAYER_SUMMARY_SIZE = 14
+# 图表卡
+CH_GAP = 24
+CH_PAD_TOP = 14
+CH_PAD_X = 12
+CH_PAD_BOTTOM = 10
+CH_TITLE_SIZE = 15
+CH_TITLE_GAP = 6
+CH_H = 230
 
-CHART_BG = '#FFFFFF'
-CHART_RADIUS = 16
+# 明细卡
+D_PAD = 16
+D_COLS = 3
+D_GAP = 12
+CAT_BG = '#f6f6f5'
+CAT_R = 12
+CAT_PAD_V = 12
+CAT_PAD_X = 14
+CAT_H_SIZE = 15
+CAT_H_H = 20
+CAT_H_GAP = 10
+BADGE_FG, BADGE_BG = '#a5aabb', '#efeff6'
+BADGE_SIZE = 12
+BADGE_H = 18
+ITEM_COLS = 2
+ITEM_GAP_X = 10
+ITEM_GAP_Y = 8
+LBL_SIZE = 13
+LBL_COLOR = '#888888'
+VAL_SIZE = 17
+VAL_COLOR = '#333333'
+LBL_LH = 18
+VAL_LH = 23
+NOTE_SIZE = 15
+NOTE_COLOR = '#a5aabb'
 
-STAT_LABEL_COLOR = '#999999'
-STAT_LABEL_SIZE = 13
-STAT_VALUE_COLOR = '#333333'
-STAT_VALUE_SIZE = 22
+TIME_SIZE = 16
+TIME_COLOR = '#aaaaaa'
+TIME_GAP = 24
 
-TIME_TEXT_COLOR = '#aaaaaa'
-TIME_TEXT_SIZE = 16
-TIME_MARGIN_TOP = 24
-
-# 图表卡片
-CHART_CARD_PADDING = 12
-CHART_TITLE_SIZE = 14
-CHART_HEIGHT = 180
-CHART_WIDTH = (CONTAINER_WIDTH - 2 * CONTAINER_PADDING - 24) // 2  # 左右各一个，间距24
-
-# 分类颜色（用于环形图和雷达图）
-CATEGORY_COLORS = ['#5b6abf', '#7BA87F', '#D9A87C', '#C47D7D', '#6F8B9F', '#B8A9C9']
+CATEGORY_COLORS = ['#5b6abf', '#7BA87F', '#D9A87C', '#C47D7D', '#6F8B9F',
+                   '#B8A9C9']
 
 # ========== 分类定义（与HTML保持一致） ==========
 CATEGORIES = {
@@ -125,35 +159,6 @@ CATEGORIES = {
     }
 }
 
-# ========== 字体加载 ==========
-def _load_font(size, bold=False):
-    base = os.path.dirname(os.path.abspath(__file__))
-    paths = [
-        os.path.join(base, '..', '..', 'resources', 'fonts', 'msyh.ttf'),
-        "msyh.ttc", "PingFang.ttc", "wqy-microhei.ttc"
-    ]
-    for p in paths:
-        try:
-            return ImageFont.truetype(p, size)
-        except:
-            continue
-    return ImageFont.load_default()
-
-_font_cache = {}
-def get_font(size, bold=False):
-    key = (size, bold)
-    if key not in _font_cache:
-        _font_cache[key] = _load_font(size, bold)
-    return _font_cache[key]
-
-# ========== 辅助函数 ==========
-def make_rounded_rect(img, size, radius):
-    mask = Image.new('L', (size, size), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.rounded_rectangle((0, 0, size, size), radius=radius, fill=255)
-    result = img.resize((size, size), Image.LANCZOS).convert('RGBA')
-    result.putalpha(mask)
-    return result
 
 def format_value(val, unit):
     """格式化数值，超过1000显示为K"""
@@ -166,9 +171,8 @@ def format_value(val, unit):
         display = f"{num:.2f}"
     else:
         display = str(int(num))
-    if unit:
-        return f"{display} {unit}"
-    return display
+    return f"{display} {unit}" if unit else display
+
 
 def calc_category_scores(data):
     """计算每个分类的得分（分类占比归一化）"""
@@ -177,19 +181,18 @@ def calc_category_scores(data):
     for cat_name, cat_info in CATEGORIES.items():
         total = 0
         for _, key, _ in cat_info['items']:
-            total += data.get(key, 0)
+            v = data.get(key, 0)
+            if isinstance(v, (int, float)):
+                total += v
         category_totals[cat_name] = total
         grand_total += total
     if grand_total == 0:
         return {cat: 0 for cat in CATEGORIES}
-    scores = {}
-    for cat in CATEGORIES:
-        scores[cat] = category_totals[cat] / grand_total
-    return scores
+    return {cat: category_totals[cat] / grand_total for cat in CATEGORIES}
 
-# ========== 配置 matplotlib 中文字体（解决中文乱码） ==========
+
+# ========== matplotlib 图表（保存时 dpi×SCALE 得到 2x 像素） ==========
 def _setup_matplotlib_font():
-    """设置 matplotlib 中文字体，支持 Windows / macOS / Linux"""
     try:
         plt.rcParams['font.sans-serif'] = [
             'Microsoft YaHei', 'SimHei', 'PingFang SC',
@@ -199,78 +202,221 @@ def _setup_matplotlib_font():
     except Exception:
         pass
 
-# ========== 创建雷达图 ==========
-def create_radar_chart(scores, category_names, width, height):
-    """生成雷达图，返回 PIL Image"""
-    _setup_matplotlib_font()  # 确保中文字体
+
+def _fig_to_image(fig):
+    buf = BytesIO()
+    fig.savefig(buf, format='png', dpi=100 * SCALE, facecolor='white')
+    plt.close(fig)
+    buf.seek(0)
+    return Image.open(buf).convert('RGBA')
+
+
+def create_radar_chart(scores, category_names, w, h):
+    """生成雷达图（w/h 为设计像素），返回 2x 像素 PIL Image"""
+    _setup_matplotlib_font()
     labels = category_names
     values = [scores[cat] for cat in labels]
     angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
     values += values[:1]
     angles += angles[:1]
 
-    fig, ax = plt.subplots(figsize=(width/100, height/100), subplot_kw=dict(polar=True), dpi=100)
-    ax.fill(angles, values, color='#5b6abf', alpha=0.2)
-    ax.plot(angles, values, color='#5b6abf', linewidth=2)
+    fig, ax = plt.subplots(figsize=(w / 100, h / 100), dpi=100,
+                           subplot_kw=dict(polar=True))
+    ax.fill(angles, values, color=ACCENT, alpha=0.22)
+    ax.plot(angles, values, color=ACCENT, linewidth=1.6)
     ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(labels, fontsize=9, color='#555')
+    ax.set_xticklabels(labels, fontsize=9.5, color='#555555')
     ax.set_ylim(0, 1)
-    # 去除刻度标签（不显示百分比）
     ax.set_yticks([])
-    ax.grid(color='#e0e0e0', linestyle='-', linewidth=0.5)
+    ax.grid(color='#e6e6e3', linestyle='-', linewidth=0.5)
     ax.spines['polar'].set_visible(False)
     for r in np.linspace(0, 1, 6)[1:]:
-        ax.add_patch(Circle((0,0), r, transform=ax.transData._b, fill=False, edgecolor='#e0e0e0'))
-    plt.tight_layout(pad=0.5)
-    buf = BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.05, facecolor='white')
-    plt.close()
-    buf.seek(0)
-    return Image.open(buf)
+        ax.add_patch(Circle((0, 0), r, transform=ax.transData._b,
+                            fill=False, edgecolor='#efefec'))
+    fig.tight_layout(pad=0.4)
+    return _fig_to_image(fig)
 
-# ========== 创建环形图 ==========
-def create_donut_chart(scores, category_names, width, height, all_labels=None):
-    """生成环形图，返回 PIL Image
-    scores: 字典 {分类名: 得分}，用于绘制饼图
-    category_names: 饼图对应的分类名列表（与 scores 键一致）
-    width, height: 图表尺寸
-    all_labels: 图例要显示的全部分类名列表（可选，默认为 category_names）
-    """
+
+def create_donut_chart(scores, donut_cats, all_labels, w, h):
+    """生成环形图（饼图仅非零分类，图例含全部分类+百分比），2x 像素"""
     _setup_matplotlib_font()
-    labels = category_names
-    values = [scores[cat] for cat in labels]
-    
-    if all_labels is None:
-        all_labels = labels
-    # 构建分类到颜色的映射（基于全部分类顺序）
-    color_map = {cat: CATEGORY_COLORS[i] for i, cat in enumerate(all_labels)}
-    # 饼图扇区的颜色（按 labels 顺序）
-    colors = [color_map[cat] for cat in labels]
-    # 图例颜色（按 all_labels 顺序）
-    legend_colors = [color_map[cat] for cat in all_labels]
+    values = [scores[c] for c in donut_cats]
+    color_map = {c: CATEGORY_COLORS[i % len(CATEGORY_COLORS)]
+                 for i, c in enumerate(all_labels)}
+    colors = [color_map[c] for c in donut_cats]
 
-    fig, ax = plt.subplots(figsize=(width/100, height/100), dpi=100)
-    # 绘制饼图（只有非零分类）
-    wedges, texts, autotexts = ax.pie(values, labels=None, colors=colors,
-                                      startangle=90, pctdistance=0.85, autopct='',
-                                      wedgeprops=dict(width=0.4, edgecolor='white'))
-    # 手动创建图例（包含全部分类）
-    from matplotlib.patches import Patch
-    ax.set_yticks([])
-    legend_patches = [Patch(color=legend_colors[i], label=all_labels[i]) for i in range(len(all_labels))]
-    # 图例放在右侧，竖排（一列）
-    ax.legend(handles=legend_patches, loc='center left', bbox_to_anchor=(1.02, 0.5),
-              fontsize=10, ncol=1, frameon=False)
-    # 调整布局，为右侧图例留出空间，饼图自动左移
-    fig.subplots_adjust(left=0.05, right=0.75, bottom=0.05, top=0.95)
-    plt.tight_layout(pad=0.5)
-    buf = BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.05, facecolor='white')
-    plt.close()
-    buf.seek(0)
-    return Image.open(buf)
+    fig, ax = plt.subplots(figsize=(w / 100, h / 100), dpi=100)
+    ax.pie(values, labels=None, colors=colors, startangle=90,
+           autopct='', wedgeprops=dict(width=0.4, edgecolor='white'))
+    patches = [Patch(color=color_map[c],
+                     label=f"{c}  {scores[c] * 100:.0f}%") for c in all_labels]
+    ax.legend(handles=patches, loc='center left', bbox_to_anchor=(0.92, 0.5),
+              fontsize=9.5, ncol=1, frameon=False, handletextpad=0.5)
+    fig.subplots_adjust(left=0.0, right=0.55, top=0.98, bottom=0.02)
+    return _fig_to_image(fig)
 
-# ========== 主绘图函数 ==========
+
+# ========== 组件 ==========
+def _make_rounded(img: Image.Image, radius: int) -> Image.Image:
+    mask = Image.new('L', img.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, img.size[0], img.size[1]],
+                                           radius=radius, fill=255)
+    img = img.copy()
+    img.putalpha(mask)
+    return img
+
+
+def _add_chip(ops, draw, x, y, text, fg, bg, bd, size=CHIP_SIZE,
+              h=CHIP_H, pad=CHIP_PAD_X):
+    w = measure_text_with_emoji(draw, text, _font(size)) + pad * 2
+    add_rect(ops, 'bg1', x, y, w, h, h // 2, bg, bd)
+    ops['fg'].append(('emoji', x + pad, y + (h - size) / 2 - 1, text,
+                      size, fg))
+    return w
+
+
+def _cat_card_h(items):
+    rows = (len(items) + ITEM_COLS - 1) // ITEM_COLS
+    inner = rows * (LBL_LH + VAL_LH) + (rows - 1) * ITEM_GAP_Y
+    return CAT_PAD_V + CAT_H_H + CAT_H_GAP + inner + CAT_PAD_V
+
+
+# ========== 玩家卡 ==========
+def _draw_player_card(draw, ops, doc, x0, x1, y):
+    text_block = NAME_SIZE + 8 + CHIP_H
+    card_h = max(AVATAR, text_block) + P_CARD_PAD_V * 2
+    add_rect(ops, 'bg0', x0, y, x1 - x0, card_h, CARD_RADIUS, CARD_BG)
+
+    ax = x0 + P_CARD_PAD_X
+    ay = y + (card_h - AVATAR) / 2
+    ops['bg1'].append(('paste', ax, ay, doc['avatar']))
+    dot_color = DOT_ON if doc['is_online'] else DOT_OFF
+    add_ellipse(ops, 'bg1', ax + AVATAR - DOT_D + 5,
+                ay + AVATAR - DOT_D + 5, DOT_D, '#ffffff')
+    add_ellipse(ops, 'bg1', ax + AVATAR - DOT_D + 8,
+                ay + AVATAR - DOT_D + 8, DOT_D - 6, dot_color)
+
+    info_x = ax + AVATAR + 24
+    block_top = y + (card_h - text_block) / 2
+
+    ops['fg'].append(('emoji', info_x, block_top, doc['player_name'],
+                      NAME_SIZE, NAME_COLOR))
+    name_w = measure_text_with_emoji(draw, doc['player_name'],
+                                     _font(NAME_SIZE))
+    if doc['uuid_suffix']:
+        add_text(ops, info_x + name_w + 10, block_top + 10,
+                 f"#{doc['uuid_suffix']}", UUID_SIZE, UUID_COLOR)
+
+    # 摘要胶囊（放不下换行，首行避开右上角服务器标签）
+    right_limit = x1 - P_CARD_PAD_X
+    if doc['srv_w']:
+        right_limit -= doc['srv_w'] + 16
+    cy = block_top + NAME_SIZE + 8
+    cx = info_x
+    for s in doc['summary']:
+        w = measure_text_with_emoji(draw, s, _font(CHIP_SIZE)) + CHIP_PAD_X * 2
+        if cx + w > right_limit and cx > info_x:
+            cy += CHIP_H + 6
+            cx = info_x
+        cx += _add_chip(ops, draw, cx, cy, s, CHIP_FG, CHIP_BG, CHIP_BD)
+        cx += SUM_GAP
+
+    if doc['server_label'] and doc['srv_w']:
+        sx = x1 - P_CARD_PAD_X - doc['srv_w']
+        sy = y + P_CARD_PAD_V
+        add_rect(ops, 'bg1', sx, sy, doc['srv_w'], SRV_H, SRV_H // 2,
+                 SRV_BG, SRV_BD)
+        add_text(ops, sx + 12, sy + (SRV_H - SRV_SIZE) / 2 - 1,
+                 doc['server_label'], SRV_SIZE, SRV_FG)
+    return card_h
+
+
+# ========== 图表卡 ==========
+def _draw_charts(draw, ops, doc, x0, x1, y):
+    cw = (x1 - x0 - CH_GAP) / 2
+    card_h = CH_PAD_TOP + CH_TITLE_SIZE + CH_TITLE_GAP + CH_H + CH_PAD_BOTTOM
+    for i, (title, chart) in enumerate(
+            [("能力分布 · 雷达图", doc['radar']),
+             ("分类占比 · 环形图", doc['donut'])]):
+        cx0 = x0 + i * (cw + CH_GAP)
+        add_rect(ops, 'bg0', cx0, y, cw, card_h, CARD_RADIUS, CARD_BG)
+        tw = text_w(draw, title, CH_TITLE_SIZE)
+        add_text(ops, cx0 + (cw - tw) / 2, y + CH_PAD_TOP, title,
+                 CH_TITLE_SIZE, '#444444')
+        pw, ph = chart.size[0] / SCALE, chart.size[1] / SCALE
+        ox = max(cx0 + CH_PAD_X, cx0 + (cw - pw) / 2)
+        oy = y + CH_PAD_TOP + CH_TITLE_SIZE + CH_TITLE_GAP + (CH_H - ph) / 2
+        ops['bg1'].append(('paste', ox, oy, chart))
+    return card_h
+
+
+# ========== 明细卡 ==========
+def _draw_detail(draw, ops, doc, x0, x1, y):
+    inner_w = x1 - x0 - D_PAD * 2
+    cats = doc['display_categories']
+    if not cats:
+        card_h = D_PAD * 2 + 30
+        add_rect(ops, 'bg0', x0, y, x1 - x0, card_h, CARD_RADIUS, CARD_BG)
+        t = "暂无详细数据"
+        tw = text_w(draw, t, NOTE_SIZE)
+        add_text(ops, x0 + (x1 - x0 - tw) / 2, y + card_h / 2 - NOTE_SIZE / 2,
+                 t, NOTE_SIZE, NOTE_COLOR)
+        return card_h
+
+    col_w = (inner_w - (D_COLS - 1) * D_GAP) / D_COLS
+    groups = [cats[i:i + D_COLS] for i in range(0, len(cats), D_COLS)]
+    row_hs = [max(_cat_card_h(it) for _, it in g) for g in groups]
+    grid_h = sum(row_hs) + (len(groups) - 1) * D_GAP
+    card_h = D_PAD * 2 + grid_h
+    add_rect(ops, 'bg0', x0, y, x1 - x0, card_h, CARD_RADIUS, CARD_BG)
+
+    gy = y + D_PAD
+    for grp, rh in zip(groups, row_hs):
+        for ci, (cat, items) in enumerate(grp):
+            cx0 = x0 + D_PAD + ci * (col_w + D_GAP)
+            add_rect(ops, 'bg1', cx0, gy, col_w, rh, CAT_R, CAT_BG)
+            tx = cx0 + CAT_PAD_X
+            add_text(ops, tx, gy + CAT_PAD_V, cat, CAT_H_SIZE, ACCENT)
+            badge = str(len(items))
+            bw = text_w(draw, badge, BADGE_SIZE) + 16
+            bx = cx0 + col_w - CAT_PAD_X - bw
+            add_rect(ops, 'bg1', bx, gy + CAT_PAD_V - 1, bw, BADGE_H,
+                     BADGE_H // 2, BADGE_BG)
+            add_text(ops, bx + 8, gy + CAT_PAD_V + 2, badge, BADGE_SIZE,
+                     BADGE_FG)
+
+            iy = gy + CAT_PAD_V + CAT_H_H + CAT_H_GAP
+            col_iw = (col_w - CAT_PAD_X * 2 - (ITEM_COLS - 1) * ITEM_GAP_X) \
+                / ITEM_COLS
+            for ii, (label, _key, unit, val) in enumerate(items):
+                r, c = divmod(ii, ITEM_COLS)
+                ix = tx + c * (col_iw + ITEM_GAP_X)
+                yy = iy + r * (LBL_LH + VAL_LH + ITEM_GAP_Y)
+                add_text(ops, ix, yy, label, LBL_SIZE, LBL_COLOR)
+                add_text(ops, ix, yy + LBL_LH,
+                         format_value(val, unit), VAL_SIZE, VAL_COLOR)
+        gy += rh + D_GAP
+    return card_h
+
+
+# ========== 总布局 ==========
+def _build_stats(draw, ops, doc, y):
+    tw = text_w(draw, TITLE_TEXT, TITLE_SIZE)
+    add_text(ops, (WIDTH - tw) / 2, y, TITLE_TEXT, TITLE_SIZE, ACCENT)
+    y += TITLE_SIZE + TITLE_GAP
+
+    x0, x1 = PAD, WIDTH - PAD
+    y += _draw_player_card(draw, ops, doc, x0, x1, y) + CARD_GAP
+    y += _draw_charts(draw, ops, doc, x0, x1, y) + CARD_GAP
+    y += _draw_detail(draw, ops, doc, x0, x1, y) + TIME_GAP
+
+    now = doc['now_str']
+    nw = text_w(draw, now, TIME_SIZE)
+    add_text(ops, (WIDTH - nw) / 2, y, now, TIME_SIZE, TIME_COLOR)
+    return y + TIME_SIZE
+
+
+# ========== 入口 ==========
 async def draw_player_stats_image(
     stats_data: Dict[str, Any],
     player_name: str,
@@ -279,265 +425,78 @@ async def draw_player_stats_image(
     avatar_img: Optional[Image.Image] = None,
     show_server_label: bool = True
 ) -> Image.Image:
-    """
-    生成玩家统计图片（新版：雷达图+环形图+分类数据）
-    """
-    # ===== 提取数据 =====
-    playtime = stats_data.get('playTimeFormatted', '0分钟')
-    deaths = stats_data.get('deaths', 0)
-    mobKills = stats_data.get('mobKills', 0)
-    uuid_suffix = stats_data.get('uuidSuffix', '')
-
-    # 计算分类得分
+    """生成玩家统计图片（雷达图+环形图+分类明细，2x 超采样）"""
     scores = calc_category_scores(stats_data)
     category_names = list(CATEGORIES.keys())
-    category_values = [scores[cat] for cat in category_names]
 
-    # ===== 计算布局 =====
-    content_width = CONTAINER_WIDTH - 2 * CONTAINER_PADDING
-    avatar_size = 72
-    avatar_radius = 12
-    player_card_height = max(avatar_size + 10, 50) + 20
-    chart_height = CHART_HEIGHT
-    chart_card_height = chart_height + 40  # 标题+内边距
-
-    # 详细数据卡片区域高度：根据实际数据动态计算
     display_categories = []
     for cat in category_names:
         items = []
         for label, key, unit in CATEGORIES[cat]['items']:
             val = stats_data.get(key, 0)
-            if val != 0:
+            if val:
                 items.append((label, key, unit, val))
         if items:
             display_categories.append((cat, items))
 
-    # 重新计算详细数据布局（仿HTML网格）
-    cols = 3
-    detail_padding = 16
-    gap = 16
-    # 白色卡片内部可用宽度
-    inner_width = CONTAINER_WIDTH - 2 * CONTAINER_PADDING - 2 * detail_padding
-    col_width = (inner_width - (cols - 1) * gap) // cols  # 整数除法
-    # 计算每行高度：根据最大子项数量
-    row_height = 35  # 标签+数值+间距
-    row_gap = 4
-    card_padding = 12
-    title_height = 24
-    card_heights = []
-    for cat, items in display_categories:
-        rows = (len(items) + 1) // 2
-        h = title_height + rows * (row_height + row_gap) + card_padding * 2
-        card_heights.append(h)
-    detail_card_height = max(card_heights) if card_heights else 60
-    total_rows = (len(display_categories) + cols - 1) // cols
-    # 总内容高度 = 行数 * (卡片高度 + 行间距) - 行间距
-    row_spacing = 12
-    total_height_detail = total_rows * (detail_card_height + row_spacing) - row_spacing
-    total_height_detail += detail_padding * 2  # 加上白色卡片内边距
-
-    # 总高度 = 标题 + 玩家卡 + 图表行 + 详细数据行 + 底部时间
-    total_height = (
-        CONTAINER_PADDING
-        + PAGE_TITLE_SIZE + PAGE_TITLE_MARGIN_BOTTOM
-        + player_card_height + 24
-        + chart_card_height + 24
-        + total_height_detail + 24  # 额外上下内边距
-        + TIME_TEXT_SIZE + TIME_MARGIN_TOP
-        + CONTAINER_PADDING
-    )
-
-    img = Image.new('RGB', (CONTAINER_WIDTH, total_height), CONTAINER_BG)
-    draw = ImageDraw.Draw(img)
-
-    # 容器圆角背景
-    draw.rounded_rectangle(
-        [(0, 0), (CONTAINER_WIDTH, total_height)],
-        radius=CONTAINER_RADIUS,
-        fill=CONTAINER_BG
-    )
-
-    y = CONTAINER_PADDING
-
-    # ---- 标题 ----
-    title_text = "玩家数据统计"
-    title_font = get_font(PAGE_TITLE_SIZE, bold=True)
-    title_w = draw.textbbox((0, 0), title_text, font=title_font)[2]
-    title_x = (CONTAINER_WIDTH - title_w) // 2
-    draw.text((title_x, y), title_text, fill=PAGE_TITLE_COLOR, font=title_font)
-    y += PAGE_TITLE_SIZE + PAGE_TITLE_MARGIN_BOTTOM
-
-    # ---- 玩家信息卡 ----
-    card_x0 = CONTAINER_PADDING
-    card_x1 = CONTAINER_WIDTH - CONTAINER_PADDING
-    card_y0 = y
-    card_y1 = y + player_card_height
-    draw.rounded_rectangle((card_x0, card_y0, card_x1, card_y1), radius=CARD_RADIUS, fill=CARD_BG)
-
-    # 头像
+    # 头像（2x 像素，NEAREST 放大保持像素风）
+    ava_px = int(AVATAR * SCALE)
     if avatar_img is None:
-        avatar_img = Image.new('RGBA', (avatar_size, avatar_size), (176, 176, 176, 255))
-        draw_avatar = ImageDraw.Draw(avatar_img)
-        draw_avatar.ellipse((avatar_size*0.25, avatar_size*0.2, avatar_size*0.75, avatar_size*0.7), fill=(136,136,136,255))
-        draw_avatar.rectangle((avatar_size*0.25, avatar_size*0.65, avatar_size*0.75, avatar_size*0.95), fill=(136,136,136,255))
+        placeholder = Image.new('RGBA', (ava_px, ava_px), (176, 176, 176, 255))
+        ImageDraw.Draw(placeholder).rectangle(
+            (int(ava_px * 0.25), int(ava_px * 0.65),
+             int(ava_px * 0.75), int(ava_px * 0.95)),
+            fill=(136, 136, 136, 255))
+        avatar = _make_rounded(placeholder, AVATAR_R * SCALE)
     else:
-        avatar_img = avatar_img.resize((avatar_size, avatar_size), Image.LANCZOS)
-    avatar_rounded = make_rounded_rect(avatar_img, avatar_size, avatar_radius)
-    avatar_x = card_x0 + CARD_PADDING_SIDE
-    avatar_y = card_y0 + (player_card_height - avatar_size) // 2
-    img.paste(avatar_rounded, (avatar_x, avatar_y), avatar_rounded)
+        avatar = _make_rounded(_smart_resize(avatar_img, ava_px),
+                               AVATAR_R * SCALE)
 
-    # 在线状态指示器
-    dot_size = 18
-    dot_x = avatar_x + avatar_size - dot_size + 4
-    dot_y = avatar_y + avatar_size - dot_size + 4
-    dot_color = STATUS_DOT_ONLINE if is_online else STATUS_DOT_OFFLINE
-    draw.ellipse((dot_x, dot_y, dot_x+dot_size, dot_y+dot_size), fill=dot_color, outline='white', width=2)
+    chart_w = int((WIDTH - PAD * 2 - CH_GAP) / 2) - 2 * CH_PAD_X
+    radar = create_radar_chart(scores, category_names, chart_w, CH_H)
+    donut_cats = [c for c in category_names if scores[c] > 0]
+    if donut_cats:
+        donut = create_donut_chart(scores, donut_cats, category_names,
+                                   chart_w, CH_H)
+    else:
+        donut = Image.new('RGBA', radar.size, '#ffffff')
 
-    # 玩家信息
-    info_x = avatar_x + avatar_size + 24
-    info_y = card_y0 + (player_card_height - 50) // 2
-
-    # 名称（可能含 emoji）
-    name_font = get_font(PLAYER_NAME_SIZE, bold=True)
-    name_end_x = draw_text_with_emoji(
-        img, draw, (info_x, info_y),
-        player_name,
-        name_font, PLAYER_NAME_COLOR,
-        emoji_scale=0.9
-    )
-
-    # UUID后缀（通常无 emoji，但用新函数统一处理更稳）
-    if uuid_suffix:
-        suffix_x = name_end_x + 10
-        suffix_y = info_y + (PLAYER_NAME_SIZE - 14) // 2
-        draw_text_with_emoji(
-            img, draw, (suffix_x, suffix_y),
-            f"#{uuid_suffix}",
-            get_font(14, bold=False), PLAYER_ID_COLOR,
-            emoji_scale=0.9
-        )
-
-    # 摘要信息（含 emoji）
-    summary_y = info_y + PLAYER_NAME_SIZE + 6
-    summary_font = get_font(PLAYER_SUMMARY_SIZE)
-    summary_items = [
-        f"🗡️ 击杀 {mobKills}",
-        f"💀 死亡 {deaths}",
-        f"⏱️ 在线 {playtime}"
-    ]
-    summary_spacing = 20
-    curr_x = info_x
-    for item in summary_items:
-        next_x = draw_text_with_emoji(
-            img, draw, (curr_x, summary_y),
-            item,
-            summary_font, PLAYER_SUMMARY_COLOR,
-            emoji_scale=1.0
-        )
-        curr_x = next_x + summary_spacing
-
-    # 服务器名称（右上角）
+    server_label = ""
     if server_name and show_server_label:
-        server_text = f"服务器: {server_name}"
-        server_font = get_font(14, bold=False)
-        server_color = '#888888'
-        tw = draw.textbbox((0,0), server_text, font=server_font)[2]
-        server_x = card_x1 - CARD_PADDING_SIDE - tw
-        server_y = card_y0 + CARD_PADDING_TOP
-        draw.text((server_x, server_y), server_text, fill=server_color, font=server_font)
+        server_label = f"服务器: {server_name}"
+    srv_w = 0
+    if server_label:
+        scratch = ImageDraw.Draw(Image.new('RGB', (8, 8)))
+        srv_w = text_w(scratch, server_label, SRV_SIZE) + 24
 
-    y += player_card_height + 24
+    doc = {
+        'player_name': player_name,
+        'uuid_suffix': stats_data.get('uuidSuffix', ''),
+        'summary': [
+            f"🗡️ 击杀 {stats_data.get('mobKills', 0)}",
+            f"💀 死亡 {stats_data.get('deaths', 0)}",
+            f"⏱️ 在线 {stats_data.get('playTimeFormatted', '0分钟')}",
+        ],
+        'server_label': server_label,
+        'srv_w': srv_w,
+        'is_online': is_online,
+        'avatar': avatar,
+        'radar': radar,
+        'donut': donut,
+        'display_categories': display_categories,
+        'now_str': time.strftime("%Y/%m/%d  %H:%M:%S"),
+    }
 
-    # ---- 图表区域（雷达图 + 环形图） ----
-    chart_w = CHART_WIDTH
-    chart_h = CHART_HEIGHT
+    def _paste(op, img):
+        _, x, y, pic = op
+        img.paste(pic, (int(x * SCALE), int(y * SCALE)), pic)
 
-    # 过滤出得分>0的分类用于环形图（仅去除图表中的零值分类）
-    donut_categories = [cat for cat in category_names if scores[cat] > 0]
-    donut_scores = {cat: scores[cat] for cat in donut_categories}  # 字典
+    def _render_emoji(op, img):
+        _, x, y, text, size, color = op
+        d = ImageDraw.Draw(img)
+        draw_text_with_emoji(img, d, (x * SCALE, y * SCALE), text,
+                             _font(size * SCALE), color, emoji_scale=0.95)
 
-    # 生成雷达图
-    radar_img = create_radar_chart(scores, category_names, chart_w, chart_h)
-    # 生成环形图（饼图只显示非零分类，图例显示全部分类）
-    donut_img = create_donut_chart(donut_scores, donut_categories, chart_w, chart_h, all_labels=category_names)
-
-    chart_card_h = chart_h + 40  # 标题+内边距
-    for i, chart_img in enumerate([radar_img, donut_img]):
-        cx0 = CONTAINER_PADDING + i * (chart_w + 24)
-        cx1 = cx0 + chart_w
-        cy0 = y
-        cy1 = y + chart_card_h
-        draw.rounded_rectangle((cx0, cy0, cx1, cy1), radius=CARD_RADIUS, fill=CARD_BG)
-        title = "能力分布 · 雷达图" if i == 0 else "分类占比 · 环形图"
-        tw = draw.textbbox((0,0), title, font=get_font(CHART_TITLE_SIZE, bold=True))[2]
-        draw.text((cx0 + (chart_w - tw)//2, cy0 + 6), title, fill='#444444', font=get_font(CHART_TITLE_SIZE, bold=True))
-        img_w, img_h = chart_img.size
-        paste_x = cx0 + (chart_w - img_w) // 2
-        paste_y = cy0 + 28
-        img.paste(chart_img, (paste_x, paste_y), chart_img)
-
-    y += chart_card_h + 24
-
-    # ---- 详细数据卡片 ----
-    if display_categories:
-        # 白色背景卡片
-        detail_x0 = CONTAINER_PADDING
-        detail_x1 = CONTAINER_WIDTH - CONTAINER_PADDING
-        detail_y0 = y
-        detail_y1 = y + total_height_detail
-        draw.rounded_rectangle((detail_x0, detail_y0, detail_x1, detail_y1), radius=CARD_RADIUS, fill=CARD_BG)
-
-        # 绘制每个灰色卡片（三列网格）
-        for idx, (cat, items) in enumerate(display_categories):
-            row = idx // cols
-            col = idx % cols
-            # 计算灰色卡片位置
-            cx0 = detail_x0 + detail_padding + col * (col_width + gap)
-            cx1 = cx0 + col_width
-            cy0 = detail_y0 + detail_padding + row * (detail_card_height + row_spacing)
-            cy1 = cy0 + detail_card_height
-
-            # 灰色背景卡片（圆角）
-            draw.rounded_rectangle((cx0, cy0, cx1, cy1), radius=12, fill='#f6f6f5')
-
-            # 标题
-            title_font = get_font(14, bold=True)
-            draw.text((cx0 + 12, cy0 + 8), cat, fill='#5b6abf', font=title_font)
-
-            # 子项网格（两列）
-            x_start = cx0 + 12
-            y_start = cy0 + 30
-            col_w = (cx1 - cx0 - 24) // 2
-            for i, (label, key, unit, val) in enumerate(items):
-                row_item = i // 2
-                col_item = i % 2
-                x = x_start + col_item * (col_w + 8)
-                y = y_start + row_item * (row_height + row_gap)
-                draw.text((x, y), label, fill='#888888', font=get_font(11, bold=False))
-                display_val = format_value(val, unit)
-                draw.text((x, y + 14), display_val, fill='#333333', font=get_font(16, bold=True))
-    else:
-        # 无数据时的简化处理
-        detail_x0 = CONTAINER_PADDING
-        detail_x1 = CONTAINER_WIDTH - CONTAINER_PADDING
-        detail_y0 = y
-        detail_y1 = y + 60
-        draw.rounded_rectangle((detail_x0, detail_y0, detail_x1, detail_y1), radius=CARD_RADIUS, fill=CARD_BG)
-        draw.text((CONTAINER_WIDTH//2, y+20), "暂无详细数据", fill='#999999', font=get_font(18, bold=False), anchor="mm")
-        y = detail_y1
-
-    # 更新 y 到详细数据之后
-    if display_categories:
-        y = detail_y1 + 24
-    else:
-        y = detail_y1 + 24
-
-    # ---- 底部时间 ----
-    now_str = time.strftime("%Y/%m/%d  %H:%M:%S")
-    time_font = get_font(TIME_TEXT_SIZE, bold=False)
-    time_w = draw.textbbox((0,0), now_str, font=time_font)[2]
-    time_x = (CONTAINER_WIDTH - time_w) // 2
-    draw.text((time_x, y), now_str, fill=TIME_TEXT_COLOR, font=time_font)
-
-    return img
+    return build_image(_build_stats, doc,
+                       extra_handlers={'paste': _paste,
+                                       'emoji': _render_emoji})

@@ -138,6 +138,14 @@ class MCWatcher(Star):
         async for result in handle_mc_command(event):
             yield result
 
+    # ---------- 帮助命令 ----------
+    @filter.command("帮助")
+    async def help_command(self, event: AstrMessageEvent):
+        """显示通用命令帮助图片"""
+        event.message_str = "/mc help"
+        async for result in handle_mc_command(event):
+            yield result
+
     # ---------- 上次在线显示开关 ----------
     @filter.command("上次在线")
     async def lastonline_command(self, event: AstrMessageEvent):

@@ -41,7 +41,7 @@ async def handle_mc_command(event: AstrMessageEvent):
     sub_cmd = parts[0].lower()
 
     # 权限检查（管理命令）
-    admin_cmds = {"add", "remove", "edit", "batchadd", "batchremove", "move", "swap", "lastonline", "checknick", "nicknamecheck"}
+    admin_cmds = {"add", "remove", "edit", "batchadd", "batchremove", "move", "swap", "lastonline", "checknick", "nicknamecheck", "say"}
     if sub_cmd in admin_cmds:
         if not await check_permission(event, sub_cmd):
             yield event.plain_result("权限不足：该操作需要群管理员或插件管理员权限。")

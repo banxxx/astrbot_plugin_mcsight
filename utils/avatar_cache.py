@@ -1,12 +1,14 @@
 import os
 import time
 import asyncio
+import hashlib
+from urllib.parse import quote
 from collections import OrderedDict
 from typing import Optional
 from astrbot.api import logger
 
 import aiohttp
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 # ================= 配置常量 =================
@@ -52,6 +54,14 @@ class LRUAvatarCache:
 _memory_cache = LRUAvatarCache()
 
 # ================= 辅助函数 =================
+def _smart_resize(img: Image.Image, size: int) -> Image.Image:
+    """像素风头像：放大用 NEAREST 保持硬边缘，缩小才用 LANCZOS"""
+    if img.size == (size, size):
+        return img
+    resample = Image.NEAREST if size >= img.size[0] else Image.LANCZOS
+    return img.resize((size, size), resample)
+
+
 def _is_cache_expired(file_path: str) -> bool:
     if not os.path.exists(file_path):
         return True
@@ -94,7 +104,7 @@ def get_default_avatar(size: int = 36) -> Image.Image:
         try:
             img = Image.open(LOCAL_STEVE_PATH).convert("RGBA")
             if img.size != (size, size):
-                img = img.resize((size, size), Image.LANCZOS)
+                img = _smart_resize(img, size)
             return img
         except Exception as e:
             logger.warning(f"加载本地 Steve 头像失败: {e}")
@@ -150,15 +160,16 @@ async def download_avatar(session: aiohttp.ClientSession,
         if cached is not None:
             return cached.copy()
 
-    # 磁盘缓存检查（以 username 为文件名，避免同一玩家多个标识符重复存储）
+    # 磁盘缓存检查（用户名做哈希作为文件名：防止恶意/异常用户名携带 ../ 等做路径穿越）
     os.makedirs(CACHE_DIR, exist_ok=True)
-    cache_path = os.path.join(CACHE_DIR, f"{username}.png")
+    digest = hashlib.sha1(str(username).encode("utf-8")).hexdigest()
+    cache_path = os.path.join(CACHE_DIR, f"{digest}.png")
 
     if os.path.exists(cache_path) and not _is_cache_expired(cache_path):
         try:
             img = Image.open(cache_path).convert("RGBA")
             if img.size != (size, size):
-                img = img.resize((size, size), Image.LANCZOS)
+                img = _smart_resize(img, size)
             # 将每个 identifier 都缓存一份到内存
             for identifier in identifiers:
                 _memory_cache.put(f"{identifier}_{size}", img.copy())
@@ -173,7 +184,7 @@ async def download_avatar(session: aiohttp.ClientSession,
     data = None
     for identifier in identifiers:
         for template in AVATAR_API_TEMPLATES:
-            url = template.format(identifier=identifier, size=size)
+            url = template.format(identifier=quote(str(identifier), safe=''), size=size)
             data = await _download_avatar_data(session, url)
             if data is not None:
                 logger.debug(f"头像下载成功: {url}")
@@ -187,7 +198,7 @@ async def download_avatar(session: aiohttp.ClientSession,
                 f.write(data)
             img = Image.open(cache_path).convert("RGBA")
             if img.size != (size, size):
-                img = img.resize((size, size), Image.LANCZOS)
+                img = _smart_resize(img, size)
             # 将每个 identifier 都缓存一份到内存
             for identifier in identifiers:
                 _memory_cache.put(f"{identifier}_{size}", img.copy())
@@ -202,7 +213,7 @@ async def download_avatar(session: aiohttp.ClientSession,
         try:
             img = Image.open(LOCAL_STEVE_PATH).convert("RGBA")
             if img.size != (size, size):
-                img = img.resize((size, size), Image.LANCZOS)
+                img = _smart_resize(img, size)
             return img
         except Exception as e:
             logger.error(f"加载本地 Steve 头像失败: {e}")

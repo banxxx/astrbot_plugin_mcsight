@@ -1,445 +1,403 @@
+"""在线状态图片生成器（/在线、/mc status）
+
+复用 help_image 引擎的延迟绘制 ops + 2x 超采样；
+专有 op：'paste'（玩家头像）、'emoji'（服务器名含 emoji）。
+"""
+
 import asyncio
-import os
 import time
-import re
-import aiohttp
-from PIL import Image, ImageDraw, ImageFont
 from typing import List, Dict, Any
+
+import aiohttp
+from PIL import Image, ImageDraw
+
 from ...utils.avatar_cache import download_avatar, get_default_avatar
+from ...utils.text_renderer import draw_text_with_emoji, measure_text_with_emoji
 from ...config.whitelist_config import WhitelistManager
-from ...utils.text_renderer import draw_text_with_emoji
-
-# ========== 样式常量（高清优化版）==========
-CONTAINER_WIDTH = 1080
-CONTAINER_PADDING = 36
-CONTAINER_BOTTOM_PADDING = 52
-CONTAINER_BG = '#F9F9F8'
-CONTAINER_RADIUS = 24
-BIG_DOT_SIZE = 48
-
-PAGE_TITLE_COLOR = '#5b6abf'
-PAGE_TITLE_SIZE = 40
-PAGE_TITLE_MARGIN_BOTTOM = 12
-
-MAIN_TITLE_COLOR = '#555555'
-MAIN_TITLE_SIZE = 24
-MAIN_TITLE_MARGIN_BOTTOM = 28
-
-CARD_BG = '#FFFFFF'
-CARD_RADIUS = 16
-CARD_PADDING_TOP = 24
-CARD_PADDING_SIDE = 28
-CARD_PADDING_BOTTOM = 32
-CARD_MARGIN_BOTTOM = 24
-
-STATUS_DOT_SIZE = 16
-STATUS_DOT_ONLINE = '#5cb85c'
-STATUS_DOT_OFFLINE = '#d9534f'
-
-SERVER_NAME_COLOR = '#444444'
-SERVER_NAME_SIZE = 24
-SERVER_COUNT_COLOR = '#777777'
-SERVER_COUNT_SIZE = 18
-
-SERVER_VERSION_COLOR = '#888888'
-SERVER_VERSION_SIZE = 18
-LATENCY_GOOD_COLOR = '#7BA87F'
-LATENCY_MEDIUM_COLOR = '#D9A87C'
-LATENCY_BAD_COLOR = '#C47D7D'
-LATENCY_SIZE = 18
-
-DIVIDER_COLOR = '#e0e0e0'
-DIVIDER_MARGIN_TOP = 14
-DIVIDER_MARGIN_BOTTOM = 28
-
-SEAT_WIDTH = 220
-AVATAR_SIZE = 48
-AVATAR_RADIUS = 8
-GAP_H = 20
-GAP_V = 16
-
-TEXT_NAME_COLOR = '#555555'
-TEXT_NAME_SIZE = 16
-
-EMPTY_TEXT_COLOR = '#999999'
-EMPTY_TEXT_SIZE = 18
-PLAYER_LIST_HIDDEN_COLOR = '#aaaaaa'
-PLAYER_LIST_HIDDEN_SIZE = 18
-
-TIME_TEXT_COLOR = '#aaaaaa'
-TIME_TEXT_SIZE = 16
-TIME_MARGIN_TOP = 32
-
-# ★ 新增：并发下载头像的最大并发数（避免打爆第三方 API）
-AVATAR_DOWNLOAD_CONCURRENCY = 10
-
-# 圆点缓存：{(size, color): Image}
-_dot_cache = {}
-
-
-# 常用 Emoji Unicode 范围（覆盖常见 Emoji）
-EMOJI_PATTERN = re.compile(
-    r'^[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE00-\uFE0F]+$'
+from ..help_image.image_generator import (
+    WIDTH, PAD, SCALE, BG, ACCENT,
+    new_ops, add_text, add_rect, add_ellipse, add_dash,
+    text_w, _font, place_runs, build_image,
 )
 
-# ========== 字体加载 ==========
-def _load_font(size):
-    base = os.path.dirname(os.path.abspath(__file__))
-    paths = [
-        os.path.join(base, '..', '..', 'resources', 'fonts', 'msyh.ttf'),
-        "msyh.ttc", "PingFang.ttc", "wqy-microhei.ttc"
-    ]
-    for p in paths:
-        try:
-            return ImageFont.truetype(p, size)
-        except:
-            continue
-    return ImageFont.load_default()
+# ========== 布局常量（设计单位，渲染时统一 ×SCALE） ==========
+TITLE_TEXT = "在线玩家列表"
+TITLE_SIZE = 40
+TOTAL_SIZE = 24
+TOTAL_COLOR = '#555555'
+HEADER_GAP = 12
+HEADER_BOTTOM = 26
 
-FONT_PAGE_TITLE = _load_font(PAGE_TITLE_SIZE)
-FONT_MAIN_TITLE = _load_font(MAIN_TITLE_SIZE)
-FONT_SERVER_NAME = _load_font(SERVER_NAME_SIZE)
-FONT_SERVER_COUNT = _load_font(SERVER_COUNT_SIZE)
-FONT_SERVER_VERSION = _load_font(SERVER_VERSION_SIZE)
-FONT_LATENCY = _load_font(LATENCY_SIZE)
-FONT_NAME = _load_font(TEXT_NAME_SIZE)
-FONT_EMPTY = _load_font(EMPTY_TEXT_SIZE)
-FONT_PLAYER_HIDDEN = _load_font(PLAYER_LIST_HIDDEN_SIZE)
-FONT_TIME = _load_font(TIME_TEXT_SIZE)
+CARD_PAD_X = 28
+CARD_PAD_TOP = 22
+CARD_PAD_BOTTOM = 24
+CARD_GAP = 22
+CARD_RADIUS = 16
+CARD_BG = '#FFFFFF'
+CARD_BG_OFFLINE = '#fbfbfa'
 
-def make_rounded(img: Image.Image, radius: int) -> Image.Image:
+HEAD_H = 26
+DOT_SIZE = 14
+DOT_ON = '#5cb85c'
+DOT_OFF = '#d9534f'
+NAME_SIZE = 24
+NAME_COLOR = '#444444'
+
+CHIP_SIZE = 15
+CHIP_H = 26
+CHIP_PAD_X = 14
+CHIP_GAP = 8
+# 头部胶囊整体下移量：与服务器名/在线人数的视觉中心对齐（否则底部齐平显高）
+CHIP_Y_OFF = 3
+CHIP_VER = ('#8a7bc0', '#f4f2fb', '#e6e0f5')
+CHIP_LAT_A = ('#3d8b61', '#e9f5ee', '#cfe9da')
+CHIP_LAT_B = ('#b26a00', '#fdf3e0', '#f3e0b8')
+CHIP_LAT_C = ('#c0392b', '#fbeaea', '#f0d2d2')
+CHIP_LAST = ('#8b93a7', '#f5f6f8', '#e6e9ef')
+
+COUNT_NUM_SIZE = 22
+COUNT_TXT_SIZE = 18
+COUNT_TXT_COLOR = '#777777'
+COUNT_OFF_COLOR = '#c9ccd6'
+
+CAP_Y_GAP = 12
+CAP_H = 4
+CAP_BG_COLOR = '#eef0f4'
+CAP_FILL_OFF = '#e3e5ea'
+
+DIV_GAP_TOP = 14
+DIV_GAP_BOTTOM = 14
+
+COLS = 5
+GAP_COL = 10
+GAP_ROW = 16
+GAP_NAME = 10
+AVATAR = 44
+AVATAR_RADIUS = 8
+PNAME_SIZE = 15
+PNAME_COLOR = '#555555'
+
+NOTE_SIZE = 15
+NOTE_COLOR = '#a5aabb'
+NOTE_H = 30
+
+TIME_SIZE = 16
+TIME_COLOR = '#aaaaaa'
+TIME_GAP = 24
+
+AVATAR_DOWNLOAD_CONCURRENCY = 10
+
+OFFLINE_KEYWORDS = ['积极拒绝', 'Connection refused', 'timeout', '超时',
+                    '连接超时', '连接失败']
+
+
+def format_last_online(ts_ms: int) -> str:
+    if not ts_ms or ts_ms <= 0:
+        return "无记录"
+    try:
+        diff_sec = (time.time() * 1000 - ts_ms) / 1000.0
+    except Exception:
+        return "无记录"
+    if diff_sec < 60:
+        return "不到1分钟"
+    if diff_sec < 3600:
+        return f"{int(diff_sec / 60)}分钟"
+    if diff_sec < 86400:
+        h, m = int(diff_sec / 3600), int((diff_sec % 3600) / 60)
+        return f"{h}小时{m}分钟" if m > 0 else f"{h}小时"
+    if diff_sec < 365 * 86400:
+        d, h = int(diff_sec / 86400), int((diff_sec % 86400) / 3600)
+        return f"{d}天{h}小时" if h > 0 else f"{d}天"
+    y, d = int(diff_sec / (365 * 86400)), int((diff_sec % (365 * 86400)) / 86400)
+    return f"{y}年{d}天" if d > 0 else f"{y}年"
+
+
+def _latency_chip(lat_ms) -> tuple:
+    if lat_ms is None:
+        return CHIP_LAT_B
+    if lat_ms <= 100:
+        return CHIP_LAT_A
+    if lat_ms <= 500:
+        return CHIP_LAT_B
+    return CHIP_LAT_C
+
+
+def add_chip(ops, draw, x, y, text, colors):
+    fg, bg, bd = colors
+    w = text_w(draw, text, CHIP_SIZE) + CHIP_PAD_X * 2
+    add_rect(ops, 'bg1', x, y, w, CHIP_H, CHIP_H // 2, bg, bd)
+    add_text(ops, x + CHIP_PAD_X, y + 5, text, CHIP_SIZE, fg)
+    return w
+
+
+def _truncate(draw, name, size, max_w):
+    if name is None:
+        return ""
+    if text_w(draw, name, size) <= max_w:
+        return name
+    ell = '…'
+    ew = text_w(draw, ell, size)
+    acc = ''
+    for ch in name:
+        if text_w(draw, acc + ch, size) + ew > max_w:
+            break
+        acc += ch
+    return acc + ell
+
+
+def _make_rounded(img: Image.Image, radius: int) -> Image.Image:
     mask = Image.new('L', img.size, 0)
-    draw = ImageDraw.Draw(mask)
-    draw.rounded_rectangle([(0, 0), img.size], radius=radius, fill=255)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, img.size[0], img.size[1]],
+                                           radius=radius, fill=255)
     img = img.copy()
     img.putalpha(mask)
     return img
 
-def get_dot(size: int, color: str) -> Image.Image:
-    """获取指定大小和颜色的圆点图像（先绘制大圆再缩放，保证平滑）"""
-    key = (size, color)
-    if key in _dot_cache:
-        return _dot_cache[key]
-    big_size = max(size * 2, 48)
-    big_img = Image.new('RGBA', (big_size, big_size), (0, 0, 0, 0))
-    big_draw = ImageDraw.Draw(big_img)
-    big_draw.ellipse([(0, 0), (big_size, big_size)], fill=color)
-    resized = big_img.resize((size, size), Image.LANCZOS)
-    _dot_cache[key] = resized
-    return resized
 
-def get_latency_color(ms: float) -> str:
-    if ms <= 100:
-        return LATENCY_GOOD_COLOR
-    elif ms <= 500:
-        return LATENCY_MEDIUM_COLOR
+# ========== 卡片绘制 ==========
+def _draw_card(draw, ops, card, y):
+    x0, x1 = PAD, WIDTH - PAD
+    px0 = x0 + CARD_PAD_X
+    px1 = x1 - CARD_PAD_X
+    inner_w = px1 - px0
+    is_offline = bool(card['error'])
+    card_bg = CARD_BG_OFFLINE if is_offline else CARD_BG
+
+    head_top = y + CARD_PAD_TOP
+    col_w = (inner_w - (COLS - 1) * GAP_COL) / COLS
+
+    # 内容区高度
+    players = card['players']
+    if players:
+        rows = (len(players) + COLS - 1) // COLS
+        content_h = rows * AVATAR + (rows - 1) * GAP_ROW
+        content_kind = 'grid'
+    elif is_offline:
+        content_h = 0
+        content_kind = 'none'
     else:
-        return LATENCY_BAD_COLOR
+        content_h = NOTE_H
+        content_kind = 'note'
 
-def format_last_online(ts_ms: int) -> str:
-    """
-    将时间戳（毫秒）转换为人类可读的“上次在线”描述。
-    """
-    if not ts_ms or ts_ms <= 0:
-        return "无记录"
-    try:
-        now_ms = time.time() * 1000
-        diff_sec = (now_ms - ts_ms) / 1000.0
-    except Exception:
-        return "无记录"
-    if diff_sec < 0:
-        return "不到1分钟"
-    if diff_sec < 60:
-        return "不到1分钟"
-    elif diff_sec < 3600:
-        return f"{int(diff_sec / 60)}分钟"
-    elif diff_sec < 86400:
-        hours = int(diff_sec / 3600)
-        minutes = int((diff_sec % 3600) / 60)
-        if minutes > 0:
-            return f"{hours}小时{minutes}分钟"
-        return f"{hours}小时"
-    elif diff_sec < 365 * 86400:
-        days = int(diff_sec / 86400)
-        hours = int((diff_sec % 86400) / 3600)
-        if hours > 0:
-            return f"{days}天{hours}小时"
-        return f"{days}天"
+    if content_kind == 'none':
+        card_h = CARD_PAD_TOP + HEAD_H + CAP_Y_GAP + CAP_H + 16
     else:
-        years = int(diff_sec / (365 * 86400))
-        days = int((diff_sec % (365 * 86400)) / 86400)
-        if days > 0:
-            return f"{years}年{days}天"
-        return f"{years}年"
+        card_h = (CARD_PAD_TOP + HEAD_H + CAP_Y_GAP + CAP_H
+                  + DIV_GAP_TOP + 1 + DIV_GAP_BOTTOM
+                  + content_h + CARD_PAD_BOTTOM)
+
+    add_rect(ops, 'bg0', x0, y, x1 - x0, card_h, CARD_RADIUS, card_bg)
+
+    # 状态圆点
+    add_ellipse(ops, 'bg1', px0, head_top + (HEAD_H - DOT_SIZE) / 2 + 1,
+                DOT_SIZE, DOT_OFF if is_offline else DOT_ON)
+
+    # 服务器名（可能含 emoji）
+    name_x = px0 + DOT_SIZE + 12
+    ops['fg'].append(('emoji', name_x, head_top, card['name'],
+                      NAME_SIZE, NAME_COLOR))
+
+    # 右侧信息区：胶囊组 + 在线人数（原位置）
+    # 元组：('chip', text, colors, w, drop_priority)，priority 越小越先被丢弃
+    items_w = []
+    if is_offline:
+        err_text = "服务器不在线" if any(
+            k in (card['error'] or '') for k in OFFLINE_KEYWORDS
+        ) else f"查询失败: {card['error']}"
+        items_w.append(('chip', err_text, CHIP_LAT_C,
+                        text_w(draw, err_text, CHIP_SIZE) + CHIP_PAD_X * 2, 99))
+    else:
+        if card.get('show_version'):
+            v = card['version']
+            items_w.append(('chip', v, CHIP_VER,
+                            text_w(draw, v, CHIP_SIZE) + CHIP_PAD_X * 2, 1))
+        if card.get('show_latency'):
+            lat = card.get('latency')
+            t = "?ms" if lat is None else f"{lat:.0f}ms"
+            items_w.append(('chip', t, _latency_chip(lat),
+                            text_w(draw, t, CHIP_SIZE) + CHIP_PAD_X * 2, 2))
+        if card.get('show_last') and card.get('last_activity_time', 0) > 0:
+            t = f"上次在线 {format_last_online(card['last_activity_time'])}前"
+            items_w.append(('chip', t, CHIP_LAST,
+                            text_w(draw, t, CHIP_SIZE) + CHIP_PAD_X * 2, 0))
+
+    num_s, suf_s = card['online_str'], f" / {card['max_str']} 人在线"
+    num_w = text_w(draw, num_s, COUNT_NUM_SIZE)
+    suf_w = text_w(draw, suf_s, COUNT_TXT_SIZE)
+    count_w = num_w + suf_w
+
+    def _meta_total(chips):
+        t = sum(w for *_, w, _p in chips) + count_w
+        if chips:
+            t += (len(chips) - 1) * CHIP_GAP + 12
+        return t
+
+    # 防溢出：名称与胶囊冲突时按优先级丢弃（上次在线→版本→延迟）
+    name_w = measure_text_with_emoji(draw, card['name'], _font(NAME_SIZE))
+    max_meta = px1 - (name_x + name_w) - 16
+    while items_w and _meta_total(items_w) > max_meta:
+        victim = min(range(len(items_w)), key=lambda i: items_w[i][4])
+        if items_w[victim][4] >= 99:
+            break
+        items_w.pop(victim)
+
+    total_w = _meta_total(items_w)
+    cursor = px1 - total_w
+
+    for kind, text, colors, w, _p in items_w:
+        add_chip(ops, draw, cursor, head_top + CHIP_Y_OFF, text, colors)
+        cursor += w + CHIP_GAP
+    if items_w:
+        cursor += 12 - CHIP_GAP
+    num_color = COUNT_OFF_COLOR if is_offline else ACCENT
+    add_text(ops, cursor, head_top + 2, num_s, COUNT_NUM_SIZE, num_color)
+    add_text(ops, cursor + num_w, head_top + 6, suf_s, COUNT_TXT_SIZE,
+             COUNT_TXT_COLOR)
+
+    # 容量条
+    cap_y = head_top + HEAD_H + CAP_Y_GAP
+    add_rect(ops, 'bg1', px0, cap_y, inner_w, CAP_H, CAP_H // 2, CAP_BG_COLOR)
+    mx = card.get('max', 0)
+    ratio = 0.0 if (is_offline or not mx) else min(1.0, card['online'] / mx)
+    if ratio > 0:
+        add_rect(ops, 'bg1', px0, cap_y, max(CAP_H, inner_w * ratio),
+                 CAP_H, CAP_H // 2, ACCENT)
+
+    if content_kind == 'none':
+        return card_h
+
+    # 虚线 + 内容区
+    div_y = cap_y + CAP_H + DIV_GAP_TOP
+    add_dash(ops, px0, px1, div_y)
+    gy = div_y + 1 + DIV_GAP_BOTTOM
+
+    if content_kind == 'grid':
+        for i, p in enumerate(players):
+            row, col = divmod(i, COLS)
+            sx = px0 + col * (col_w + GAP_COL)
+            sy = gy + row * (AVATAR + GAP_ROW)
+            ava = card['avatars'][i]
+            ops['bg1'].append(('paste', sx, sy, ava))
+            pn = _truncate(draw, p[0], PNAME_SIZE,
+                           col_w - AVATAR - GAP_NAME)
+            add_text(ops, sx + AVATAR + GAP_NAME,
+                     sy + (AVATAR - PNAME_SIZE) / 2 + 2,
+                     pn, PNAME_SIZE, PNAME_COLOR)
+    else:
+        if card['online'] > 0:
+            t = f"{card['online']} 人在线（玩家列表不可见）"
+            chip_text = "列表隐藏"
+            chip_w = text_w(draw, chip_text, CHIP_SIZE) + CHIP_PAD_X * 2
+            add_chip(ops, draw, px0, gy + (NOTE_H - 22) / 2, chip_text,
+                     CHIP_LAST)
+            add_text(ops, px0 + chip_w + 10, gy + 6, t, NOTE_SIZE, NOTE_COLOR)
+        else:
+            t = "当前无人在线"
+            tw = text_w(draw, t, NOTE_SIZE)
+            add_text(ops, px0 + (inner_w - tw) / 2, gy + 6, t, NOTE_SIZE,
+                     NOTE_COLOR)
+    return card_h
 
 
-async def draw_multi_server_image(servers_data: List[Dict[str, Any]], show_last_online: bool = False) -> Image.Image:
-    now_str = time.strftime("%Y/%m/%d  %H:%M:%S")
+# ========== 总绘制 ==========
+def _build_status(draw, ops, doc, y):
+    title_w = text_w(draw, TITLE_TEXT, TITLE_SIZE)
+    add_text(ops, (WIDTH - title_w) / 2, y, TITLE_TEXT, TITLE_SIZE, ACCENT)
+    y += TITLE_SIZE + HEADER_GAP
+
+    runs = [("总在线: ", TOTAL_COLOR), (str(doc['total_online']), ACCENT),
+            (" 人", TOTAL_COLOR)]
+    tw = sum(text_w(draw, t, TOTAL_SIZE) for t, _ in runs)
+    place_runs(ops, draw, (WIDTH - tw) / 2, y, runs, TOTAL_SIZE)
+    y += TOTAL_SIZE + HEADER_BOTTOM
+
+    for card in doc['cards']:
+        y += _draw_card(draw, ops, card, y) + CARD_GAP
+    y = y - CARD_GAP + TIME_GAP
+
+    now = doc['now_str']
+    nw = text_w(draw, now, TIME_SIZE)
+    add_text(ops, (WIDTH - nw) / 2, y, now, TIME_SIZE, TIME_COLOR)
+    return y + TIME_SIZE
+
+
+async def draw_multi_server_image(servers_data: List[Dict[str, Any]],
+                                  show_last_online: bool = False) -> Image.Image:
     wm = WhitelistManager()
     show_version = wm.show_server_version
     show_latency = wm.show_server_latency
+    now_str = time.strftime("%Y/%m/%d  %H:%M:%S")
 
-    content_width = CONTAINER_WIDTH - 2 * CONTAINER_PADDING
-    inner_width = content_width - 2 * CARD_PADDING_SIDE
-    cols = max(1, (inner_width + GAP_H) // (SEAT_WIDTH + GAP_H))
+    # ---- 归一化 + 收集头像下载请求 ----
+    cards = []
+    requests = {}
+    for srv in servers_data:
+        players_raw = srv.get("players", [])
+        plist = []
+        for p in players_raw:
+            if isinstance(p, dict):
+                plist.append((p.get("name"), p.get("uuid"), p.get("is_premium")))
+            else:
+                plist.append((p, None, None))
+        card = {
+            'name': srv['name'],
+            'players': plist,
+            'online': srv.get('online', 0),
+            'online_str': str(srv.get('online', 0)),
+            'max': srv.get('max', 0),
+            'max_str': str(srv.get('max', 1)),
+            'error': srv.get('error'),
+            'version': srv.get('version', '未知'),
+            'latency': srv.get('latency'),
+            'last_activity_time': srv.get('last_activity_time', 0),
+            'show_version': show_version,
+            'show_latency': show_latency,
+            'show_last': show_last_online,
+        }
+        cards.append(card)
+        for pname, puuid, prem in plist:
+            if pname:
+                requests.setdefault((pname, puuid), prem)
 
-    card_infos = []
+    # ---- 并发下载头像（2x 尺寸，NEAREST 语义由源尺寸保证） ----
+    avatar_px = int(AVATAR * SCALE)
+    avatar_map = {}
     async with aiohttp.ClientSession() as session:
-        # ---- 第一步：构建 card_infos（无需网络请求） ----
-        for srv in servers_data:
-            version = srv.get("version", "未知")
-            latency = srv.get("latency", 0.0)
-            name = srv["name"]
+        sem = asyncio.Semaphore(AVATAR_DOWNLOAD_CONCURRENCY)
 
-            players = srv.get("players", [])
-            online = srv.get("online", 0)
-            max_players = srv.get("max", 1)
-            online_str = str(online)
-            max_str = str(max_players)
-            error = srv.get("error")
-            last_activity_time = srv.get("last_activity_time", 0)
+        async def _get(pname, puuid, prem):
+            async with sem:
+                try:
+                    return await download_avatar(session, pname, avatar_px,
+                                                 prem, uuid=puuid)
+                except Exception:
+                    return get_default_avatar(avatar_px)
 
-            has_players = len(players) > 0
-            if has_players:
-                rows = (len(players) + cols - 1) // cols
-                grid_h = rows * (AVATAR_SIZE + TEXT_NAME_SIZE + GAP_V)
-            else:
-                rows = 0
-                grid_h = PLAYER_LIST_HIDDEN_SIZE + 20
+        keys = list(requests.keys())
+        results = await asyncio.gather(
+            *[_get(k[0], k[1], requests[k]) for k in keys]) if keys else []
+        for k, img in zip(keys, results):
+            avatar_map[k] = _make_rounded(img, AVATAR_RADIUS * SCALE)
 
-            card_w = inner_width
-            card_h = (CARD_PADDING_TOP + FONT_SERVER_NAME.size + 8 +
-                      DIVIDER_MARGIN_TOP + 1 + DIVIDER_MARGIN_BOTTOM +
-                      grid_h + CARD_PADDING_BOTTOM)
+    for card in cards:
+        card['avatars'] = [
+            avatar_map.get((n, u)) or _make_rounded(
+                get_default_avatar(avatar_px), AVATAR_RADIUS * SCALE)
+            for n, u, _ in card['players']
+        ]
 
-            card_infos.append({
-                "name": name,
-                "online_str": online_str,
-                "max_str": max_str,
-                "players": players,
-                "online": online,
-                "has_players": has_players,
-                "grid_h": grid_h,
-                "card_h": card_h,
-                "error": error,
-                "version": version,
-                "latency": latency,
-                "last_activity_time": last_activity_time,
-            })
+    total_online = sum(c['online'] for c in cards if not c['error'])
+    doc = {'cards': cards, 'now_str': now_str, 'total_online': total_online}
 
-        # ============================================================
-        # ★ 新增：预并发下载所有玩家头像（去重 + 限流并发）
-        # ============================================================
-        avatar_map = {}   # key: (player_name, player_uuid, AVATAR_SIZE) -> Image
-        download_requests = []  # [(key, name, uuid, is_premium), ...]
-        seen_keys = set()
+    def _paste(op, img):
+        _, x, y, ava = op
+        img.paste(ava, (int(x * SCALE), int(y * SCALE)), ava)
 
-        for card in card_infos:
-            if not card["has_players"]:
-                continue
-            for player in card["players"]:
-                if isinstance(player, dict):
-                    pname = player.get("name")
-                    puuid = player.get("uuid")
-                    pprem = player.get("is_premium")
-                else:
-                    pname = player
-                    puuid = None
-                    pprem = None
+    def _render_emoji(op, img):
+        _, x, y, text, size, color = op
+        d = ImageDraw.Draw(img)
+        draw_text_with_emoji(img, d, (x * SCALE, y * SCALE), text,
+                             _font(size * SCALE), color, emoji_scale=0.95)
 
-                if not pname:
-                    continue
-
-                key = (pname, puuid, AVATAR_SIZE)
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                download_requests.append((key, pname, puuid, pprem))
-
-        if download_requests:
-            # 用 Semaphore 限制并发数，避免打爆第三方头像 API
-            sem = asyncio.Semaphore(AVATAR_DOWNLOAD_CONCURRENCY)
-
-            async def _limited_download(name, uuid_, prem):
-                async with sem:
-                    try:
-                        return await download_avatar(session, name, AVATAR_SIZE, prem, uuid=uuid_)
-                    except Exception as e:
-                        from astrbot.api import logger as _logger
-                        _logger.error(f"头像并发下载异常 {name}: {e}")
-                        return get_default_avatar(AVATAR_SIZE)
-
-            # 一次性并发发起所有下载任务
-            coros = [_limited_download(n, u, p) for _, n, u, p in download_requests]
-            results = await asyncio.gather(*coros, return_exceptions=False)
-
-            for (key, _, _, _), img in zip(download_requests, results):
-                avatar_map[key] = img
-
-            from astrbot.api import logger as _logger
-            _logger.info(f"✅ 并发下载完成：{len(download_requests)} 个头像（去重后），并发上限 {AVATAR_DOWNLOAD_CONCURRENCY}")
-
-        # ---- 第二步：计算总高度并创建画布 ----
-        total_height = CONTAINER_PADDING + PAGE_TITLE_SIZE + PAGE_TITLE_MARGIN_BOTTOM
-        total_height += MAIN_TITLE_SIZE + MAIN_TITLE_MARGIN_BOTTOM
-        for c in card_infos:
-            total_height += c["card_h"] + CARD_MARGIN_BOTTOM
-        total_height -= CARD_MARGIN_BOTTOM
-        total_height += TIME_TEXT_SIZE + TIME_MARGIN_TOP + CONTAINER_BOTTOM_PADDING
-
-        img = Image.new('RGB', (CONTAINER_WIDTH, total_height), CONTAINER_BG)
-        draw = ImageDraw.Draw(img)
-
-        draw.rounded_rectangle(
-            [(0, 0), (CONTAINER_WIDTH, total_height)],
-            radius=CONTAINER_RADIUS, fill=CONTAINER_BG
-        )
-
-        y = CONTAINER_PADDING
-
-        # 标题
-        title_text = "在线玩家列表"
-        title_bbox = draw.textbbox((0, 0), title_text, font=FONT_PAGE_TITLE)
-        title_w = title_bbox[2] - title_bbox[0]
-        title_x = (CONTAINER_WIDTH - title_w) // 2
-        draw.text((title_x, y), title_text, fill=PAGE_TITLE_COLOR, font=FONT_PAGE_TITLE)
-        y += PAGE_TITLE_SIZE + PAGE_TITLE_MARGIN_BOTTOM
-
-        # 总在线人数
-        total_online = sum(s["online"] for s in servers_data if not s.get("error"))
-        main_text = f"总在线: {total_online} 人"
-        main_bbox = draw.textbbox((0, 0), main_text, font=FONT_MAIN_TITLE)
-        main_w = main_bbox[2] - main_bbox[0]
-        main_x = (CONTAINER_WIDTH - main_w) // 2
-        draw.text((main_x, y), main_text, fill=MAIN_TITLE_COLOR, font=FONT_MAIN_TITLE)
-        y += MAIN_TITLE_SIZE + MAIN_TITLE_MARGIN_BOTTOM
-
-        # ---- 第三步：遍历卡片绘制（头像从 avatar_map 取，不再串行 await） ----
-        for card in card_infos:
-            card_x0 = CONTAINER_PADDING
-            card_y0 = y
-            card_x1 = CONTAINER_PADDING + content_width
-            card_y1 = y + card["card_h"]
-
-            draw.rounded_rectangle(
-                [card_x0, card_y0, card_x1, card_y1],
-                radius=CARD_RADIUS, fill=CARD_BG
-            )
-
-            # 状态圆点 + 服务器名
-            dot_x = card_x0 + CARD_PADDING_SIDE
-            dot_center_y = card_y0 + CARD_PADDING_TOP + FONT_SERVER_NAME.size // 2
-            dot_y = dot_center_y - STATUS_DOT_SIZE // 2
-            is_online = not card["error"]
-            dot_color = STATUS_DOT_ONLINE if is_online else STATUS_DOT_OFFLINE
-            dot_img = get_dot(STATUS_DOT_SIZE, dot_color)
-            img.paste(dot_img, (dot_x, dot_y), dot_img)
-
-            name_x = dot_x + STATUS_DOT_SIZE + 12
-            name_y = card_y0 + CARD_PADDING_TOP
-
-            # 统一用混合渲染函数处理服务器名（可能含 emoji）
-            draw_text_with_emoji(
-                img, draw, (name_x, name_y),
-                card["name"],
-                FONT_SERVER_NAME, SERVER_NAME_COLOR,
-                emoji_scale=0.95
-            )
-
-            # 右侧信息区：上次在线（可选）→ 版本（可选）→ 延迟（可选）→ 在线人数
-            right_items = []
-            if show_last_online and card.get("last_activity_time", 0) > 0:
-                last_online_text = f"上次在线 {format_last_online(card['last_activity_time'])} 前"
-                lo_w = draw.textbbox((0, 0), last_online_text, font=FONT_SERVER_VERSION)[2]
-                right_items.append((last_online_text, FONT_SERVER_VERSION, SERVER_VERSION_COLOR, lo_w))
-            if show_version:
-                ver_text = card["version"]
-                ver_w = draw.textbbox((0, 0), ver_text, font=FONT_SERVER_VERSION)[2]
-                right_items.append((ver_text, FONT_SERVER_VERSION, SERVER_VERSION_COLOR, ver_w))
-            if show_latency:
-                lat_val = card.get("latency")
-                if lat_val is None:
-                    lat_text = "?ms"
-                else:
-                    lat_text = f"{lat_val:.0f}ms"
-                lat_w = draw.textbbox((0, 0), lat_text, font=FONT_LATENCY)[2]
-                right_items.append((lat_text, FONT_LATENCY, get_latency_color(lat_val), lat_w))
-            cnt_text = f"{card['online_str']}/{card['max_str']} 人在线"
-            cnt_w = draw.textbbox((0, 0), cnt_text, font=FONT_SERVER_COUNT)[2]
-            right_items.append((cnt_text, FONT_SERVER_COUNT, SERVER_COUNT_COLOR, cnt_w))
-
-            total_right_w = sum(w + 14 for _, _, _, w in right_items) - 14
-            cursor_x = card_x1 - CARD_PADDING_SIDE - total_right_w
-            for txt, font, color, w in right_items:
-                draw.text((cursor_x, name_y), txt, fill=color, font=font)
-                cursor_x += w + 14
-
-            # 分割线
-            line_y = name_y + FONT_SERVER_NAME.size + DIVIDER_MARGIN_TOP
-            draw.line(
-                [(card_x0 + CARD_PADDING_SIDE, line_y), (card_x1 - CARD_PADDING_SIDE, line_y)],
-                fill=DIVIDER_COLOR, width=2
-            )
-
-            # 玩家网格区域
-            grid_start_y = line_y + DIVIDER_MARGIN_BOTTOM
-            if card["has_players"]:
-                for i, player in enumerate(card["players"]):
-                    if isinstance(player, dict):
-                        player_name = player.get("name")
-                        player_uuid = player.get("uuid")
-                        is_premium = player.get("is_premium")
-                    else:
-                        player_name = player
-                        player_uuid = None
-                        is_premium = None
-
-                    row = i // cols
-                    col = i % cols
-                    seat_x = card_x0 + CARD_PADDING_SIDE + col * (SEAT_WIDTH + GAP_H)
-                    seat_y = grid_start_y + row * (AVATAR_SIZE + TEXT_NAME_SIZE + GAP_V)
-
-                    # ★ 直接从 avatar_map 取（已并发下载好）
-                    key = (player_name, player_uuid, AVATAR_SIZE)
-                    avatar = avatar_map.get(key)
-                    if avatar is None:
-                        avatar = get_default_avatar(AVATAR_SIZE)
-
-                    rounded = make_rounded(avatar, AVATAR_RADIUS)
-                    img.paste(rounded, (int(seat_x), int(seat_y)), rounded)
-
-                    name_tx = seat_x + AVATAR_SIZE + 10
-                    name_ty = seat_y + (AVATAR_SIZE - TEXT_NAME_SIZE) // 2
-                    draw.text((int(name_tx), int(name_ty)), player_name, fill=TEXT_NAME_COLOR, font=FONT_NAME)
-            else:
-                if card["online"] > 0:
-                    hide_text = f"{card['online']} 人在线（玩家列表不可见）"
-                    bbox = draw.textbbox((0, 0), hide_text, font=FONT_PLAYER_HIDDEN)
-                    hw = bbox[2] - bbox[0]
-                    draw.text((card_x0 + (content_width - hw) // 2, grid_start_y),
-                              hide_text, fill=PLAYER_LIST_HIDDEN_COLOR, font=FONT_PLAYER_HIDDEN)
-                else:
-                    if is_online:
-                        empty_str = "当前无人在线"
-                    else:
-                        err = card['error'] or ''
-                        offline_keywords = ['积极拒绝', 'Connection refused', 'timeout', '超时', '连接超时', '连接失败']
-                        if any(kw in err for kw in offline_keywords):
-                            empty_str = "服务器不在线"
-                        else:
-                            empty_str = f"查询失败: {err}"
-
-                    bbox = draw.textbbox((0, 0), empty_str, font=FONT_EMPTY)
-                    ew = bbox[2] - bbox[0]
-                    draw.text((card_x0 + (content_width - ew) // 2, grid_start_y),
-                              empty_str, fill=EMPTY_TEXT_COLOR, font=FONT_EMPTY)
-
-            y += card["card_h"] + CARD_MARGIN_BOTTOM
-
-        # 底部时间
-        time_bbox = draw.textbbox((0, 0), now_str, font=FONT_TIME)
-        time_w = time_bbox[2] - time_bbox[0]
-        time_x = (CONTAINER_WIDTH - time_w) // 2
-        draw.text((time_x, y + TIME_MARGIN_TOP), now_str, fill=TIME_TEXT_COLOR, font=FONT_TIME)
-
-        return img
+    return build_image(_build_status, doc,
+                       extra_handlers={'paste': _paste, 'emoji': _render_emoji})

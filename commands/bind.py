@@ -10,18 +10,24 @@ from .common import call_mod_api, execute_db_update, execute_db_query
 
 
 # ============================================================
-# 辅助函数：同步通知所有模组服务器清缓存，返回成功/失败列表
+# 辅助函数：中心库写入成功后，把权威绑定结果下行推送到所有模组服务器
 # ============================================================
-async def _invalidate_all_mod_caches(config: ConfigManager, game_id: str) -> tuple:
+async def _sync_binding_all_mods(config: ConfigManager, game_id: str,
+                                 qq: str = None) -> tuple:
     """
-    并发通知所有安装了模组的服务器清除指定玩家的缓存。
+    调用各服模组 /api/sync_binding，仅更新模组本地镜像（不写数据库）。
+    即使模组连不上数据库，绑定/解绑也能实时生效并解禁/限制在线玩家。
+    qq 为 None 表示同步删除（解绑）。
     返回 (成功服务器名列表, 失败列表)，失败列表元素为 (服务器名, 错误信息)。
-    整体加 3 秒超时，避免个别服务器慢导致长时间等待。
     """
     wm = WhitelistManager()
     token = wm.mod_api_token
     if not token:
         return [], []
+
+    payload = {"gameId": game_id}
+    if qq:
+        payload["qq"] = qq
 
     servers = config.get_all_servers()
     targets = []
@@ -33,7 +39,7 @@ async def _invalidate_all_mod_caches(config: ConfigManager, game_id: str) -> tup
         tasks.append(
             call_mod_api(
                 srv["host"], wm.get_server_port(srv),
-                token, "/api/cache/invalidate", "POST", {"gameId": game_id}
+                token, "/api/sync_binding", "POST", payload
             )
         )
 
@@ -54,15 +60,32 @@ async def _invalidate_all_mod_caches(config: ConfigManager, game_id: str) -> tup
         if isinstance(r, Exception):
             failed.append((name, str(r)))
         elif isinstance(r, tuple) and len(r) >= 2:
-            ok = r[0]
-            msg = r[1]
-            if ok:
+            if r[0]:
                 success.append(name)
             else:
-                failed.append((name, str(msg)))
+                failed.append((name, str(r[1])))
         else:
             failed.append((name, "未知响应"))
     return success, failed
+
+
+def _format_sync_failures(failed, action: str) -> str:
+    """按失败原因分组生成下行同步警告文案。action: 绑定/解绑"""
+    if not failed:
+        return ""
+    outdated = sorted({name for name, err in failed
+                       if "404" in err or "不存在" in err})
+    outdated_set = set(outdated)
+    others = sorted({name for name, _ in failed if name not in outdated_set})
+    lines = []
+    if outdated:
+        lines.append("⚠️ 以下服务器模组版本过旧，不支持实时同步"
+                     f"（玩家重新进服后{action}会自动生效，升级新版模组后可实时同步）："
+                     + ", ".join(outdated))
+    if others:
+        lines.append(f"⚠️ 以下服务器下行同步失败（不影响{action}，"
+                     "模组数据库恢复后自动生效）：" + ", ".join(others))
+    return "\n" + "\n".join(lines)
 
 
 def _get_group_id(event: AstrMessageEvent, wm: WhitelistManager) -> str:
@@ -102,7 +125,7 @@ async def _do_unbind_by_game_id(event, config, wm, use_central, game_id,
                 (group_id, game_id)
             )
             if rows > 0:
-                success, failed = await _invalidate_all_mod_caches(config, game_id)
+                success, failed = await _sync_binding_all_mods(config, game_id)
                 msg = (
                     f"✅ 解绑成功！\n"
                     f"游戏ID：{game_id}\n"
@@ -110,8 +133,7 @@ async def _do_unbind_by_game_id(event, config, wm, use_central, game_id,
                     f"消息：解绑成功"
                 )
                 if failed:
-                    failed_names = ", ".join(name for name, _ in failed)
-                    msg += f"\n⚠️ 以下服务器缓存未刷新（不影响解绑，稍后自动生效）：{failed_names}"
+                    msg += _format_sync_failures(failed, "解绑")
                 yield event.plain_result(msg)
             else:
                 yield event.plain_result("❌ 解绑失败，未知错误。")
@@ -237,11 +259,10 @@ async def _do_unbind_by_qq(event, config, wm, use_central, target_qq,
                 "DELETE FROM bindings WHERE group_id = %s AND qq = %s",
                 (group_id, target_qq)
             )
-            failed_names_set = set()
+            failed_pairs = []
             for gid in game_ids:
-                _, failed = await _invalidate_all_mod_caches(config, gid)
-                for name, _ in failed:
-                    failed_names_set.add(name)
+                _, failed = await _sync_binding_all_mods(config, gid)
+                failed_pairs.extend(failed)
 
             msg = (
                 f"✅ 解绑成功！\n"
@@ -249,8 +270,8 @@ async def _do_unbind_by_qq(event, config, wm, use_central, target_qq,
                 f"已解绑的游戏ID：{', '.join(game_ids)}\n"
                 f"消息：解绑成功"
             )
-            if failed_names_set:
-                msg += f"\n⚠️ 以下服务器缓存未刷新（不影响解绑，稍后自动生效）：{', '.join(sorted(failed_names_set))}"
+            if failed_pairs:
+                msg += _format_sync_failures(failed_pairs, "解绑")
             yield event.plain_result(msg)
         except Exception as e:
             logger.error(f"数据库删除失败: {e}")
@@ -458,15 +479,14 @@ async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: lis
         try:
             rows = await execute_db_update(sql, (group_id, target_game_id, qq))
             if rows > 0:
-                success, failed = await _invalidate_all_mod_caches(config, target_game_id)
+                success, failed = await _sync_binding_all_mods(config, target_game_id, qq)
                 msg = (
                     f"✅ 绑定成功！\n"
                     f"游戏ID：{target_game_id}\n"
                     f"消息：绑定成功"
                 )
                 if failed:
-                    failed_names = ", ".join(name for name, _ in failed)
-                    msg += f"\n⚠️ 以下服务器缓存未刷新（不影响绑定，稍后自动生效）：{failed_names}"
+                    msg += _format_sync_failures(failed, "绑定")
                 yield event.plain_result(msg)
             else:
                 yield event.plain_result("❌ 绑定失败，未知错误。")

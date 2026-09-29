@@ -1,9 +1,10 @@
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Image as AstrImage
+from astrbot.api import logger
 from ..config.whitelist_config import WhitelistManager
 from ..utils.permission import check_permission
-from ..features.help_image.image_generator import draw_help_image
-from ..features.help_image.bind_help_generator import draw_bind_help_image
+from ..features.help_image.image_generator import get_help_image_path
+from ..features.help_image.bind_help_generator import get_bind_help_image_path
 
 async def handle_whitelist(event: AstrMessageEvent, parts: list):
     """处理 /mc whitelist"""
@@ -36,16 +37,14 @@ async def handle_whitelist(event: AstrMessageEvent, parts: list):
 
 async def handle_help(event: AstrMessageEvent):
     try:
-        img = draw_help_image()
-        img.save("mc_help_temp.png")
-        yield event.chain_result([AstrImage(file="mc_help_temp.png")])
+        yield event.chain_result([AstrImage(file=get_help_image_path())])
     except Exception as e:
+        logger.exception(f"生成帮助图片失败: {e}")
         yield event.plain_result(f"生成帮助图片失败: {e}")
 
 async def handle_bindhelp(event: AstrMessageEvent):
     try:
-        img = draw_bind_help_image()
-        img.save("bind_help_temp.png")
-        yield event.chain_result([AstrImage(file="bind_help_temp.png")])
+        yield event.chain_result([AstrImage(file=get_bind_help_image_path())])
     except Exception as e:
+        logger.exception(f"生成绑定帮助图片失败: {e}")
         yield event.plain_result(f"生成绑定帮助图片失败: {e}")
