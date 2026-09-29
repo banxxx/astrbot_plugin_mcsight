@@ -14,6 +14,7 @@ from .checker import (
 from ...config.whitelist_config import WhitelistManager
 from .player_stats_generator import draw_player_stats_image
 from ...utils.avatar_cache import download_avatar
+from ...utils import stats_snapshot
 
 # ========== 工具函数 ==========
 # 合法 Minecraft 玩家名（同时也是 URL 路径/文件名的安全白名单）
@@ -221,6 +222,11 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
     async with aiohttp.ClientSession() as session:
         avatar = await download_avatar(session, player_name, 72, is_premium=None, uuid=None)
 
+    # 先取基线（不含当天），再落当日快照：同一天的重复查询不会自己给自己当基线
+    window_days, baseline_stats = stats_snapshot.load_baseline(
+        player_name, found_server_name) or (None, None)
+    stats_snapshot.save_snapshot(player_name, found_server_name, found_data)
+
     is_online = found_data.get('online', False)
     try:
         img = await draw_player_stats_image(
@@ -229,7 +235,9 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
             server_name=found_server_name,
             is_online=is_online,
             avatar_img=avatar,
-            show_server_label=(len(servers) > 1)
+            show_server_label=(len(servers) > 1),
+            baseline_stats=baseline_stats,
+            window_days=window_days
         )
         img.save("player_stats_temp.png", optimize=True, compress_level=9)
         yield event.chain_result([AstrImage(file="player_stats_temp.png")])

@@ -83,9 +83,13 @@ class MCWatcher(Star):
             yield result
 
     # ---------- 绑定命令中文别名 ----------
+    # 注意：AstrBot 在 waking_check 阶段命中 wake_prefix 后会把前缀从 message_str 中剥离，
+    # 因此这里的 "/" 必须保持可选；唤醒与否由 is_at_or_wake_command 判定（同 CommandFilter）。
     @filter.regex(r"^/?\s*(绑定|bind)\s*\d{0,6}$")
     async def bind_command(self, event: AstrMessageEvent):
         import re
+        if not event.is_at_or_wake_command:
+            return
         raw_msg = event.message_str.strip()
         m = re.match(r"^/?\s*(绑定|bind)\s*(\d{0,6})$", raw_msg)
         if not m:
@@ -102,6 +106,8 @@ class MCWatcher(Star):
     @filter.regex(r"^/?\s*(解绑|unbind)(.*)$")
     async def unbind_command(self, event: AstrMessageEvent):
         import re
+        if not event.is_at_or_wake_command:
+            return
         raw_msg = event.message_str.strip()
         m = re.match(r"^/?\s*(解绑|unbind)(.*)$", raw_msg)
         if not m:
@@ -118,6 +124,8 @@ class MCWatcher(Star):
     @filter.regex(r"^/?\s*(查绑定|绑定状态|checkbind)(.*)$")
     async def checkbind_command(self, event: AstrMessageEvent):
         import re
+        if not event.is_at_or_wake_command:
+            return
         raw_msg = event.message_str.strip()
         m = re.match(r"^/?\s*(查绑定|绑定状态|checkbind)(.*)$", raw_msg)
         if not m:
