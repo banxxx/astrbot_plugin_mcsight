@@ -42,28 +42,33 @@ async def handle_say(event: AstrMessageEvent, config: ConfigManager, parts: list
         if not target:
             yield event.plain_result(f"未找到名为「{target_server}」的服务器。")
             return
+        if not wm.has_mod_api(target):
+            yield event.plain_result(f"服务器「{target_server}」未启用模组 API（未配置 api_port），无法发送广播。")
+            return
         servers_to_broadcast = [target]
+        skipped = 0
     else:
-        servers_to_broadcast = servers
+        servers_to_broadcast = [s for s in servers if wm.has_mod_api(s)]
+        skipped = len(servers) - len(servers_to_broadcast)
+        if not servers_to_broadcast:
+            yield event.plain_result("所配置的服务器都没有启用模组 API，无法发送广播。")
+            return
 
-    success_count = 0
-    fail_count = 0
-    for srv in servers_to_broadcast:
-        host = srv["host"]
-        port = wm.get_server_port(srv)
-        success = await send_broadcast_via_mod(host, port, token, message)
-        if success:
-            success_count += 1
-        else:
-            fail_count += 1
+    outcomes = await asyncio.gather(*[
+        send_broadcast_via_mod(srv["host"], wm.get_server_port(srv), token, message)
+        for srv in servers_to_broadcast
+    ])
+    success_count = sum(1 for x in outcomes if x)
+    fail_count = len(outcomes) - success_count
 
+    skip_note = f"（已跳过 {skipped} 台未启用模组 API 的服务器）" if skipped else ""
     if fail_count == 0:
         if target_server:
             yield event.plain_result(f"✔️ 已在服务器「{target_server}」发送广播。")
         else:
-            yield event.plain_result(f"✔️ 已在所有 {success_count} 个服务器发送广播。")
+            yield event.plain_result(f"✔️ 已在所有 {success_count} 个服务器发送广播。{skip_note}")
     else:
-        yield event.plain_result(f"❌ 广播发送完成，成功 {success_count} 个，失败 {fail_count} 个。")
+        yield event.plain_result(f"❌ 广播发送完成，成功 {success_count} 个，失败 {fail_count} 个。{skip_note}")
 
 # ---------- TPS ----------
 async def handle_tps(event: AstrMessageEvent, config: ConfigManager, parts: list):
@@ -94,17 +99,20 @@ async def handle_tps(event: AstrMessageEvent, config: ConfigManager, parts: list
     else:
         targets = servers
 
-    tasks = []
-    for srv in targets:
-        host = srv["host"]
-        port = wm.get_server_port(srv)
-        tasks.append(fetch_tps_via_mod(host, port, token))
-
-    if not tasks:
-        yield event.plain_result("没有有效的服务器可查询。")
+    # 未启用模组 API 的服务器不发请求（否则每台必等一次连接超时），TPS 直接记为 None
+    pending = [(i, srv) for i, srv in enumerate(targets) if wm.has_mod_api(srv)]
+    if not pending:
+        yield event.plain_result("所查询的服务器都没有启用模组 API，无法获取 TPS。")
         return
 
-    results = await asyncio.gather(*tasks)
+    results: list = [None] * len(targets)
+    values = await asyncio.gather(*[
+        fetch_tps_via_mod(srv["host"], wm.get_server_port(srv), token)
+        for _i, srv in pending
+    ])
+    for (i, _srv), tps in zip(pending, values):
+        results[i] = tps
+
     server_data = []
     for srv, tps in zip(targets, results):
         server_data.append({

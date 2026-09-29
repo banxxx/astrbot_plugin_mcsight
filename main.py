@@ -2,14 +2,17 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from .commands.mc_handler import handle_mc_command
+from .commands.common import start_db_keepalive, stop_db_keepalive
 from .config.server_config import ConfigManager
 from .config.whitelist_config import WhitelistManager
+from .utils import mod_http
 
 @register("astrbot_plugin_mcsight", "poso", "Minecraft 多服务器状态监控插件", "v1.0.0")
 class MCWatcher(Star):
     def __init__(self, context: Context):
         super().__init__(context)
         WhitelistManager().set_context(context)
+        start_db_keepalive()
 
     @filter.command("mc")
     async def mc(self, event: AstrMessageEvent):
@@ -185,4 +188,6 @@ class MCWatcher(Star):
             yield result
 
     async def terminate(self):
+        stop_db_keepalive()
+        await mod_http.close_session()
         logger.info("MCWatcher 插件已卸载")

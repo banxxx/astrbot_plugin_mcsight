@@ -399,5 +399,7 @@ async def draw_multi_server_image(servers_data: List[Dict[str, Any]],
         draw_text_with_emoji(img, d, (x * SCALE, y * SCALE), text,
                              _font(size * SCALE), color, emoji_scale=0.95)
 
-    return build_image(_build_status, doc,
-                       extra_handlers={'paste': _paste, 'emoji': _render_emoji})
+    # 绘制是纯 CPU，挪出事件循环，避免 /在线 期间卡住整个后端
+    return await asyncio.to_thread(
+        build_image, _build_status, doc,
+        extra_handlers={'paste': _paste, 'emoji': _render_emoji})

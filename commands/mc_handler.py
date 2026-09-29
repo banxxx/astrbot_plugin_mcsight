@@ -8,7 +8,8 @@ from astrbot.api.message_components import Image as AstrImage
 from astrbot.api import logger
 from ..config.server_config import ConfigManager
 from ..config.whitelist_config import WhitelistManager
-from ..utils.permission import check_permission
+from ..utils.permission import check_permission, is_astrbot_super_admin
+from ..utils import debounce
 
 # 导入拆分的处理函数
 from ..commands import (
@@ -39,6 +40,21 @@ async def handle_mc_command(event: AstrMessageEvent):
 
     parts = msg.split()
     sub_cmd = parts[0].lower()
+
+    # 防抖：中文别名、正则别名和裸 /mc 都汇聚到这里，sub_cmd 已是归一后的真命令，
+    # 在这一个入口生效即覆盖所有命令。超管不受限，方便连测。
+    wm = WhitelistManager()
+    user_id = str(event.get_sender_id())
+    if not (is_astrbot_super_admin(event) or wm.is_super_admin(user_id)):
+        scope = str(group_id or event.session_id)
+        allowed, remaining = debounce.gate(scope, user_id, sub_cmd)
+        if not allowed:
+            # 只在每个窗口第一次被拒时回话：否则刷屏党能拿我们的回复刷我们的屏
+            if debounce.should_notify(scope, user_id, sub_cmd):
+                logger.info(f"[debounce] 拒绝 {scope}/{user_id} 的 {sub_cmd}，剩余 {remaining} 秒")
+                yield event.plain_result(f"该命令 {debounce.window_of(sub_cmd):.0f} 秒内只能"
+                                         f"使用一次，请 {remaining} 秒后再试。")
+            return
 
     # 权限检查（管理命令）
     admin_cmds = {"add", "remove", "edit", "batchadd", "batchremove", "move", "swap", "lastonline", "checknick", "nicknamecheck", "say"}

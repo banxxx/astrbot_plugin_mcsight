@@ -12,36 +12,45 @@ from .common import call_mod_api, execute_db_update, execute_db_query
 # ============================================================
 # 辅助函数：中心库写入成功后，把权威绑定结果下行推送到所有模组服务器
 # ============================================================
-async def _sync_binding_all_mods(config: ConfigManager, game_id: str,
-                                 qq: str = None) -> tuple:
+# 单轮下行的总预算（秒）
+SYNC_ROUND_TIMEOUT = 3.0
+# 批量下行的总预算上限（秒）
+SYNC_BATCH_TIMEOUT_MAX = 9.0
+
+
+def _sync_timeout(payload_count: int) -> float:
+    """一个 gameId 仍是原来的 3 秒；多个 gameId 合成一轮后按数量追加预算，
+    整体上界远低于「每个 gameId 各跑一轮 3 秒」的串行版本（5 个 ID：7 秒 vs 15 秒）。"""
+    return min(SYNC_ROUND_TIMEOUT + 1.0 * max(payload_count - 1, 0),
+               SYNC_BATCH_TIMEOUT_MAX)
+
+
+async def _sync_binding_payloads(config: ConfigManager, payloads: list) -> tuple:
     """
-    调用各服模组 /api/sync_binding，仅更新模组本地镜像（不写数据库）。
-    即使模组连不上数据库，绑定/解绑也能实时生效并解禁/限制在线玩家。
-    qq 为 None 表示同步删除（解绑）。
+    一轮并发把若干绑定状态推给所有模组服务器，调用各服模组 /api/sync_binding，
+    仅更新模组本地镜像（不写数据库）。即使模组连不上数据库，绑定/解绑也能实时
+    生效并解禁/限制在线玩家。
+    payloads 元素为 {"gameId": ...}，带 "qq" 表示同步绑定，不带表示同步删除。
     返回 (成功服务器名列表, 失败列表)，失败列表元素为 (服务器名, 错误信息)。
     """
     wm = WhitelistManager()
     token = wm.mod_api_token
-    if not token:
+    if not token or not payloads:
         return [], []
 
-    payload = {"gameId": game_id}
-    if qq:
-        payload["qq"] = qq
-
-    servers = config.get_all_servers()
     targets = []
     tasks = []
-    for srv in servers:
+    for srv in config.get_all_servers():
         if not wm.has_mod_api(srv):
             continue
-        targets.append(srv["name"])
-        tasks.append(
-            call_mod_api(
-                srv["host"], wm.get_server_port(srv),
-                token, "/api/sync_binding", "POST", payload
+        for payload in payloads:
+            targets.append(srv["name"])
+            tasks.append(
+                call_mod_api(
+                    srv["host"], wm.get_server_port(srv),
+                    token, "/api/sync_binding", "POST", payload
+                )
             )
-        )
 
     if not tasks:
         return [], []
@@ -49,10 +58,10 @@ async def _sync_binding_all_mods(config: ConfigManager, game_id: str,
     try:
         results = await asyncio.wait_for(
             asyncio.gather(*tasks, return_exceptions=True),
-            timeout=3.0
+            timeout=_sync_timeout(len(payloads))
         )
     except asyncio.TimeoutError:
-        return [], [(name, "整体超时") for name in targets]
+        return [], [(name, "整体超时") for name in dict.fromkeys(targets)]
 
     success = []
     failed = []
@@ -66,7 +75,23 @@ async def _sync_binding_all_mods(config: ConfigManager, game_id: str,
                 failed.append((name, str(r[1])))
         else:
             failed.append((name, "未知响应"))
-    return success, failed
+    return list(dict.fromkeys(success)), failed
+
+
+async def _sync_after_reply(config, payloads, action: str) -> None:
+    """
+    成功消息发出之后再下行推送。下行不影响绑定/解绑本身是否成立，所以失败一律
+    只写日志、不往聊天侧补发任何消息，也不抛异常（否则会紧跟在 ✅ 后面发出一条假 ❌）。
+    """
+    try:
+        _, failed = await _sync_binding_payloads(config, payloads)
+    except Exception as e:
+        logger.warning(f"[sync] {action}下行同步异常（不影响{action}结果）: {e}")
+        return
+    if failed:
+        warn = _format_sync_failures(failed, action).lstrip("\n")
+        if warn:
+            logger.warning(f"[sync] {action}下行同步结果: {warn}")
 
 
 def _format_sync_failures(failed, action: str) -> str:
@@ -124,22 +149,20 @@ async def _do_unbind_by_game_id(event, config, wm, use_central, game_id,
                 "DELETE FROM bindings WHERE group_id = %s AND game_id = %s",
                 (group_id, game_id)
             )
-            if rows > 0:
-                success, failed = await _sync_binding_all_mods(config, game_id)
-                msg = (
-                    f"✅ 解绑成功！\n"
-                    f"游戏ID：{game_id}\n"
-                    f"绑定的QQ：{bound_qq}\n"
-                    f"消息：解绑成功"
-                )
-                if failed:
-                    msg += _format_sync_failures(failed, "解绑")
-                yield event.plain_result(msg)
-            else:
-                yield event.plain_result("❌ 解绑失败，未知错误。")
         except Exception as e:
             logger.error(f"数据库删除失败: {e}")
             yield event.plain_result(f"❌ 解绑失败（数据库操作失败）\n错误：{str(e)}")
+            return
+        if rows > 0:
+            yield event.plain_result(
+                f"✅ 解绑成功！\n"
+                f"游戏ID：{game_id}\n"
+                f"绑定的QQ：{bound_qq}\n"
+                f"消息：解绑成功"
+            )
+            await _sync_after_reply(config, [{"gameId": game_id}], "解绑")
+        else:
+            yield event.plain_result("❌ 解绑失败，未知错误。")
         return
 
     # ---- 本地模式：调用模组 API ----
@@ -259,23 +282,19 @@ async def _do_unbind_by_qq(event, config, wm, use_central, target_qq,
                 "DELETE FROM bindings WHERE group_id = %s AND qq = %s",
                 (group_id, target_qq)
             )
-            failed_pairs = []
-            for gid in game_ids:
-                _, failed = await _sync_binding_all_mods(config, gid)
-                failed_pairs.extend(failed)
-
-            msg = (
-                f"✅ 解绑成功！\n"
-                f"QQ：{target_qq}\n"
-                f"已解绑的游戏ID：{', '.join(game_ids)}\n"
-                f"消息：解绑成功"
-            )
-            if failed_pairs:
-                msg += _format_sync_failures(failed_pairs, "解绑")
-            yield event.plain_result(msg)
         except Exception as e:
             logger.error(f"数据库删除失败: {e}")
             yield event.plain_result(f"❌ 解绑失败（数据库操作失败）\n错误：{str(e)}")
+            return
+
+        yield event.plain_result(
+            f"✅ 解绑成功！\n"
+            f"QQ：{target_qq}\n"
+            f"已解绑的游戏ID：{', '.join(game_ids)}\n"
+            f"消息：解绑成功"
+        )
+        # 一次广播全部游戏ID，且放在成功消息之后：N 个 ID 不再串成 N 轮
+        await _sync_after_reply(config, [{"gameId": gid} for gid in game_ids], "解绑")
         return
 
     # ---- 本地模式 ----
@@ -478,29 +497,29 @@ async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: lis
         sql = "INSERT INTO bindings (group_id, game_id, qq) VALUES (%s, %s, %s)"
         try:
             rows = await execute_db_update(sql, (group_id, target_game_id, qq))
-            if rows > 0:
-                success, failed = await _sync_binding_all_mods(config, target_game_id, qq)
-                msg = (
-                    f"✅ 绑定成功！\n"
-                    f"游戏ID：{target_game_id}\n"
-                    f"消息：绑定成功"
-                )
-                if failed:
-                    msg += _format_sync_failures(failed, "绑定")
-                yield event.plain_result(msg)
-            else:
-                yield event.plain_result("❌ 绑定失败，未知错误。")
         except pymysql.err.IntegrityError:
             yield event.plain_result(
                 f"❌ 绑定失败！游戏ID「{target_game_id}」在本群已被绑定。\n"
                 "请勿重复绑定，如需解绑请使用 /解绑 命令。"
             )
+            return
         except Exception as e:
             logger.error(f"数据库写入失败: {e}")
             yield event.plain_result(
                 f"❌ 绑定失败（数据库操作失败）\n"
                 f"错误：{str(e)}"
             )
+            return
+
+        if rows > 0:
+            yield event.plain_result(
+                f"✅ 绑定成功！\n"
+                f"游戏ID：{target_game_id}\n"
+                f"消息：绑定成功"
+            )
+            await _sync_after_reply(config, [{"gameId": target_game_id, "qq": qq}], "绑定")
+        else:
+            yield event.plain_result("❌ 绑定失败，未知错误。")
         return
 
     # ============================================================
@@ -675,6 +694,49 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
 # ============================================================
 # 查询
 # ============================================================
+async def _query_bound_one(srv: dict, wm: WhitelistManager, token: str,
+                           query_type: str, query_value: str) -> tuple:
+    """单服绑定查询，返回 (服务器名, 是否已绑定, 展示信息)。
+    SMART 模式内部仍是「先按 QQ、未命中再按 ID」的两步，与旧串行逻辑一致。"""
+    name = srv["name"]
+    host = srv["host"]
+    port = wm.get_server_port(srv)
+
+    if query_type == "ID":
+        ok, data = await call_mod_api(host, port, token, "/api/check", "GET", {"gameId": query_value})
+        if not ok:
+            return (name, False, f"查询失败：{data}")
+        response_data = data.get("data", {})
+        if response_data.get("bound", False):
+            return (name, True, f"绑定的QQ：{response_data.get('qq', '')}")
+        return (name, False, "未绑定")
+
+    if query_type == "QQ":
+        ok, data = await call_mod_api(host, port, token, "/api/check", "GET", {"qq": query_value})
+        if not ok:
+            return (name, False, f"查询失败：{data}")
+        response_data = data.get("data", {})
+        if response_data.get("bound", False):
+            return (name, True, f"绑定的游戏ID：{response_data.get('gameId', '')}")
+        return (name, False, "该QQ号未绑定")
+
+    # SMART
+    ok, data = await call_mod_api(host, port, token, "/api/check", "GET", {"qq": query_value})
+    if not ok:
+        return (name, False, f"查询失败：{data}")
+    response_data = data.get("data", {})
+    if response_data.get("bound", False):
+        return (name, True, f"绑定的游戏ID：{response_data.get('gameId', '')}")
+
+    ok2, data2 = await call_mod_api(host, port, token, "/api/check", "GET", {"gameId": query_value})
+    if not ok2:
+        return (name, False, f"查询失败：{data2}")
+    response_data2 = data2.get("data", {})
+    if response_data2.get("bound", False):
+        return (name, True, f"绑定的QQ：{response_data2.get('qq', '')}")
+    return (name, False, "未绑定（QQ和游戏ID均未绑定）")
+
+
 async def handle_check(event: AstrMessageEvent, config: ConfigManager, parts: list):
     wm = WhitelistManager()
     token = wm.mod_api_token
@@ -807,56 +869,10 @@ async def handle_check(event: AstrMessageEvent, config: ConfigManager, parts: li
             yield event.plain_result("没有安装模组的服务器，无法查询绑定状态。")
             return
 
-    results = []
-    for srv in targets:
-        host = srv["host"]
-        port = wm.get_server_port(srv)
-        if query_type == "ID":
-            ok, data = await call_mod_api(host, port, token, "/api/check", "GET", {"gameId": query_value})
-            if ok:
-                response_data = data.get("data", {})
-                bound = response_data.get("bound", False)
-                if bound:
-                    qq = response_data.get("qq", "")
-                    results.append((srv["name"], True, f"绑定的QQ：{qq}"))
-                else:
-                    results.append((srv["name"], False, "未绑定"))
-            else:
-                results.append((srv["name"], False, f"查询失败：{data}"))
-
-        elif query_type == "QQ":
-            ok, data = await call_mod_api(host, port, token, "/api/check", "GET", {"qq": query_value})
-            if ok:
-                response_data = data.get("data", {})
-                bound = response_data.get("bound", False)
-                if bound:
-                    game_id = response_data.get("gameId", "")
-                    results.append((srv["name"], True, f"绑定的游戏ID：{game_id}"))
-                else:
-                    results.append((srv["name"], False, "该QQ号未绑定"))
-            else:
-                results.append((srv["name"], False, f"查询失败：{data}"))
-
-        elif query_type == "SMART":
-            ok, data = await call_mod_api(host, port, token, "/api/check", "GET", {"qq": query_value})
-            if ok:
-                response_data = data.get("data", {})
-                if response_data.get("bound", False):
-                    game_id = response_data.get("gameId", "")
-                    results.append((srv["name"], True, f"绑定的游戏ID：{game_id}"))
-                else:
-                    ok2, data2 = await call_mod_api(host, port, token, "/api/check", "GET", {"gameId": query_value})
-                    if ok2:
-                        response_data2 = data2.get("data", {})
-                        if response_data2.get("bound", False):
-                            qq2 = response_data2.get("qq", "")
-                            results.append((srv["name"], True, f"绑定的QQ：{qq2}"))
-                        else:
-                            results.append((srv["name"], False, "未绑定（QQ和游戏ID均未绑定）"))
-                    else:
-                        results.append((srv["name"], False, f"查询失败：{data2}"))
-            else:
-                results.append((srv["name"], False, f"查询失败：{data}"))
+    # 各服并发查询；gather 保序，汇总行仍按配置里的服务器顺序输出
+    results = await asyncio.gather(*[
+        _query_bound_one(srv, wm, token, query_type, query_value) for srv in targets
+    ])
 
     title = f"{query_value} 查询结果："
     reply_lines = [title]

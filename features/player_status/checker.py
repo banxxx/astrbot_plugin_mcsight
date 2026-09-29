@@ -5,6 +5,12 @@ from mcstatus import JavaServer
 from typing import List, Dict, Any, Optional
 import json
 
+from ...utils import mod_http
+
+# 状态卡片「延迟」胶囊的测速上界。健康服实测 37~70ms，1.2 秒留了十几倍余量；
+# 原来是 3.0 秒，而这条命令的总时长等于最慢那台的 ping，一台不应答就能拖满。
+PING_TIMEOUT = 1.2
+
 # ========== 模组 API 辅助函数 ==========
 def build_mod_api_url(host: str, port: int, endpoint: str) -> Optional[str]:
     """构建模组 API URL（不包含 Token）"""
@@ -35,40 +41,19 @@ async def fetch_from_mod_api(api_url: str, token: str = "", timeout: float = 5.0
 
 async def send_broadcast_via_mod(host: str, port: int, token: str, message: str, timeout: float = 5.0) -> bool:
     """通过模组 API 发送广播，返回是否真正成功（业务层面）"""
-    url = build_mod_api_url(host, port, "/api/broadcast")
-    if not url:
-        return False
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json={"message": message}, headers=headers, timeout=timeout) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get("success", False)
-                return False
-    except Exception:
-        return False
+    ok, _ = await mod_http.request(
+        host, port, "/api/broadcast", method="POST",
+        data={"message": message}, token=token, timeout=timeout)
+    return ok
 
 async def fetch_tps_via_mod(host: str, port: int, token: str, timeout: float = 5.0) -> Optional[float]:
     """通过模组 API 获取 TPS，返回 TPS 值或 None"""
-    url = build_mod_api_url(host, port, "/api/tps")
-    if not url:
+    ok, payload = await mod_http.request(
+        host, port, "/api/tps", method="GET", token=token, timeout=timeout)
+    if not ok or not isinstance(payload, dict):
         return None
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=timeout) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data.get("success") and "data" in data:
-                        return data["data"].get("tps")
-                return None
-    except Exception:
-        return None
+    data = payload.get("data") or {}
+    return data.get("tps")
 
 # ========== 原有函数（保留，但可能不再使用，保持兼容）==========
 async def fetch_from_plugin(api_url: str, timeout: float = 5.0) -> Optional[List[Dict[str, Any]]]:
@@ -197,7 +182,7 @@ async def query_via_api(host: str, port: int, timeout: float = 5.0) -> Optional[
         pass
     return None
 
-async def ping_server(host: str, timeout: float = 3.0) -> float:
+async def ping_server(host: str, timeout: float = PING_TIMEOUT) -> float:
     """通过 mcstatus 的 ping 方法获取服务器延迟（毫秒）"""
     try:
         server = await asyncio.to_thread(JavaServer.lookup, host)

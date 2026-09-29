@@ -8,17 +8,25 @@ from .image_generator import draw_multi_server_image
 from .checker import (
     fetch_from_plugin, query_one, query_all_servers, query_via_api,
     fetch_player_stats, ping_server,
-    build_mod_api_url, fetch_from_mod_api,
     send_broadcast_via_mod, fetch_tps_via_mod
 )
 from ...config.whitelist_config import WhitelistManager
 from .player_stats_generator import draw_player_stats_image
 from ...utils.avatar_cache import download_avatar
 from ...utils import stats_snapshot
+from ...utils import mod_http
 
 # ========== 工具函数 ==========
 # 合法 Minecraft 玩家名（同时也是 URL 路径/文件名的安全白名单）
 PLAYER_NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,16}$")
+
+# PNG 编码档位。9 + optimize 比 6 贵 3~4 倍（实测 295ms vs 80ms），体积只差百分之几
+PNG_COMPRESS_LEVEL = 6
+
+
+def _save_png(img, path: str) -> None:
+    # 供 asyncio.to_thread 调用：编码是纯 CPU，留在事件循环里会连带卡住整个后端
+    img.save(path, compress_level=PNG_COMPRESS_LEVEL)
 
 
 def build_plugin_api_url(host: str, port: int) -> str:
@@ -56,6 +64,57 @@ def standardize_from_ping(result: dict) -> dict:
     return result
 
 # ========== 在线玩家状态查询 ==========
+async def _collect_server_status(srv: dict, wm: WhitelistManager, token: str) -> dict:
+    """采集单台服务器状态：装了模组走模组 API，失败或未装模组回落 mcstatus。
+
+    延迟字段由调用方覆盖，mcstatus 路径自带 status 测出的延迟。
+    """
+    name = srv["name"]
+    host = srv["host"]
+
+    # ---- 判断是否安装了模组 ----
+    if not wm.has_mod_api(srv):
+        logger.info(f"服务器 {name} 未配置 api_port，视为未安装模组，使用 mcstatus 查询。")
+        raw = await query_one(srv)
+        return standardize_from_ping(raw)
+
+    port = wm.get_server_port(srv)
+
+    # ---- 请求模组 API ----
+    ok, payload = await mod_http.request(host, port, "/api/status", method="GET", token=token)
+    mod_data = payload.get("data", {}) if ok and isinstance(payload, dict) else None
+
+    if mod_data:
+        return {
+            "name": name,
+            "host": host,
+            "online": mod_data.get("online_players", 0),
+            "max": mod_data.get("max_players", 0),
+            "version": mod_data.get("version", "未知"),
+            # 占位：真实延迟来自并发 ping（模组给的 latency 是在线玩家 ping 均值，语义不同）
+            "latency": 0.0,
+            "error": None,
+            "last_activity_time": mod_data.get("last_activity_time", 0),
+            "last_activity_player": mod_data.get("last_activity_player", ""),
+            "players": [
+                {"name": p.get("name"), "uuid": p.get("uuid"), "is_premium": p.get("is_premium", True)}
+                for p in mod_data.get("players", [])
+            ]
+        }
+
+    # 回退到 mcstatus
+    raw = await query_one(srv)
+    return standardize_from_ping(raw)
+
+
+async def _ping_latency(hosts: list) -> list:
+    """并发取「机器人 → 服务器」延迟；失败或不应答返回 0.0，调用方保留原值。"""
+    if not hosts:
+        return []
+    return await asyncio.gather(*[ping_server(h) for h in hosts],
+                                return_exceptions=True)
+
+
 async def run_player_status(event: AstrMessageEvent, config_manager):
     """获取在线玩家状态，统一使用模组 API，若失败则回退到 mcstatus"""
     servers = config_manager.get_all_servers()
@@ -66,83 +125,24 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
     wm = WhitelistManager()
     token = wm.mod_api_token
 
-    # 并发 ping 所有服务器，获取真实网络延迟（机器人 → 服务器）
-    ping_tasks = [
-        asyncio.create_task(ping_server(srv["host"]))
-        for srv in servers
-    ]
-    ping_results = await asyncio.gather(*ping_tasks, return_exceptions=True)
-
-    standardized = []
-
-    for idx, srv in enumerate(servers):
-        name = srv["name"]
-        host = srv["host"]
-
-        # ---- 从 ping 结果取延迟 ----
-        real_latency = 0.0
-        if idx < len(ping_results) and not isinstance(ping_results[idx], Exception):
-            real_latency = ping_results[idx] or 0.0
-
-        # ---- 判断是否安装了模组 ----
-        if not wm.has_mod_api(srv):
-            logger.info(f"服务器 {name} 未配置 api_port，视为未安装模组，使用 mcstatus 查询。")
-            raw = await query_one(srv)
-            data = standardize_from_ping(raw)
-            # 用真实的 ping 延迟覆盖
-            if real_latency > 0:
-                data["latency"] = real_latency
-            standardized.append(data)
-            continue
-
-        port = wm.get_server_port(srv)
-
-        # ---- 请求模组 API ----
-        api_url = build_mod_api_url(host, port, "/api/status")
-        mod_data = None
-        if api_url:
-            try:
-                headers = {}
-                if token:
-                    headers["Authorization"] = f"Bearer {token}"
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(api_url, headers=headers, timeout=5.0) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            if data.get("success"):
-                                mod_data = data.get("data", {})
-            except Exception as e:
-                logger.warning(f"模组 API 请求异常: {e}")
-
-        if mod_data:
-            standardized.append({
-                "name": name,
-                "host": host,
-                "online": mod_data.get("online_players", 0),
-                "max": mod_data.get("max_players", 0),
-                "version": mod_data.get("version", "未知"),
-                "latency": real_latency,
-                "error": None,
-                "last_activity_time": mod_data.get("last_activity_time", 0),
-                "last_activity_player": mod_data.get("last_activity_player", ""),
-                "players": [
-                    {"name": p.get("name"), "uuid": p.get("uuid"), "is_premium": p.get("is_premium", True)}
-                    for p in mod_data.get("players", [])
-                ]
-            })
-        else:
-            # 回退到 mcstatus
-            raw = await query_one(srv)
-            data = standardize_from_ping(raw)
-            if real_latency > 0:
-                data["latency"] = real_latency
-            standardized.append(data)
+    # 延迟与采集并发：它只用来覆盖一个展示字段，不该整段排在关键路径前面。
+    # 只测模组服——mcstatus 路径的 status 结果本身就带这条链路的延迟。
+    ping_idx = [i for i, srv in enumerate(servers) if wm.has_mod_api(srv)]
+    ping_results, standardized = await asyncio.gather(
+        _ping_latency([servers[i]["host"] for i in ping_idx]),
+        asyncio.gather(*[
+            _collect_server_status(srv, wm, token) for srv in servers
+        ]),
+    )
+    for i, r in zip(ping_idx, ping_results):
+        if not isinstance(r, Exception) and r:
+            standardized[i]["latency"] = float(r)
 
     # 生成图片
     try:
         show_last_online = config_manager.is_last_online_enabled()
         img = await draw_multi_server_image(standardized, show_last_online=show_last_online)
-        img.save("mc_status_temp.png", optimize=True, compress_level=9)
+        await asyncio.to_thread(_save_png, img, "mc_status_temp.png")
         yield event.chain_result([AstrImage(file="mc_status_temp.png")])
     except Exception as e:
         logger.error(f"生成图片失败: {e}")
@@ -190,29 +190,16 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
     for srv in targets:
         host = srv["host"]
         port = wm.get_server_port(srv)
-        api_url = build_mod_api_url(host, port, f"/api/stats/{player_name}")
-        if not api_url:
+        ok, payload = await mod_http.request(
+            host, port, f"/api/stats/{player_name}", method="GET", token=token)
+        if not ok or not isinstance(payload, dict):
             continue
-        try:
-            headers = {}
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(api_url, headers=headers, timeout=5.0) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if data.get("success"):
-                            response_data = data.get("data", {})
-                            if response_data:
-                                found_data = response_data
-                                found_server_name = srv["name"]
-                                all_servers_with_data.append((found_server_name, data))
-                                break  # 找到第一个有效数据即跳出
-                    else:
-                        logger.warning(f"模组 stats API 返回非 200: {resp.status}")
-        except Exception as e:
-            logger.warning(f"请求模组 stats 失败: {e}")
-            continue
+        response_data = payload.get("data") or {}
+        if response_data:
+            found_data = response_data
+            found_server_name = srv["name"]
+            all_servers_with_data.append((found_server_name, payload))
+            break  # 找到第一个有效数据即跳出
 
     if found_data is None:
         yield event.plain_result(f"未找到玩家 {player_name} 的统计数据。")

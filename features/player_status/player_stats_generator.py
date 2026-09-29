@@ -140,10 +140,10 @@ CATEGORIES = {
     },
     '战斗': {
         'items': [
-            ('造成伤害', 'damageDealt', '', 3_000_000, FLOW),
-            ('承受伤害', 'damageTaken', '', 1_000_000, FLOW),
-            ('吸收伤害', 'damageAbsorbed', '', 300_000, FLOW),
-            ('盾牌格挡', 'damageBlockedByShield', '', 200_000, FLOW),
+            ('造成伤害', 'damageDealt', '点', 3_000_000, FLOW),
+            ('承受伤害', 'damageTaken', '点', 1_000_000, FLOW),
+            ('吸收伤害', 'damageAbsorbed', '点', 300_000, FLOW),
+            ('盾牌格挡', 'damageBlockedByShield', '点', 200_000, FLOW),
             ('击杀生物', 'mobKills', '', 80_000, ACT),
             ('击杀玩家', 'playerKills', '', 300, ACT),
             ('死亡次数', 'deaths', '', 1_500, NOISE),
@@ -173,17 +173,28 @@ CATEGORIES = {
 }
 
 
+VALUE_TIERS = ((1e12, 'T'), (1e9, 'B'), (1e6, 'M'), (1e3, 'K'))
+
+
 def format_value(val, unit):
-    """格式化数值，超过1000显示为K"""
-    if val is None:
-        val = 0
-    num = float(val)
-    if num >= 1000:
-        display = f"{num/1000:.1f}K"
-    elif isinstance(num, float) and num % 1 != 0:
-        display = f"{num:.2f}"
+    """格式化数值：≥1000 依次进位为 K/M/B/T，保留一位小数"""
+    try:
+        num = float(val or 0)
+    except (TypeError, ValueError):
+        num = 0.0
+    if not math.isfinite(num) or num < 0:
+        num = 0.0
+
+    if num < 1000:
+        display = str(int(num)) if num % 1 == 0 else f"{num:.2f}"
     else:
-        display = str(int(num))
+        div, suffix = VALUE_TIERS[-1]
+        for d, s in VALUE_TIERS:
+            # 0.99995：进位后会显示成 1000.0K 的边界值，提前升一档
+            if num >= d * 0.99995:
+                div, suffix = d, s
+                break
+        display = f"{num / div:.1f}{suffix}"
     return f"{display} {unit}" if unit else display
 
 

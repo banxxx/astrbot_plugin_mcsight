@@ -1,59 +1,34 @@
 import asyncio
-import aiohttp
 import json
 import ssl
 import os
+import threading
 import pymysql
 from dbutils.pooled_db import PooledDB
 from astrbot.api import logger
 from ..config.whitelist_config import WhitelistManager
+from ..utils import mod_http
 
 _pool = None
+_keepalive = {"thread": None, "stop": None}
+
+# 单条 SQL 的读写预算（秒）。中心库在境外，链路一旦进入半死状态，语句会挂在
+# TCP 重传上且没有上界（实测出现过 22 秒），这里给它一个封顶。取值与模组 HTTP
+# 层的 TOTAL_TIMEOUT 对齐，两个外部依赖的失败节奏保持一致。
+DB_SQL_TIMEOUT = 5.0
+# 连接保活间隔。实测跨境链路在 120~240 秒空闲后开始退化，取更小的值留余量。
+DB_KEEPALIVE_INTERVAL = 30.0
+# 保活失败后的退避阶梯，用尽后停在最后一档持续重试
+DB_KEEPALIVE_BACKOFF = (10.0, 30.0, 120.0)
 
 async def call_mod_api(host: str, port: int, token: str, endpoint: str, method: str = "POST", data: dict = None):
     """
-    调用模组 HTTP API
+    调用模组 HTTP API（实现见 utils/mod_http，全局共用一个连接池）
     :return: (是否成功, 响应内容)
              成功时返回 (True, 完整JSON响应字典)
-             失败时返回 (False, 错误消息字符串)
+             失败时返回 (False, 面向用户的错误消息字符串)
     """
-    if not host or host == "self":
-        return False, "无效的服务器地址"
-    if ":" in host:
-        ip, _ = host.split(":", 1)
-    else:
-        ip = host
-    url = f"http://{ip}:{port}{endpoint}"
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            if method.upper() == "POST":
-                async with session.post(url, json=data, headers=headers, timeout=5.0) as resp:
-                    if resp.status == 404:
-                        # 老版本模组没有该接口
-                        return False, f"接口不存在 (HTTP 404)"
-                    result = await resp.json()
-                    if resp.status == 200 and result.get("success") is True:
-                        return True, result
-                    else:
-                        return False, result.get("message", f"API 返回错误 (HTTP {resp.status})")
-            elif method.upper() == "GET":
-                async with session.get(url, params=data, headers=headers, timeout=5.0) as resp:
-                    if resp.status == 404:
-                        return False, f"接口不存在 (HTTP 404)"
-                    result = await resp.json()
-                    if resp.status == 200 and result.get("success") is True:
-                        return True, result
-                    else:
-                        return False, result.get("message", f"请求失败 (HTTP {resp.status})")
-    except aiohttp.ClientError as e:
-        return False, f"连接失败: {e}"
-    except asyncio.TimeoutError:
-        return False, "请求超时，请检查服务器是否在线"
-    except Exception as e:
-        return False, f"未知错误: {e}"
+    return await mod_http.request(host, port, endpoint, method=method, data=data, token=token)
 
 def init_db_pool():
     """初始化同步数据库连接池"""
@@ -94,10 +69,68 @@ def init_db_pool():
             charset='utf8mb4',
             autocommit=True,
             connect_timeout=10,
+            read_timeout=DB_SQL_TIMEOUT,
+            write_timeout=DB_SQL_TIMEOUT,
             ssl=ssl_context
         )
         logger.info(f"同步数据库连接池已初始化，连接至 {wm.db_host}:{wm.db_port}/{wm.db_name}")
     return _pool
+
+
+def _ping_pool():
+    """借出一条连接做一次最轻的查询，既验证可用也让链路保持活跃"""
+    pool = init_db_pool()
+    conn = pool.connection()
+    try:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT 1")
+        finally:
+            cursor.close()
+    finally:
+        conn.close()
+
+
+def _keepalive_loop(stop_event):
+    # 建池要串行做两次跨境全握手（实测 4 秒以上），必须放在线程里；
+    # 放在插件 __init__ 会把整个事件循环卡住
+    step = 0
+    while not stop_event.is_set():
+        try:
+            _ping_pool()
+            step = 0
+            wait = DB_KEEPALIVE_INTERVAL
+        except Exception as e:
+            # 数据库配置未填时不刷屏，直接退出保活
+            if "数据库配置不完整" in str(e) or isinstance(e, FileNotFoundError):
+                logger.info(f"[db] 未配置数据库或证书缺失，保活线程退出: {e}")
+                return
+            wait = DB_KEEPALIVE_BACKOFF[min(step, len(DB_KEEPALIVE_BACKOFF) - 1)]
+            step += 1
+            logger.warning(f"[db] 连接保活失败，{wait:.0f} 秒后重试: {e}")
+        stop_event.wait(wait)
+
+
+def start_db_keepalive():
+    """启动预热+保活守护线程（幂等）"""
+    wm = WhitelistManager()
+    if not (wm.db_host and wm.db_user and wm.db_password):
+        return
+    if _keepalive["thread"] is not None and _keepalive["thread"].is_alive():
+        return
+    stop_event = threading.Event()
+    thread = threading.Thread(target=_keepalive_loop, args=(stop_event,),
+                              name="MCWatcher-DbKeepAlive", daemon=True)
+    _keepalive["stop"] = stop_event
+    _keepalive["thread"] = thread
+    thread.start()
+    logger.info("[db] 连接池预热与保活已启动")
+
+
+def stop_db_keepalive():
+    stop_event = _keepalive["stop"]
+    if stop_event is not None:
+        stop_event.set()
 
 
 def execute_sync_update(sql, params):
@@ -106,10 +139,15 @@ def execute_sync_update(sql, params):
     conn = pool.connection()
     try:
         cursor = conn.cursor()
-        rows = cursor.execute(sql, params)
-        return rows
+        try:
+            # 写操作关掉 DBUtils 的透明重试：超时时语句可能已经到达服务端，
+            # 重放会撞上唯一键，把成功的绑定误报成「已被绑定」
+            with cursor.no_failover():
+                rows = cursor.execute(sql, params)
+            return rows
+        finally:
+            cursor.close()
     finally:
-        cursor.close()
         conn.close()
 
 
