@@ -1,10 +1,11 @@
 import asyncio
+import os
 import re
 import aiohttp
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent
+from astrbot.api.event import AstrMessageEvent, MessageChain
 from astrbot.api.message_components import Image as AstrImage
-from .image_generator import draw_multi_server_image
+from .image_generator import draw_status_pages
 from .checker import (
     fetch_from_plugin, query_one, query_all_servers, query_via_api,
     fetch_player_stats, ping_server,
@@ -15,6 +16,7 @@ from .player_stats_generator import draw_player_stats_image
 from ...utils.avatar_cache import download_avatar
 from ...utils import stats_snapshot
 from ...utils import mod_http
+from ...utils.temp_image import make_temp_png, remove_quietly
 
 # ========== 工具函数 ==========
 # 合法 Minecraft 玩家名（同时也是 URL 路径/文件名的安全白名单）
@@ -22,6 +24,10 @@ PLAYER_NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,16}$")
 
 # PNG 编码档位。9 + optimize 比 6 贵 3~4 倍（实测 295ms vs 80ms），体积只差百分之几
 PNG_COMPRESS_LEVEL = 6
+
+# /在线 分页发送
+PAGE_SEND_GAP = 0.8                  # 多页之间的间隔，防刷屏/风控
+PNG_SIZE_WARN = 10 * 1024 * 1024     # 单页 PNG 体积告警阈值
 
 
 def _save_png(img, path: str) -> None:
@@ -139,15 +145,39 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
         if not isinstance(r, Exception) and r:
             standardized[i]["latency"] = float(r)
 
-    # 生成图片
+    # 生成图片（按高度预算自动分页，绝大多数情况只有一页）
     try:
         show_last_online = config_manager.is_last_online_enabled()
-        img = await draw_multi_server_image(standardized, show_last_online=show_last_online)
-        await asyncio.to_thread(_save_png, img, "mc_status_temp.png")
-        yield event.chain_result([AstrImage(file="mc_status_temp.png")])
+        images = await draw_status_pages(standardized, show_last_online=show_last_online)
     except Exception as e:
         logger.error(f"生成图片失败: {e}")
         yield event.plain_result(f"生成图片失败: {e}")
+        return
+
+    # 逐页落盘直发：yield 出去的链会被 AstrBot 攒到最后才发，而图片是发送那一刻
+    # 才读盘的，所以必须 event.send 直发（await 返回时字节已读走）后才能删文件
+    paths = []
+    try:
+        for idx, img in enumerate(images):
+            path = make_temp_png("mc_status_")
+            await asyncio.to_thread(_save_png, img, path)
+            paths.append(path)
+            size = os.path.getsize(path)
+            if size > PNG_SIZE_WARN:
+                logger.warning(f"/在线 第 {idx + 1} 页图片体积 {size / 1048576:.1f}MB 偏大，"
+                               "若发送失败可调低 image_generator.PAGE_HEIGHT_BUDGET")
+            if idx:
+                await asyncio.sleep(PAGE_SEND_GAP)
+            try:
+                await event.send(MessageChain([AstrImage(file=path)]))
+            except Exception as e:
+                logger.error(f"/在线 第 {idx + 1}/{len(images)} 页发送失败: {e}")
+                yield event.plain_result(
+                    f"❌ 第 {idx + 1}/{len(images)} 张图片发送失败，前面 {idx} 张已发出。")
+                return
+    finally:
+        for path in paths:
+            await asyncio.to_thread(remove_quietly, path)
 
 # ========== 玩家统计数据查询 ==========
 async def run_player_stats(event: AstrMessageEvent, config_manager, player_name: str, target_server: str = None):
@@ -216,8 +246,11 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
     stats_snapshot.save_snapshot(player_name, found_server_name, found_data)
 
     is_online = found_data.get('online', False)
+    img_path = make_temp_png("mc_stats_")
     try:
-        img = await draw_player_stats_image(
+        # 渲染 + PNG 编码都是纯 CPU 重活，放线程池执行，避免卡住事件循环
+        img = await asyncio.to_thread(
+            draw_player_stats_image,
             found_data,
             player_name,
             server_name=found_server_name,
@@ -227,11 +260,13 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
             baseline_stats=baseline_stats,
             window_days=window_days
         )
-        img.save("player_stats_temp.png", optimize=True, compress_level=9)
-        yield event.chain_result([AstrImage(file="player_stats_temp.png")])
+        await asyncio.to_thread(_save_png, img, img_path)
+        await event.send(MessageChain([AstrImage(file=img_path)]))
     except Exception as e:
         logger.error(f"生成玩家统计图片失败: {e}")
         yield event.plain_result(f"生成图片失败: {e}")
+    finally:
+        await asyncio.to_thread(remove_quietly, img_path)
 
     # 多服务器提示
     if not target_server and len(all_servers_with_data) > 1:

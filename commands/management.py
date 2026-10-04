@@ -1,6 +1,15 @@
 from astrbot.api.event import AstrMessageEvent
-from ..config.server_config import ConfigManager
+from ..config.server_config import ConfigManager, MAX_SERVERS_PER_GROUP
 from ..config.whitelist_config import WhitelistManager
+from ..utils.host_validator import validate_host
+from ..utils.permission import is_astrbot_super_admin
+
+
+def _caller_allows_private(event: AstrMessageEvent) -> bool:
+    """内网/回环地址只允许插件超级管理员添加，防止群管理员借机器人探测内网。"""
+    wm = WhitelistManager()
+    return is_astrbot_super_admin(event) or wm.is_super_admin(str(event.get_sender_id()))
+
 
 async def handle_add(event: AstrMessageEvent, config: ConfigManager, parts: list):
     if len(parts) < 3 or len(parts) > 4:
@@ -17,6 +26,14 @@ async def handle_add(event: AstrMessageEvent, config: ConfigManager, parts: list
         except ValueError:
             yield event.plain_result("端口必须是 1-65535 的数字")
             return
+    host_err = validate_host(host, allow_private=_caller_allows_private(event))
+    if host_err:
+        yield event.plain_result(f"❌ 添加失败：{host_err}")
+        return
+    if len(config.get_all_servers()) >= MAX_SERVERS_PER_GROUP:
+        yield event.plain_result(
+            f"❌ 添加失败：每个群最多绑定 {MAX_SERVERS_PER_GROUP} 个服务器。")
+        return
     success = config.add_server(name, host, port)
     yield event.plain_result(f"添加{'成功' if success else '失败（名称已存在）'}：{name}")
 
@@ -44,6 +61,10 @@ async def handle_edit(event: AstrMessageEvent, config: ConfigManager, parts: lis
         success = config.rename_server(target, value)
         yield event.plain_result(f"重命名{'成功' if success else '失败（名称不存在或新名称已占用）'}。")
     elif mode == "host":
+        host_err = validate_host(value, allow_private=_caller_allows_private(event))
+        if host_err:
+            yield event.plain_result(f"❌ 修改失败：{host_err}")
+            return
         success = config.edit_server_host(target, value)
         yield event.plain_result(f"修改IP{'成功' if success else '失败（名称不存在）'}。")
     elif mode == "port":
@@ -67,7 +88,10 @@ async def handle_batchadd(event: AstrMessageEvent, config: ConfigManager, parts:
     if len(parts) < 2:
         yield event.plain_result("用法: /mc batchadd name1:ip1[:port1],name2:ip2[:port2],...")
         return
-    s, f = config.batch_add(parts[1])
+    allow_private = _caller_allows_private(event)
+    s, f = config.batch_add(
+        parts[1],
+        host_validator=lambda h: validate_host(h, allow_private=allow_private))
     yield event.plain_result(f"批量添加：成功 {s} 个" + (f"，失败: {', '.join(f)}" if f else ""))
 
 async def handle_batchremove(event: AstrMessageEvent, config: ConfigManager, parts: list):

@@ -58,6 +58,10 @@ CHIP_LAST = ('#8b93a7', '#f5f6f8', '#e6e9ef')
 REMARK_SIZE = 14
 REMARK_COLOR = '#a5aabb'
 REMARK_LINE_H = 18
+REMARK_MAX_LINES = 2    # 备注最多折行数，超长以 … 结尾
+REMARK_Y_OFF = 3        # 备注首行下移量：完全避开上方胶囊的底部边缘
+# 备注可用宽度：与容量条/玩家网格同宽（左对齐 px0，右至卡片内缘）
+REMARK_MAX_W = WIDTH - 2 * PAD - 2 * CARD_PAD_X
 
 COUNT_NUM_SIZE = 22
 COUNT_TXT_SIZE = 18
@@ -89,6 +93,15 @@ NOTE_H = 30
 TIME_SIZE = 16
 TIME_COLOR = '#aaaaaa'
 TIME_GAP = 24
+
+# ========== 分页（长图优先：只按高度天花板装箱） ==========
+# 单位均为设计单位（渲染时 ×SCALE=2）。PAGE_HEIGHT_BUDGET=6000 → 成品 2160×12000px，
+# 是"QQ 能发出"与"手机上还能看"的交点；人数不再单独设预算，高度天然约束人数。
+PAGE_HEIGHT_BUDGET = 6000
+MAX_PAGES = 5                     # 防刷屏保险：超出部分折叠并在末页提示单查
+HEADER_FOOTER_H = 170             # 标题+总在线+页脚的预估高度
+PAGE_NOTE_RESERVE = 36            # 末页"还有 N 个服务器未展示"提示行预留
+FOLD_ROW_H = 34                   # 卡片内"…还有 N 人在线"折叠行高度
 
 AVATAR_DOWNLOAD_CONCURRENCY = 10
 
@@ -159,6 +172,115 @@ def _make_rounded(img: Image.Image, radius: int) -> Image.Image:
     return img
 
 
+def _layout_remark(text: str, max_w: float):
+    """备注折行：最多 REMARK_MAX_LINES 行，放不下时末行以 … 结尾。
+
+    高度估算（_card_height）与绘制（_draw_card）共用本函数，行数永不漂移。
+    测量用字体 getlength，与 add_text 的实际绘制同源。
+    """
+    font = _font(REMARK_SIZE)
+    ell_w = font.getlength('…')
+    lines, cur, cur_w = [], '', 0.0
+    for ch in text:
+        w = font.getlength(ch)
+        if cur and cur_w + w > max_w:
+            lines.append(cur)
+            cur, cur_w = '', 0.0
+        cur += ch
+        cur_w += w
+    if cur:
+        lines.append(cur)
+    if len(lines) <= REMARK_MAX_LINES:
+        return lines
+    # 超出行数：前 N-1 行完整保留，剩余内容填入末行并预留省略号宽度
+    kept = lines[:REMARK_MAX_LINES - 1]
+    last, last_w = '', 0.0
+    for ch in ''.join(lines[REMARK_MAX_LINES - 1:]):
+        w = font.getlength(ch)
+        if last and last_w + w > max_w - ell_w:
+            break
+        last += ch
+        last_w += w
+    kept.append(last + '…')
+    return kept
+
+
+# ========== 高度估算与分页装箱 ==========
+def _grid_rows(n: int) -> int:
+    return (n + COLS - 1) // COLS if n else 0
+
+
+def _card_height(card: Dict[str, Any]) -> int:
+    """卡片高度（设计单位）。_draw_card 的绘制高度以本函数为准，二者必须一致。"""
+    players = card['players']
+    limit = card.get('display_limit')
+    n = len(players) if limit is None else min(len(players), limit)
+    if n:
+        rows = _grid_rows(n)
+        content_h = rows * AVATAR + (rows - 1) * GAP_ROW
+        card_h = (CARD_PAD_TOP + HEAD_H + CAP_Y_GAP + CAP_H
+                  + DIV_GAP_TOP + 1 + DIV_GAP_BOTTOM + content_h
+                  + CARD_PAD_BOTTOM)
+    elif card['error']:
+        # 离线紧凑卡：无分割线与内容区
+        card_h = CARD_PAD_TOP + HEAD_H + CAP_Y_GAP + CAP_H + 16
+    else:
+        # 在线但列表隐藏 / 无人：一行说明文字
+        card_h = (CARD_PAD_TOP + HEAD_H + CAP_Y_GAP + CAP_H
+                  + DIV_GAP_TOP + 1 + DIV_GAP_BOTTOM + NOTE_H
+                  + CARD_PAD_BOTTOM)
+    if limit is not None and len(players) > limit:
+        card_h += FOLD_ROW_H
+    remark = (card.get('remark') or '').strip()
+    if remark:
+        card_h += len(_layout_remark(remark, REMARK_MAX_W)) * REMARK_LINE_H
+    return card_h
+
+
+def _max_players_for_height(card: Dict[str, Any], avail: int) -> int:
+    """单卡高度超过页高时，算出能放下的最大展示人数（按整行、至少一行）。"""
+    base = (CARD_PAD_TOP + HEAD_H + CAP_Y_GAP + CAP_H
+            + DIV_GAP_TOP + 1 + DIV_GAP_BOTTOM + CARD_PAD_BOTTOM
+            + FOLD_ROW_H)  # 被截断的卡必带折叠行
+    remark = (card.get('remark') or '').strip()
+    if remark:
+        base += len(_layout_remark(remark, REMARK_MAX_W)) * REMARK_LINE_H
+    room = avail - base
+    if room < AVATAR:
+        return COLS
+    max_rows = (room + GAP_ROW) // (AVATAR + GAP_ROW)
+    return max(COLS, max_rows * COLS)
+
+
+def split_into_pages(cards: List[Dict[str, Any]]):
+    """按配置顺序贪心装箱。
+
+    单卡整卡高度超过页高时独占一页并按整行截断玩家网格（display_limit）。
+    返回 (pages, dropped_count)：pages 为卡片列表的列表；dropped_count 为被
+    MAX_PAGES 挤掉的服务器数（末页折叠提示）。
+    """
+    avail = PAGE_HEIGHT_BUDGET - HEADER_FOOTER_H - PAGE_NOTE_RESERVE
+    pages, cur, cur_h = [], [], 0
+    for card in cards:
+        card = dict(card)
+        h = _card_height(card)
+        if h > avail:
+            card['display_limit'] = _max_players_for_height(card, avail)
+            h = _card_height(card)
+        if cur and cur_h + h > avail:
+            pages.append(cur)
+            cur, cur_h = [], 0
+        cur.append(card)
+        cur_h += h
+    if cur:
+        pages.append(cur)
+    dropped = 0
+    if len(pages) > MAX_PAGES:
+        dropped = sum(len(p) for p in pages[MAX_PAGES:])
+        pages = pages[:MAX_PAGES]
+    return pages, dropped
+
+
 # ========== 卡片绘制 ==========
 def _draw_card(draw, ops, card, y):
     x0, x1 = PAD, WIDTH - PAD
@@ -171,10 +293,12 @@ def _draw_card(draw, ops, card, y):
     head_top = y + CARD_PAD_TOP
     col_w = (inner_w - (COLS - 1) * GAP_COL) / COLS
 
-    # 内容区高度
+    # 内容区（display_limit 截断后实际展示的玩家）
     players = card['players']
-    if players:
-        rows = (len(players) + COLS - 1) // COLS
+    limit = card.get('display_limit')
+    shown = players if limit is None else players[:limit]
+    if shown:
+        rows = _grid_rows(len(shown))
         content_h = rows * AVATAR + (rows - 1) * GAP_ROW
         content_kind = 'grid'
     elif is_offline:
@@ -184,16 +308,10 @@ def _draw_card(draw, ops, card, y):
         content_h = NOTE_H
         content_kind = 'note'
 
-    if content_kind == 'none':
-        card_h = CARD_PAD_TOP + HEAD_H + CAP_Y_GAP + CAP_H + 16
-    else:
-        card_h = (CARD_PAD_TOP + HEAD_H + CAP_Y_GAP + CAP_H
-                  + DIV_GAP_TOP + 1 + DIV_GAP_BOTTOM
-                  + content_h + CARD_PAD_BOTTOM)
+    # 高度统一由 _card_height 决定（分页装箱与绘制共用一套公式，不会漂移）
+    card_h = _card_height(card)
 
     remark = (card.get('remark') or '').strip()
-    if remark:
-        card_h += REMARK_LINE_H
 
     add_shadow(ops, x0, y, x1 - x0, card_h, CARD_RADIUS)
     add_rect(ops, 'bg0', x0, y, x1 - x0, card_h, CARD_RADIUS, card_bg)
@@ -264,13 +382,15 @@ def _draw_card(draw, ops, card, y):
     add_text(ops, cursor + num_w, head_top + 6, suf_s, COUNT_TXT_SIZE,
              COUNT_TXT_COLOR)
 
-    # 备注行（服务器整合包名/说明），空则不占高度
+    # 备注行：与容量条/玩家网格左对齐（px0），首行下移避开胶囊底部，
+    # 最多 REMARK_MAX_LINES 行，超长由 _layout_remark 以 … 结尾
     body_top = head_top + HEAD_H
     if remark:
-        add_text(ops, name_x, body_top,
-                 _truncate(draw, remark, REMARK_SIZE, px1 - name_x),
-                 REMARK_SIZE, REMARK_COLOR)
-        body_top += REMARK_LINE_H
+        remark_lines = _layout_remark(remark, REMARK_MAX_W)
+        for i, line in enumerate(remark_lines):
+            add_text(ops, px0, body_top + REMARK_Y_OFF + i * REMARK_LINE_H,
+                     line, REMARK_SIZE, REMARK_COLOR)
+        body_top += len(remark_lines) * REMARK_LINE_H
 
     # 容量条
     cap_y = body_top + CAP_Y_GAP
@@ -290,7 +410,7 @@ def _draw_card(draw, ops, card, y):
     gy = div_y + 1 + DIV_GAP_BOTTOM
 
     if content_kind == 'grid':
-        for i, p in enumerate(players):
+        for i, p in enumerate(shown):
             row, col = divmod(i, COLS)
             sx = px0 + col * (col_w + GAP_COL)
             sy = gy + row * (AVATAR + GAP_ROW)
@@ -301,6 +421,12 @@ def _draw_card(draw, ops, card, y):
             add_text(ops, sx + AVATAR + GAP_NAME,
                      sy + (AVATAR - PNAME_SIZE) / 2 + 2,
                      pn, PNAME_SIZE, PNAME_COLOR)
+        if limit is not None and len(players) > limit:
+            t = f"…还有 {len(players) - limit} 人在线，仅显示前 {limit} 位"
+            tw = text_w(draw, t, NOTE_SIZE)
+            add_text(ops, px0 + (inner_w - tw) / 2,
+                     gy + content_h + (FOLD_ROW_H - NOTE_SIZE) / 2,
+                     t, NOTE_SIZE, NOTE_COLOR)
     else:
         if card['online'] > 0:
             t = f"{card['online']} 人在线（玩家列表不可见）"
@@ -323,15 +449,29 @@ def _build_status(draw, ops, doc, y):
     add_text(ops, (WIDTH - title_w) / 2, y, TITLE_TEXT, TITLE_SIZE, ACCENT)
     y += TITLE_SIZE + HEADER_GAP
 
+    # 总在线为全局口径（每页一致）；多页时附页码
     runs = [("总在线: ", TOTAL_COLOR), (str(doc['total_online']), ACCENT),
             (" 人", TOTAL_COLOR)]
+    page = doc.get('page') or {}
+    if page.get('total', 1) > 1:
+        runs.append((f"  ·  第 {page['index']}/{page['total']} 页", TOTAL_COLOR))
     tw = sum(text_w(draw, t, TOTAL_SIZE) for t, _ in runs)
     place_runs(ops, draw, (WIDTH - tw) / 2, y, runs, TOTAL_SIZE)
     y += TOTAL_SIZE + HEADER_BOTTOM
 
     for card in doc['cards']:
         y += _draw_card(draw, ops, card, y) + CARD_GAP
-    y = y - CARD_GAP + TIME_GAP
+    y -= CARD_GAP
+
+    # 被 MAX_PAGES 挤掉的服务器：末页折叠提示
+    if doc.get('dropped_count'):
+        t = (f"…还有 {doc['dropped_count']} 个服务器未展示，"
+             f"可用 /mc status -s <服务器名> 单独查询")
+        nw = text_w(draw, t, NOTE_SIZE)
+        add_text(ops, (WIDTH - nw) / 2, y + 4, t, NOTE_SIZE, NOTE_COLOR)
+        y += NOTE_H
+
+    y += TIME_GAP
 
     now = doc['now_str']
     nw = text_w(draw, now, TIME_SIZE)
@@ -339,8 +479,9 @@ def _build_status(draw, ops, doc, y):
     return y + TIME_SIZE
 
 
-async def draw_multi_server_image(servers_data: List[Dict[str, Any]],
-                                  show_last_online: bool = False) -> Image.Image:
+async def draw_status_pages(servers_data: List[Dict[str, Any]],
+                            show_last_online: bool = False) -> List[Image.Image]:
+    """生成 /在线 的全部页面图片（按高度预算自动分页，通常只有一页）。"""
     wm = WhitelistManager()
     show_version = wm.show_server_version
     show_latency = wm.show_server_latency
@@ -406,7 +547,7 @@ async def draw_multi_server_image(servers_data: List[Dict[str, Any]],
         ]
 
     total_online = sum(c['online'] for c in cards if not c['error'])
-    doc = {'cards': cards, 'now_str': now_str, 'total_online': total_online}
+    pages, dropped = split_into_pages(cards)
 
     def _paste(op, img):
         _, x, y, ava = op
@@ -419,6 +560,13 @@ async def draw_multi_server_image(servers_data: List[Dict[str, Any]],
                              _font(size * SCALE), color, emoji_scale=0.95)
 
     # 绘制是纯 CPU，挪出事件循环，避免 /在线 期间卡住整个后端
-    return await asyncio.to_thread(
-        build_image, _build_status, doc,
-        extra_handlers={'paste': _paste, 'emoji': _render_emoji})
+    images = []
+    for idx, page_cards in enumerate(pages):
+        doc = {'cards': page_cards, 'now_str': now_str,
+               'total_online': total_online,
+               'page': {'index': idx + 1, 'total': len(pages)},
+               'dropped_count': dropped if idx == len(pages) - 1 else 0}
+        images.append(await asyncio.to_thread(
+            build_image, _build_status, doc,
+            extra_handlers={'paste': _paste, 'emoji': _render_emoji}))
+    return images

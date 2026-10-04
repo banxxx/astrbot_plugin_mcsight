@@ -672,7 +672,7 @@ def _build_stats(draw, ops, doc, y):
 DEFAULT_WINDOW_DAYS = 7
 
 
-async def draw_player_stats_image(
+def draw_player_stats_image(
     stats_data: Dict[str, Any],
     player_name: str,
     server_name: str = None,
@@ -683,6 +683,9 @@ async def draw_player_stats_image(
     window_days: Optional[int] = None
 ) -> Image.Image:
     """生成玩家统计图片（雷达图+环形图+分类明细，2x 超采样）
+
+    同步函数、纯 CPU 重活：调用方必须用 asyncio.to_thread 执行，
+    直接在事件循环里调用会卡住整个后端。
 
     baseline_stats 为历史某日的累计值；给了它，两图就改画"近 window_days 天"
     的增量（雷达另用灰色虚线保留历史累计轮廓作参照）。

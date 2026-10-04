@@ -28,6 +28,17 @@ async def handle_mc_command(event: AstrMessageEvent):
     else:
         config = ConfigManager(session_id=event.session_id)
 
+    # 黑名单闸门：配置承诺黑名单用户无法使用插件的所有功能，
+    # 所有命令都汇聚到本入口，在这里统一拦截（在防抖与解析之前）。
+    # 用同步的 is_blacklisted 而非 get_user_permission_level()，
+    # 避免普通命令为非黑名单用户多付一次群成员信息 API 查询。
+    wm = WhitelistManager()
+    user_id = str(event.get_sender_id())
+    if wm.is_blacklisted(user_id):
+        logger.info(f"[blacklist] 拦截用户 {user_id} 的命令: {event.message_str[:50]}")
+        yield event.plain_result("您已被列入黑名单，无法使用本插件的功能。")
+        return
+
     msg = event.message_str.strip()
     if msg.startswith('/'):
         msg = msg[1:]
@@ -43,8 +54,6 @@ async def handle_mc_command(event: AstrMessageEvent):
 
     # 防抖：中文别名、正则别名和裸 /mc 都汇聚到这里，sub_cmd 已是归一后的真命令，
     # 在这一个入口生效即覆盖所有命令。超管不受限，方便连测。
-    wm = WhitelistManager()
-    user_id = str(event.get_sender_id())
     if not (is_astrbot_super_admin(event) or wm.is_super_admin(user_id)):
         scope = str(group_id or event.session_id)
         allowed, remaining = debounce.gate(scope, user_id, sub_cmd)

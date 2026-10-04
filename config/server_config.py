@@ -2,6 +2,9 @@ import json
 import os
 from typing import List, Dict, Tuple, Optional
 
+# 每个群最多绑定的服务器数量（/mc add、/mc batchadd 时拦截）
+MAX_SERVERS_PER_GROUP = 20
+
 class ConfigManager:
     def __init__(self, group_id: Optional[int] = None, session_id: Optional[str] = None, base_path: str = None):
         if base_path is None:
@@ -96,7 +99,8 @@ class ConfigManager:
         return False
 
     # ---------- 修改：batch_add 支持端口 ----------
-    def batch_add(self, servers_str: str) -> Tuple[int, List[str]]:
+    def batch_add(self, servers_str: str, host_validator=None) -> Tuple[int, List[str]]:
+        """host_validator: 可选回调 (host) -> 拒绝原因或 None，非法 host 记入失败列表"""
         data = self._load()
         existing = {s["name"] for s in data["servers"]}
         success = 0
@@ -124,8 +128,16 @@ class ConfigManager:
             if not name or not host:
                 failed.append(pair)
                 continue
+            if host_validator is not None:
+                host_err = host_validator(host)
+                if host_err:
+                    failed.append(f"{name} ({host_err})")
+                    continue
             if name in existing:
                 failed.append(f"{name} (已存在)")
+                continue
+            if len(data["servers"]) >= MAX_SERVERS_PER_GROUP:
+                failed.append(f"{name} (超出每群 {MAX_SERVERS_PER_GROUP} 个服务器上限)")
                 continue
             entry = {"name": name, "host": host}
             if port is not None:

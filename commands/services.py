@@ -1,5 +1,6 @@
 import asyncio
-from astrbot.api.event import AstrMessageEvent
+
+from astrbot.api.event import AstrMessageEvent, MessageChain
 from astrbot.api import logger
 from astrbot.api.message_components import Image as AstrImage
 from ..config.server_config import ConfigManager
@@ -7,6 +8,7 @@ from ..config.whitelist_config import WhitelistManager
 from ..features.player_status.checker import send_broadcast_via_mod, fetch_tps_via_mod
 from ..features.player_status.controller import run_player_status, run_player_stats
 from ..features.player_status.tps_image_generator import draw_tps_image
+from ..utils.temp_image import make_temp_png, remove_quietly
 
 # ---------- 广播 ----------
 async def handle_say(event: AstrMessageEvent, config: ConfigManager, parts: list):
@@ -119,13 +121,19 @@ async def handle_tps(event: AstrMessageEvent, config: ConfigManager, parts: list
             "name": srv["name"],
             "tps": tps
         })
+    img_path = make_temp_png("mc_tps_")
     try:
-        img = draw_tps_image(server_data)
-        img.save("tps_temp.png")
-        yield event.chain_result([AstrImage(file="tps_temp.png")])
+        # 绘制与编码放线程池执行，避免阻塞事件循环
+        img = await asyncio.to_thread(draw_tps_image, server_data)
+        await asyncio.to_thread(img.save, img_path)
+        # yield 出的链会被 AstrBot 攒到最后才发，而图片发送时才读盘，
+        # 所以必须 event.send 直发（await 返回时字节已读走），发完才能删文件
+        await event.send(MessageChain([AstrImage(file=img_path)]))
     except Exception as e:
         logger.error(f"生成 TPS 图片失败: {e}")
         yield event.plain_result(f"生成图片失败: {e}")
+    finally:
+        await asyncio.to_thread(remove_quietly, img_path)
 
 # ---------- 状态和统计 ----------
 async def handle_status(event: AstrMessageEvent, config: ConfigManager):

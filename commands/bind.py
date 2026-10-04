@@ -152,7 +152,7 @@ async def _do_unbind_by_game_id(event, config, wm, use_central, game_id,
             )
         except Exception as e:
             logger.error(f"数据库删除失败: {e}")
-            yield event.plain_result(f"❌ 解绑失败（数据库操作失败）\n错误：{str(e)}")
+            yield event.plain_result("❌ 解绑失败（数据库操作失败），请稍后再试；若持续失败请联系管理员查看日志。")
             return
         if rows > 0:
             yield event.plain_result(
@@ -285,7 +285,7 @@ async def _do_unbind_by_qq(event, config, wm, use_central, target_qq,
             )
         except Exception as e:
             logger.error(f"数据库删除失败: {e}")
-            yield event.plain_result(f"❌ 解绑失败（数据库操作失败）\n错误：{str(e)}")
+            yield event.plain_result("❌ 解绑失败（数据库操作失败），请稍后再试；若持续失败请联系管理员查看日志。")
             return
 
         yield event.plain_result(
@@ -588,10 +588,7 @@ async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: lis
             return
         except Exception as e:
             logger.error(f"数据库写入失败: {e}")
-            yield event.plain_result(
-                f"❌ 绑定失败（数据库操作失败）\n"
-                f"错误：{str(e)}"
-            )
+            yield event.plain_result("❌ 绑定失败（数据库操作失败），请稍后再试；若持续失败请联系管理员查看日志。")
             return
 
         if rows > 0:
@@ -931,7 +928,7 @@ async def handle_check(event: AstrMessageEvent, config: ConfigManager, parts: li
                         yield event.plain_result(f"{title}\n  ❌ 未绑定（QQ和游戏ID均未绑定）")
         except Exception as e:
             logger.error(f"数据库查询失败: {e}")
-            yield event.plain_result(f"❌ 查询失败（数据库操作失败）\n错误：{str(e)}")
+            yield event.plain_result("❌ 查询失败（数据库操作失败），请稍后再试。")
         return
 
     # ============================================================
