@@ -9,3 +9,4 @@ from .management import (
 from .services import handle_say, handle_tps, handle_status, handle_stats
 from .bind import handle_bind, handle_unbind, handle_check
 from .nickname_check import handle_checknick, handle_nicknamecheck_switch
+from .bind_check import handle_bindcheck

@@ -187,6 +187,14 @@ class MCWatcher(Star):
         async for result in handle_mc_command(event):
             yield result
 
+    # ---------- 群内未绑定成员检测 ----------
+    @filter.command("绑定检测", aliases=["bindcheck"])
+    async def bindcheck_command(self, event: AstrMessageEvent):
+        """列出本群中未绑定任何游戏账号的成员（仅管理员）"""
+        event.message_str = "/mc bindcheck"
+        async for result in handle_mc_command(event):
+            yield result
+
     async def terminate(self):
         stop_db_keepalive()
         await mod_http.close_session()

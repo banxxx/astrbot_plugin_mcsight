@@ -18,7 +18,7 @@ from ..commands import (
     handle_list, handle_move, handle_swap, handle_lastonline,
     handle_say, handle_tps, handle_status, handle_stats,
     handle_bind, handle_unbind, handle_check,
-    handle_checknick, handle_nicknamecheck_switch
+    handle_checknick, handle_nicknamecheck_switch, handle_bindcheck
 )
 
 async def handle_mc_command(event: AstrMessageEvent):
@@ -57,7 +57,7 @@ async def handle_mc_command(event: AstrMessageEvent):
             return
 
     # 权限检查（管理命令）
-    admin_cmds = {"add", "remove", "edit", "batchadd", "batchremove", "move", "swap", "lastonline", "checknick", "nicknamecheck", "say"}
+    admin_cmds = {"add", "remove", "edit", "batchadd", "batchremove", "move", "swap", "lastonline", "checknick", "nicknamecheck", "bindcheck", "say"}
     if sub_cmd in admin_cmds:
         if not await check_permission(event, sub_cmd):
             yield event.plain_result("权限不足：该操作需要群管理员或插件管理员权限。")
@@ -126,6 +126,9 @@ async def handle_mc_command(event: AstrMessageEvent):
             yield result
     elif sub_cmd == "nicknamecheck":
         async for result in handle_nicknamecheck_switch(event, config, parts):
+            yield result
+    elif sub_cmd == "bindcheck":
+        async for result in handle_bindcheck(event, config, parts):
             yield result
     else:
         yield event.plain_result(f"未知子命令: {sub_cmd}，使用 /mc help 查看帮助。")

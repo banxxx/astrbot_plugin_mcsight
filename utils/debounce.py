@@ -14,7 +14,7 @@ WINDOW_HEAVY = 5.0
 WINDOW_MEDIUM = 3.0
 WINDOW_LIGHT = 1.0
 
-HEAVY_CMDS = {"status", "stats", "tps", "checknick"}
+HEAVY_CMDS = {"status", "stats", "tps", "checknick", "bindcheck"}
 # help/bindhelp 命中缓存不出网，但每次都是一条图片消息
 MEDIUM_CMDS = {"bind", "unbind", "check", "say", "help", "bindhelp"}
 

@@ -37,6 +37,11 @@ CAT_DISCONNECTED = "disconnected"
 CAT_UNSUPPORTED_METHOD = "unsupported_method"
 CAT_SKIPPED = "breaker_skipped"
 CAT_UNKNOWN = "unknown"
+# 模组业务层拒绝（HTTP 4xx + 可读 JSON），以及其中唯一的「调用方被限流」情形：
+# 模组按出口 IP 记失败次数，插件是所有人的共用出口，所以 429 不是这个用户错，
+# 而是全体共享的额度被打光。二者必须与「码确实无效」分开统计，见 category_of。
+CAT_BUSINESS_REJECTED = "business_rejected"
+CAT_RATE_LIMITED = "rate_limited"
 
 _USER_TEXT = {
     CAT_INVALID_HOST: "无效的服务器地址",
@@ -51,11 +56,33 @@ _USER_TEXT = {
     CAT_DISCONNECTED: "模组中断了连接",
     CAT_UNSUPPORTED_METHOD: "不支持的请求方法",
     CAT_UNKNOWN: "请求模组失败",
+    CAT_BUSINESS_REJECTED: "模组拒绝了本次请求",
+    CAT_RATE_LIMITED: "该服务器的验证请求已被限流（近期失败次数过多）",
 }
 
 # 跳过文案带剩余秒数，单独模板；不含「404/不存在」，
 # 因此在 bind.py 的失败分组里会正确落到「同步失败」而不是「模组过旧」
 _SKIPPED_TEXT = "该服务器近期连续连不上，已暂时跳过（约 {seconds} 秒后自动重试）"
+
+
+class ModError(str):
+    """失败时的返回值：内容是给用户看的文案，另外携带机器可读的分类。
+
+    继承 str 是为了不改动既有调用点——它们一律把这个返回值当文本拼接或做子串匹配。
+    """
+
+    def __new__(cls, text, category=CAT_UNKNOWN, status=0, code=0):
+        obj = super().__new__(cls, text)
+        obj.category = category
+        obj.status = status
+        obj.code = code
+        return obj
+
+
+def category_of(err) -> str:
+    """取失败返回值的分类；不带分类的值（历史桩、非 ModError 文本）返回空串。"""
+    return getattr(err, "category", "") or ""
+
 
 _session: Optional[aiohttp.ClientSession] = None
 _session_loop = None
@@ -159,10 +186,11 @@ async def request(host: str, port: Any, endpoint: str,
     """请求模组 API。
 
     成功返回 (True, 完整 JSON 字典)；失败返回 (False, 面向用户的简短文案)。
+    失败文案是 ModError（str 子类），需要区分失败性质时用 category_of() 取分类。
     异常原文、状态码、响应片段只进日志，不回传给聊天侧。
     """
     if not host or host == "self":
-        return False, _USER_TEXT[CAT_INVALID_HOST]
+        return False, ModError(_USER_TEXT[CAT_INVALID_HOST], CAT_INVALID_HOST)
     ip = host.split(":", 1)[0] if ":" in host else host
     url = f"http://{ip}:{port}{endpoint}"
     target = f"{ip}:{port}{endpoint}"
@@ -171,7 +199,8 @@ async def request(host: str, port: Any, endpoint: str,
     cooldown_left = _breaker_cooldown_left(key)
     if cooldown_left is not None:
         _log(CAT_SKIPPED, target, f"cooldown_left={int(cooldown_left)}s")
-        return False, _SKIPPED_TEXT.format(seconds=int(cooldown_left) + 1)
+        return False, ModError(_SKIPPED_TEXT.format(seconds=int(cooldown_left) + 1),
+                               CAT_SKIPPED)
 
     headers = {"Content-Type": "application/json"}
     if token:
@@ -189,7 +218,7 @@ async def request(host: str, port: Any, endpoint: str,
         if data is not None:
             kwargs["params"] = data
     else:
-        return False, _USER_TEXT[CAT_UNSUPPORTED_METHOD]
+        return False, ModError(_USER_TEXT[CAT_UNSUPPORTED_METHOD], CAT_UNSUPPORTED_METHOD)
 
     try:
         session = await get_session()
@@ -200,7 +229,7 @@ async def request(host: str, port: Any, endpoint: str,
 
             if resp.status == 404:
                 _log(CAT_NOT_FOUND, target, f"status={resp.status}")
-                return False, _USER_TEXT[CAT_NOT_FOUND]
+                return False, ModError(_USER_TEXT[CAT_NOT_FOUND], CAT_NOT_FOUND, resp.status)
 
             # 先读文本再自行解析：模组 5xx 或中间层返回 HTML 时不会抛 ContentTypeError，
             # 避免「服务端错误」被误报成「连不上」
@@ -208,30 +237,35 @@ async def request(host: str, port: Any, endpoint: str,
 
             if resp.status == 401 or resp.status == 403:
                 _log(CAT_UNAUTHORIZED, target, f"status={resp.status}")
-                return False, _USER_TEXT[CAT_UNAUTHORIZED]
+                return False, ModError(_USER_TEXT[CAT_UNAUTHORIZED], CAT_UNAUTHORIZED, resp.status)
             if resp.status >= 500:
                 _log(CAT_SERVER_ERROR, target, f"status={resp.status} body={raw[:200]}")
-                return False, f"{_USER_TEXT[CAT_SERVER_ERROR]} (HTTP {resp.status})"
-            if resp.status != 200:
-                _log(CAT_BAD_RESPONSE, target, f"status={resp.status} body={raw[:200]}")
+                return False, ModError(f"{_USER_TEXT[CAT_SERVER_ERROR]} (HTTP {resp.status})",
+                                       CAT_SERVER_ERROR, resp.status)
 
             try:
                 result = json.loads(raw)
             except ValueError:
                 _log(CAT_BAD_RESPONSE, target, f"status={resp.status} body={raw[:200]}")
-                return False, _USER_TEXT[CAT_BAD_RESPONSE]
+                return False, ModError(_USER_TEXT[CAT_BAD_RESPONSE], CAT_BAD_RESPONSE, resp.status)
             if not isinstance(result, dict):
                 _log(CAT_BAD_RESPONSE, target, f"status={resp.status} body={raw[:200]}")
-                return False, _USER_TEXT[CAT_BAD_RESPONSE]
+                return False, ModError(_USER_TEXT[CAT_BAD_RESPONSE], CAT_BAD_RESPONSE, resp.status)
 
             if resp.status == 200 and result.get("success") is True:
                 return True, result
 
             # 业务错误文案由模组产生（不含内网地址），可原样展示
-            return False, result.get("message") or f"API 返回错误 (HTTP {resp.status})"
+            code = result.get("code")
+            category = CAT_RATE_LIMITED if resp.status == 429 else CAT_BUSINESS_REJECTED
+            _log(category, target,
+                 f"status={resp.status} code={code} body={raw[:200]}")
+            message = result.get("message") or _USER_TEXT[category]
+            return False, ModError(message, category, resp.status,
+                                   code if isinstance(code, int) else 0)
     except Exception as e:
         category = _classify(e)
         if category in (CAT_REFUSED, CAT_CONNECT_TIMEOUT):
             _breaker_note_connect_failure(key)
         _log(category, target, f"{type(e).__name__}: {e}")
-        return False, _USER_TEXT.get(category, _USER_TEXT[CAT_UNKNOWN])
+        return False, ModError(_USER_TEXT.get(category, _USER_TEXT[CAT_UNKNOWN]), category)

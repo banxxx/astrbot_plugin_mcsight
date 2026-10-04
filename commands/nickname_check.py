@@ -2,6 +2,7 @@ import re
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api import logger
 from ..utils.permission import check_permission
+from ..utils.group_members import fetch_group_members, get_bot_qq
 
 # 与 bind.py 中一致的昵称规范：必须包含一对中英文括号，且括号内有内容
 NICKNAME_PATTERN = re.compile(r'[（(](.*?)[）)]')
@@ -22,92 +23,6 @@ def _check_nickname(name: str) -> bool:
     if not game_id:
         return True
     return False
-
-
-async def _fetch_group_members(event: AstrMessageEvent, group_id):
-    """多方式尝试获取群成员列表"""
-    try:
-        if hasattr(event, 'bot') and hasattr(event.bot, 'api'):
-            result = await event.bot.api.call_action(
-                'get_group_member_list',
-                group_id=int(group_id)
-            )
-            if isinstance(result, list):
-                return result
-    except Exception as e:
-        logger.debug(f"call_action 获取群成员列表失败: {e}")
-
-    try:
-        if hasattr(event.bot, 'get_group_member_list'):
-            result = await event.bot.get_group_member_list(group_id=int(group_id))
-            if isinstance(result, list):
-                return result
-    except Exception as e:
-        logger.debug(f"bot.get_group_member_list 失败: {e}")
-
-    return None
-
-
-# ============================================================
-# 辅助：稳健获取机器人自身 QQ
-# ============================================================
-async def _get_bot_qq(event) -> set:
-    """
-    返回机器人自身的 QQ 集合。
-    按优先级逐个尝试，拿到有效值即停止。
-    """
-    candidates = set()
-
-    def _try_add(val) -> bool:
-        if val is None:
-            return False
-        s = str(val).strip()
-        if not s or s.lower() in ("none", "null", "0"):
-            return False
-        candidates.add(s)
-        return True
-
-    # 1. event.bot.self_id
-    try:
-        if _try_add(getattr(event.bot, "self_id", None)):
-            return candidates
-    except Exception:
-        pass
-
-    # 2. event.bot.qq
-    try:
-        if _try_add(getattr(event.bot, "qq", None)):
-            return candidates
-    except Exception:
-        pass
-
-    # 3. event.get_self_id()
-    try:
-        if hasattr(event, "get_self_id"):
-            if _try_add(event.get_self_id()):
-                return candidates
-    except Exception:
-        pass
-
-    # 4. API: get_login_info
-    try:
-        if hasattr(event.bot, "api"):
-            info = await event.bot.api.call_action("get_login_info")
-            if isinstance(info, dict):
-                if _try_add(info.get("user_id")):
-                    return candidates
-    except Exception as e:
-        logger.debug(f"get_login_info 获取机器人 QQ 失败: {e}")
-
-    # 5. event.bot 上可能的其他字段
-    for attr in ("uin", "bot_id", "account"):
-        try:
-            if _try_add(getattr(event.bot, attr, None)):
-                return candidates
-        except Exception:
-            pass
-
-    return candidates
 
 
 # ============================================================
@@ -214,7 +129,7 @@ async def handle_checknick(event: AstrMessageEvent, config, parts: list):
 
     yield event.plain_result("🔍 正在检测群成员昵称，成员较多时可能需要几秒，请稍候...")
 
-    members = await _fetch_group_members(event, group_id)
+    members = await fetch_group_members(event, group_id)
     if members is None:
         yield event.plain_result(
             "❌ 获取群成员列表失败。\n"
@@ -228,7 +143,7 @@ async def handle_checknick(event: AstrMessageEvent, config, parts: list):
         logger.info(f"昵称检测：手动忽略列表 = {manual_ignore}")
 
     # ---- 再获取机器人自身 QQ（可能涉及 API 调用，较慢） ----
-    bot_qqs = await _get_bot_qq(event)
+    bot_qqs = await get_bot_qq(event)
     logger.info(f"昵称检测：机器人自身 QQ = {bot_qqs or '未获取到'}")
 
     total = len(members)

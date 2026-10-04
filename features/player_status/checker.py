@@ -1,4 +1,6 @@
 import asyncio
+import socket
+import time
 import aiohttp
 from astrbot.api import logger
 from mcstatus import JavaServer
@@ -7,8 +9,8 @@ import json
 
 from ...utils import mod_http
 
-# 状态卡片「延迟」胶囊的测速上界。健康服实测 37~70ms，1.2 秒留了十几倍余量；
-# 原来是 3.0 秒，而这条命令的总时长等于最慢那台的 ping，一台不应答就能拖满。
+# 状态卡片「延迟」胶囊的测速上界（裸 TCP 建连，见 ping_server）。健康服实测 26~45ms，
+# 1.2 秒留了几十倍余量；这条命令的总时长等于最慢那台的测速，一台不应答就能拖满。
 PING_TIMEOUT = 1.2
 
 # ========== 模组 API 辅助函数 ==========
@@ -183,16 +185,43 @@ async def query_via_api(host: str, port: int, timeout: float = 5.0) -> Optional[
     return None
 
 async def ping_server(host: str, timeout: float = PING_TIMEOUT) -> float:
-    """通过 mcstatus 的 ping 方法获取服务器延迟（毫秒）"""
+    """用裸 TCP 建连往返测服务器网络延迟（毫秒）。
+
+    不用 mcstatus.ping()：它发的是「只握手不成帧」的探测包，隧道/面板转发
+    （如 minekuai）不回这个包、只对完整 status 查询应答，于是这类服永远测不到延迟。
+    TCP 建连不要求服务器懂任何 MC 协议，能转发就能测，且天然约等于一个网络往返。
+
+    先解析再计时：并发七台时 getaddrinfo 会排到几百毫秒，混进窗口就把 30ms 的
+    RTT 报成 350ms。解析出的字面 IP 再建连不会再走一次 DNS。
+    解析失败/连不上/超时一律 0.0，由调用方保留原始占位值。
+    """
+    ip, _, port_str = host.partition(":")
+    if not ip or ip == "self":
+        return 0.0
     try:
-        server = await asyncio.to_thread(JavaServer.lookup, host)
-        latency = await asyncio.wait_for(
-            asyncio.to_thread(server.ping),
-            timeout=timeout
-        )
-        return latency
+        port = int(port_str) if port_str else 25565
+    except ValueError:
+        return 0.0
+
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            ip, port, type=socket.SOCK_STREAM)
     except Exception:
         return 0.0
+
+    t0 = time.perf_counter()
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(infos[0][4][0], port), timeout=timeout)
+    except Exception:
+        return 0.0
+    rtt_ms = (time.perf_counter() - t0) * 1000
+    try:
+        writer.close()
+        await writer.wait_closed()
+    except Exception:
+        pass
+    return rtt_ms
 
 # 以下函数已废弃，保留仅作参考
 async def send_broadcast(api_base_url: str, message: str, timeout: float = 5.0) -> bool:

@@ -6,6 +6,7 @@ from astrbot.api.event import AstrMessageEvent
 from ..config.server_config import ConfigManager
 from ..config.whitelist_config import WhitelistManager
 from ..utils.permission import check_permission
+from ..utils import bind_guard, bind_route, mod_http
 from .common import call_mod_api, execute_db_update, execute_db_query
 
 
@@ -377,6 +378,46 @@ async def _do_unbind_by_qq(event, config, wm, use_central, target_qq,
 # ============================================================
 # 绑定
 # ============================================================
+async def _validate_round(servers, token_code, robot_token, wm):
+    """并发向这批服务器问一次绑定码，把答复分成四类计数。
+
+    返回 (命中信息或 None, 判定无效台数, 被限流台数, 无此接口台数)。只有「明确说码无效」
+    才算到用户头上；连不上/超时/被熔断跳过一律不算（它们没答复，没资格作证）。
+    命中信息为 {"gameId", "host", "port", "name"}。
+    """
+    results = await asyncio.gather(
+        *[call_mod_api(s["host"], wm.get_server_port(s), robot_token,
+                       "/api/validate_token", "GET", {"token": token_code})
+          for s in servers],
+        return_exceptions=True,
+    )
+
+    hit = None
+    answered_invalid = rate_limited = unsupported = 0
+    for idx, result in enumerate(results):
+        if isinstance(result, Exception):
+            continue
+        ok, response = result
+        if not ok:
+            category = mod_http.category_of(response)
+            if category == mod_http.CAT_RATE_LIMITED:
+                rate_limited += 1
+            elif category == mod_http.CAT_BUSINESS_REJECTED:
+                answered_invalid += 1
+            elif category == mod_http.CAT_NOT_FOUND:
+                unsupported += 1
+            continue
+        response_data = response.get("data", {})
+        if response_data.get("valid") is True and response_data.get("gameId"):
+            srv = servers[idx]
+            hit = {"gameId": response_data["gameId"], "host": srv["host"],
+                   "port": wm.get_server_port(srv), "name": srv["name"]}
+            break
+        # 200 但没给出有效令牌，与模组判定无效等价
+        answered_invalid += 1
+    return hit, answered_invalid, rate_limited, unsupported
+
+
 async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: list):
     wm = WhitelistManager()
 
@@ -409,49 +450,91 @@ async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: lis
 
     use_central = wm.use_central_db
 
+    # ---- 步骤0：每用户失败预算（不再替连续瞎猜的人向各服转发） ----
+    guard_scope = str(event.get_group_id() or event.session_id)
+    wait_seconds = bind_guard.remaining(guard_scope, qq)
+    if wait_seconds:
+        logger.info(f"[bind_guard] {guard_scope}/{qq} 处于冷却中，剩余 {wait_seconds} 秒")
+        yield event.plain_result(
+            f"❌ 最近连续 {bind_guard.MAX_INVALID} 次绑定码无效，"
+            f"请 {wait_seconds} 秒后再试。\n"
+            "请确认输入的是游戏标题/动作栏里当前显示的那 6 位数字；"
+            "绑定码 5 分钟过期，重新进服即可获得新的。"
+        )
+        return
+
     # ---- 步骤1：并发验证令牌（需要至少一台模组服务器在线，因为令牌存在内存里） ----
     mod_servers = [s for s in servers if wm.has_mod_api(s)]
     if not mod_servers:
         yield event.plain_result("❌ 没有安装模组的服务器，无法验证绑定码。")
         return
 
-    validation_tasks = []
-    for srv in mod_servers:
-        host = srv["host"]
-        port = wm.get_server_port(srv)
-        validation_tasks.append(
-            asyncio.create_task(
-                call_mod_api(host, port, token, "/api/validate_token", "GET", {"token": token_code})
+    # 命中过一次的码只问那一台：非持有者每被问一次都会在模组侧记一笔失败，而账是记在
+    # 全体玩家共用的机器人出口 IP 上的。缓存不可信就作废并回落全服扇出，正确性优先。
+    hit = None
+    answered_invalid = 0
+    rate_limited = 0
+    unsupported = 0
+    quick_server = None
+
+    cached = bind_route.get(token_code)
+    if cached is not None:
+        cached_host, cached_port, cached_game_id = cached
+        matched = [s for s in mod_servers
+                   if s["host"] == cached_host and wm.get_server_port(s) == cached_port]
+        if matched:
+            quick_server = matched[0]
+            hit, _, _, _ = await _validate_round([quick_server], token_code, token, wm)
+            if hit is None or hit["gameId"] != cached_game_id:
+                # 那台不再认这个码（已过期/被消耗），或 6 位码恰好撞上别人的新码：不采信
+                hit = None
+                bind_route.drop(token_code)
+        else:
+            # 配置里已经没有这台服了（改了地址或关掉模组 API）
+            bind_route.drop(token_code)
+
+    if hit is None:
+        if quick_server is not None:
+            logger.info(f"[bind_route] {quick_server['name']} 未命中该码，回落全服扇出")
+        hit, answered_invalid, rate_limited, unsupported = await _validate_round(
+            mod_servers, token_code, token, wm)
+
+    if hit is not None:
+        bind_route.remember(token_code, hit["host"], hit["port"], hit["gameId"])
+
+    if hit is None:
+        # 限流优先于「码无效」：被限住的那台没资格替这个码作证，不能把账算在用户头上
+        if rate_limited:
+            logger.warning(f"[bind] {guard_scope}/{qq} 验证被模组限流"
+                           f"（{rate_limited}/{len(mod_servers)} 台）")
+            yield event.plain_result(
+                "❌ 绑定验证暂时受限（近期失败次数过多），请约 1 分钟后再试同一条绑定码。\n"
+                "你的绑定码并没有失效，这一步不需要重新登录游戏。"
             )
-        )
-
-    validation_results = await asyncio.gather(*validation_tasks, return_exceptions=True)
-
-    target_game_id = None
-    found_server_name = None
-    found_server_port = None
-    found_server_host = None
-    for idx, result in enumerate(validation_results):
-        if isinstance(result, Exception):
-            continue
-        ok, response = result
-        if not ok:
-            continue
-        response_data = response.get("data", {})
-        if response_data.get("valid") is True:
-            target_game_id = response_data.get("gameId")
-            if target_game_id:
-                found_server_host = mod_servers[idx]["host"]
-                found_server_name = mod_servers[idx]["name"]
-                found_server_port = wm.get_server_port(mod_servers[idx])
-                break
-
-    if target_game_id is None:
+            return
+        if answered_invalid:
+            bind_guard.record_invalid(guard_scope, qq)
+            yield event.plain_result(
+                "❌ 绑定码无效或已过期，请确认你输入的是游戏窗口内显示的6位数字绑定码。\n"
+                "如果绑定码已过期，请重新登录游戏获取新的绑定码。"
+            )
+            return
+        if unsupported:
+            yield event.plain_result(
+                "❌ 各服务器的模组版本过旧，不支持绑定码验证，请联系管理员升级模组。"
+            )
+            return
         yield event.plain_result(
-            "❌ 绑定码无效或已过期，请确认你输入的是游戏窗口内显示的6位数字绑定码。\n"
-            "如果绑定码已过期，请重新登录游戏获取新的绑定码。"
+            "❌ 暂时联系不上任何安装了模组的服务器（可能都离线或未开放 API 端口），请稍后再试。\n"
+            "这次没有消耗你的绑定码，也不需要重新登录游戏。"
         )
         return
+
+    target_game_id = hit["gameId"]
+    found_server_host = hit["host"]
+    found_server_name = hit["name"]
+    found_server_port = hit["port"]
+    bind_guard.clear(guard_scope, qq)
 
     # ---- 步骤2：验证QQ群昵称 ----
     sender_name = event.get_sender_name()

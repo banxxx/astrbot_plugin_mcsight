@@ -396,6 +396,8 @@ HELP_CARDS = [
             _row(_runs(("/查绑定 ", ACCENT), ("[游戏ID|QQ号]", DIM)),
                  pills=["/绑定状态", "/checkbind", "/mc check"],
                  desc=_plain("查询绑定关系，缺省自动读取您的群昵称")),
+            _row(_c("/绑定检测"), pills=["/mc bindcheck"], tags=[ADMIN_TAG],
+                 desc=_plain("生成本群未绑定游戏账号成员的名单图")),
         ], hint="详细用法见 /绑定帮助"),
     ],
     [
