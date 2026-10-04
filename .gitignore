@@ -27,6 +27,8 @@ share/python-wheels/
 MANIFEST
 .wrangler/
 *.pem
+# 但运行时需要的 TiDB SSL 根证书是公开标准证书，必须入库
+!isrgrootx1.pem
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -212,3 +214,4 @@ __marimo__/
 data/
 avatar_cache/
 design_preview/
+.scratch/
