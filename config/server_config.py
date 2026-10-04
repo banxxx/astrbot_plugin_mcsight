@@ -73,6 +73,16 @@ class ConfigManager:
                 return True
         return False
 
+    # ---------- 新增：编辑服务器备注（/在线 卡片名字下方一行） ----------
+    def edit_server_remark(self, name: str, remark: str) -> bool:
+        data = self._load()
+        for s in data["servers"]:
+            if s["name"] == name:
+                s["remark"] = remark
+                self._save(data)
+                return True
+        return False
+
     def rename_server(self, old_name: str, new_name: str) -> bool:
         data = self._load()
         servers = data["servers"]

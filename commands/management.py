@@ -33,7 +33,8 @@ async def handle_edit(event: AstrMessageEvent, config: ConfigManager, parts: lis
             "用法:\n"
             "/mc edit <名称> name <新名称>\n"
             "/mc edit <名称> host <新IP>\n"
-            "/mc edit <名称> port <新端口>"
+            "/mc edit <名称> port <新端口>\n"
+            "/mc edit <名称> remark <备注>"
         )
         return
     target = parts[1]
@@ -55,8 +56,12 @@ async def handle_edit(event: AstrMessageEvent, config: ConfigManager, parts: lis
             return
         success = config.edit_server_port(target, new_port)
         yield event.plain_result(f"修改端口{'成功' if success else '失败（名称不存在）'}。")
+    elif mode == "remark":
+        # 备注可含空格，取 mode 之后的全部片段
+        success = config.edit_server_remark(target, " ".join(parts[3:]).strip())
+        yield event.plain_result(f"修改备注{'成功' if success else '失败（名称不存在）'}。")
     else:
-        yield event.plain_result("第二个参数必须为 name、host 或 port。")
+        yield event.plain_result("第二个参数必须为 name、host、port 或 remark。")
 
 async def handle_batchadd(event: AstrMessageEvent, config: ConfigManager, parts: list):
     if len(parts) < 2:

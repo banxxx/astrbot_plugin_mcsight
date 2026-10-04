@@ -16,7 +16,7 @@ from ...utils.text_renderer import draw_text_with_emoji, measure_text_with_emoji
 from ...config.whitelist_config import WhitelistManager
 from ..help_image.image_generator import (
     WIDTH, PAD, SCALE, BG, ACCENT,
-    new_ops, add_text, add_rect, add_ellipse, add_dash,
+    new_ops, add_text, add_rect, add_ellipse, add_dash, add_shadow,
     text_w, _font, place_runs, build_image,
 )
 
@@ -55,6 +55,10 @@ CHIP_LAT_B = ('#b26a00', '#fdf3e0', '#f3e0b8')
 CHIP_LAT_C = ('#c0392b', '#fbeaea', '#f0d2d2')
 CHIP_LAST = ('#8b93a7', '#f5f6f8', '#e6e9ef')
 
+REMARK_SIZE = 14
+REMARK_COLOR = '#a5aabb'
+REMARK_LINE_H = 18
+
 COUNT_NUM_SIZE = 22
 COUNT_TXT_SIZE = 18
 COUNT_TXT_COLOR = '#777777'
@@ -63,6 +67,7 @@ COUNT_OFF_COLOR = '#c9ccd6'
 CAP_Y_GAP = 12
 CAP_H = 4
 CAP_BG_COLOR = '#eef0f4'
+CAP_FILL = '#c3c9ec'
 CAP_FILL_OFF = '#e3e5ea'
 
 DIV_GAP_TOP = 14
@@ -186,6 +191,11 @@ def _draw_card(draw, ops, card, y):
                   + DIV_GAP_TOP + 1 + DIV_GAP_BOTTOM
                   + content_h + CARD_PAD_BOTTOM)
 
+    remark = (card.get('remark') or '').strip()
+    if remark:
+        card_h += REMARK_LINE_H
+
+    add_shadow(ops, x0, y, x1 - x0, card_h, CARD_RADIUS)
     add_rect(ops, 'bg0', x0, y, x1 - x0, card_h, CARD_RADIUS, card_bg)
 
     # 状态圆点
@@ -254,14 +264,22 @@ def _draw_card(draw, ops, card, y):
     add_text(ops, cursor + num_w, head_top + 6, suf_s, COUNT_TXT_SIZE,
              COUNT_TXT_COLOR)
 
+    # 备注行（服务器整合包名/说明），空则不占高度
+    body_top = head_top + HEAD_H
+    if remark:
+        add_text(ops, name_x, body_top,
+                 _truncate(draw, remark, REMARK_SIZE, px1 - name_x),
+                 REMARK_SIZE, REMARK_COLOR)
+        body_top += REMARK_LINE_H
+
     # 容量条
-    cap_y = head_top + HEAD_H + CAP_Y_GAP
+    cap_y = body_top + CAP_Y_GAP
     add_rect(ops, 'bg1', px0, cap_y, inner_w, CAP_H, CAP_H // 2, CAP_BG_COLOR)
     mx = card.get('max', 0)
     ratio = 0.0 if (is_offline or not mx) else min(1.0, card['online'] / mx)
     if ratio > 0:
         add_rect(ops, 'bg1', px0, cap_y, max(CAP_H, inner_w * ratio),
-                 CAP_H, CAP_H // 2, ACCENT)
+                 CAP_H, CAP_H // 2, CAP_FILL)
 
     if content_kind == 'none':
         return card_h
@@ -349,6 +367,7 @@ async def draw_multi_server_image(servers_data: List[Dict[str, Any]],
             'error': srv.get('error'),
             'version': srv.get('version', '未知'),
             'latency': srv.get('latency'),
+            'remark': srv.get('remark', ''),
             'last_activity_time': srv.get('last_activity_time', 0),
             'show_version': show_version,
             'show_latency': show_latency,

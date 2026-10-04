@@ -88,6 +88,7 @@ async def _collect_server_status(srv: dict, wm: WhitelistManager, token: str) ->
         return {
             "name": name,
             "host": host,
+            "remark": srv.get("remark", ""),
             "online": mod_data.get("online_players", 0),
             "max": mod_data.get("max_players", 0),
             "version": mod_data.get("version", "未知"),

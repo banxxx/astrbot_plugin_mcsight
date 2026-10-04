@@ -8,7 +8,7 @@ bind_help_generator 复用本模块的引擎与样式常量。
 import os
 import re
 import tempfile
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 # ========== 画布与配色 ==========
 SCALE = 2             # 超采样倍数：布局按设计单位计算，渲染时整体放大，保证文字锐利
@@ -73,8 +73,13 @@ def _font(size):
 
 # ========== ops（延迟绘制指令收集） ==========
 def new_ops():
-    # bg0: 卡片底；bg1: 胶囊/角标/流程框等小块；fg: 文字与虚线
-    return {'bg0': [], 'bg1': [], 'fg': []}
+    # shadow: 卡片柔和投影（最先渲染）；bg0: 卡片底；bg1: 胶囊/角标/流程框等小块；fg: 文字与虚线
+    return {'shadow': [], 'bg0': [], 'bg1': [], 'fg': []}
+
+
+SHADOW_BLUR = 7
+SHADOW_DY = 4
+SHADOW_COLOR = (40, 46, 78, 34)
 
 
 def text_w(draw, s, size):
@@ -87,6 +92,11 @@ def add_text(ops, x, y, s, size, color):
 
 def add_rect(ops, layer, x, y, w, h, r, fill, outline=None, line_w=1):
     ops[layer].append(('rect', x, y, w, h, r, fill, outline, line_w))
+
+
+def add_shadow(ops, x, y, w, h, r, blur=SHADOW_BLUR, dy=SHADOW_DY,
+               color=SHADOW_COLOR):
+    ops['shadow'].append(('shadow', x, y, w, h, r, blur, dy, color))
 
 
 def add_ellipse(ops, layer, x, y, d, fill):
@@ -285,13 +295,26 @@ def render_ops(draw, ops, scale=SCALE, img=None, extra_handlers=None):
     def S(v):
         return v * s
 
-    for layer in ('bg0', 'bg1', 'fg'):
+    for layer in ('shadow', 'bg0', 'bg1', 'fg'):
         for op in ops[layer]:
             kind = op[0]
             if extra_handlers and kind in extra_handlers:
                 extra_handlers[kind](op, img)
                 continue
-            if kind == 'rect':
+            if kind == 'shadow':
+                _, x, y, w, h, r, blur, dy, color = op
+                pad = blur * 2 + 2
+                tile = Image.new('RGBA', (int((w + pad * 2) * s),
+                                          int((h + pad * 2) * s)),
+                                 (color[0], color[1], color[2], 0))
+                # RGB 通道保持纯阴影色，模糊只混合 alpha，边缘才不会发灰
+                ImageDraw.Draw(tile).rounded_rectangle(
+                    [pad * s, pad * s, (pad + w) * s, (pad + h) * s],
+                    radius=r * s, fill=color)
+                tile = tile.filter(ImageFilter.GaussianBlur(blur * s))
+                img.paste(tile, (int((x - pad) * s), int((y - pad + dy) * s)),
+                          tile)
+            elif kind == 'rect':
                 _, x, y, w, h, r, fill, outline, lw = op
                 draw.rounded_rectangle([S(x), S(y), S(x + w), S(y + h)],
                                        radius=S(r), fill=fill,
@@ -418,7 +441,7 @@ HELP_CARDS = [
             _row(_runs(("/mc batchremove ", ACCENT), ("名,名", DIM)),
                  desc=_plain("批量删除")),
             _row(_runs(("/mc edit ", ACCENT), ("名称 字段 值", DIM)),
-                 desc=_plain("改 name / host / port 三个字段")),
+                 desc=_plain("改 name / host / port / remark 字段")),
             _row(_c("/mc list"), desc=_plain("查看服务器列表（含独立端口）")),
             _row(_runs(("/mc move ", ACCENT), ("名称 序号", DIM)),
                  desc=_plain("移动排序位置（从 0 开始）")),

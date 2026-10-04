@@ -105,6 +105,7 @@ async def query_one(server_info: dict) -> Dict[str, Any]:
     """查询单个 Minecraft 服务器的状态（使用 mcstatus）"""
     host = server_info["host"]
     name = server_info["name"]
+    remark = server_info.get("remark", "")
     try:
         server = await asyncio.to_thread(JavaServer.lookup, host)
         status = await asyncio.wait_for(
@@ -144,6 +145,7 @@ async def query_one(server_info: dict) -> Dict[str, Any]:
         return {
             "name": name,
             "host": host,
+            "remark": remark,
             "online": online,
             "max": max_players,
             "players": players,
@@ -154,7 +156,7 @@ async def query_one(server_info: dict) -> Dict[str, Any]:
     except asyncio.TimeoutError:
         logger.warning(f"查询服务器 {host} 超时")
         return {
-            "name": name, "host": host,
+            "name": name, "host": host, "remark": remark,
             "online": 0, "max": 0, "players": [],
             "version": "未知", "latency": 0.0,
             "error": "查询超时"
@@ -162,7 +164,7 @@ async def query_one(server_info: dict) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"查询服务器 {host} 失败: {e}")
         return {
-            "name": name, "host": host,
+            "name": name, "host": host, "remark": remark,
             "online": 0, "max": 0, "players": [],
             "version": "未知", "latency": 0.0,
             "error": str(e)
