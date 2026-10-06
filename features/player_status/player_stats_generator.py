@@ -8,7 +8,7 @@ import math
 import time
 from typing import Dict, Any, Optional
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 from ...utils.avatar_cache import _smart_resize
 from ...utils.text_renderer import draw_text_with_emoji, measure_text_with_emoji
@@ -88,8 +88,8 @@ TIME_SIZE = 16
 TIME_COLOR = '#aaaaaa'
 TIME_GAP = 24
 
-CATEGORY_COLORS = ['#5b6abf', '#7BA87F', '#D9A87C', '#C47D7D', '#6F8B9F',
-                   '#B8A9C9']
+CATEGORY_COLORS = ['#b9c1ea', '#a9d8bc', '#ecd7ac', '#e9b9bd', '#b3d6de',
+                   '#d3c7e6']
 
 # ========== 分类定义 ==========
 # 每项 = (中文标签, 模组 StatUtils 下发字段, 单位, 累计参考值, 语义类型)
@@ -282,17 +282,32 @@ def delta_stats(current, baseline):
 
 # ========== Pillow 图表（不依赖 matplotlib，避免 AstrBot 双份 numpy/PIL 副本原生崩溃） ==========
 SS = 3                  # 相对设计单位的额外超采样，落图后下采样到 SCALE 得到抗锯齿
-RADAR_GRID = '#dcdcd6'
-RADAR_RING = '#ebebe6'
+# —— 雷达图（2026-10-06 定案：保持线框本体、不加填充，线按相邻分类渐变上色，
+#    下面垫一层同色扩散阴影；冷调网格与环形图的粉彩配成一族）——
+RADAR_GRID = '#e3e7f5'          # 轴线
+RADAR_RING = '#eef0f9'          # 层级环
+RADAR_FACET = ('#f5f6fc', '#eff1fa')   # 底面分瓣交替色
+RADAR_GRID_W = 0.7              # 网格线宽（设计像素）
+RADAR_LINE_W = 1.8              # 主线宽
+RADAR_GHOST_W = 0.9             # 生涯平均虚线宽
+RADAR_DEPTH = 0.40              # 粉彩压深幅度：白卡上要撑得住扩散阴影才敢更浅
+RADAR_EDGE_SEGS = 16            # 每条边的渐变插值段数（6 边 × 16 = 96 段）
+RADAR_GLOW_R = 9.0              # 扩散阴影半径
+RADAR_GLOW_ALPHA = 0.35         # 扩散阴影浓度
+RADAR_GLOW_SPREAD = 0.8         # 阴影描边比主线宽出 半径×此值
+RADAR_GLOW_BLUR = 0.55          # 高斯 σ = 半径×此值（与样片 feGaussianBlur 同式）
+RADAR_DOT_R = 2.5               # 轴端圆点半径（0 分轴不画）
 RADAR_LBL = '#555555'
 RADAR_LBL_SIZE = 12
-RADAR_TICK = '#c9c9c2'
-RADAR_TICK_SIZE = 9
-DONUT_HOLE_RATIO = 0.6
-DONUT_EDGE = '#ffffff'
+DONUT_THICK = 0.56      # 带厚 / 外径：内圈半径 = 外径 × (1 − 此值)
+DONUT_CORNER = 0.12     # 端头圆角 = 该段带厚 × 此系数
+DONUT_GAP = 2.0         # 缝宽（设计像素），内圈到外圈处处等宽
+DONUT_JITTER = 0.34     # 外径跳动幅度：最短段外径 = 外径 × (1 − 此值)
+DONUT_OUTER = [1.0, 0.86, 0.93, 0.80, 0.87, 0.62]   # 按分类序号取外径系数
+DONUT_LABEL_SIZES = (11, 10, 9)   # 带内百分比字号，最低 9px 保证手机上可读
 LEGEND_SIZE = 12
 LEGEND_FG = '#555555'
-GHOST_LINE = '#a3a39c'     # 历史累计轮廓：灰 + 虚线，与实心的"本期"区分
+RADAR_GHOST = '#a9aecb'     # 生涯平均轮廓：冷灰蓝虚线，与渐变主线区分
 GHOST_DASH = 6
 GHOST_GAP = 4
 RD_LEGEND_SIZE = 10
@@ -308,6 +323,81 @@ def _chart_radius(w, h):
     """两图共用的设计半径：直径一致，且给雷达图外圈标签留出带高"""
     band = RADAR_LBL_SIZE * 1.8
     return max(20.0, min((h - 2 * band) / 2, w / 2 - band))
+
+
+def _hex_rgb(color):
+    n = int(color[1:], 16)
+    return ((n >> 16) & 255, (n >> 8) & 255, n & 255)
+
+
+def _deepen(color, depth):
+    """HSL 空间加饱和、压亮度：粉彩原色（亮度 195~216）在白卡上撑不起扩散阴影"""
+    r, g, b = (v / 255 for v in _hex_rgb(color))
+    mx, mn = max(r, g, b), min(r, g, b)
+    d = mx - mn
+    l = (mx + mn) / 2
+    if d:
+        if mx == r:
+            h = (g - b) / d + (6 if g < b else 0)
+        elif mx == g:
+            h = (b - r) / d + 2
+        else:
+            h = (r - g) / d + 4
+        h *= 60
+        s = d / (1 - abs(2 * l - 1))
+    else:
+        h, s = 0.0, 0.0
+    s = min(1.0, s + depth * 0.30)
+    l = max(0.0, min(1.0, l - depth * 0.24))
+    c = (1 - abs(2 * l - 1)) * s
+    x = c * (1 - abs(h / 60 % 2 - 1))
+    m = l - c / 2
+    rgb = [(c, x, 0), (x, c, 0), (0, c, x),
+           (0, x, c), (x, 0, c), (c, 0, x)][min(5, int(h // 60))]
+    return '#%02x%02x%02x' % tuple(round((v + m) * 255) for v in rgb)
+
+
+def _mix(c1, c2, t):
+    a, b = _hex_rgb(c1), _hex_rgb(c2)
+    return '#%02x%02x%02x' % tuple(int(round(a[i] + (b[i] - a[i]) * t))
+                                   for i in range(3))
+
+
+def _glow_under(img, segs, width, sigma, alpha, dy):
+    """把彩色扩散阴影垫在主线下方。
+
+    先按"预乘 alpha"卷积再合成：直接模糊 RGBA 会让透明区的黑底渗进颜色，
+    光晕发灰；SVG 的 feGaussianBlur 本来就是预乘口径，这样才对得上样片。
+    只在分段的外接框里做（含 3σ 拖尾），否则整张画布的高斯模糊白烧几十毫秒。
+    """
+    if sigma <= 0 or alpha <= 0:
+        return
+    pad = width / 2 + 3 * sigma + 2
+    flat = [p for a, b, _ in segs for p in ((a[0], a[1] + dy), (b[0], b[1] + dy))]
+    x0 = min(p[0] for p in flat)
+    y0 = min(p[1] for p in flat)
+    x1 = max(p[0] for p in flat)
+    y1 = max(p[1] for p in flat)
+    box = (max(0, int(math.floor(x0 - pad))), max(0, int(math.floor(y0 - pad))),
+           min(img.width, int(math.ceil(x1 + pad))),
+           min(img.height, int(math.ceil(y1 + pad))))
+    if box[2] <= box[0] or box[3] <= box[1]:
+        return
+    size = (box[2] - box[0], box[3] - box[1])
+    blur = ImageFilter.GaussianBlur(radius=max(1, int(round(sigma))))
+    premult = Image.new('RGB', size, (0, 0, 0))
+    cover = Image.new('L', size, 0)
+    pd, cd = ImageDraw.Draw(premult), ImageDraw.Draw(cover)
+    for a, b, col in segs:
+        line = (a[0] - box[0], a[1] - box[1] + dy,
+                b[0] - box[0], b[1] - box[1] + dy)
+        pd.line(line, fill=col, width=width)
+        cd.line(line, fill=255, width=width)
+    premult = premult.filter(blur).point(lambda v: int(v * alpha))
+    cover = cover.filter(blur).point(lambda v: int(v * alpha))
+    base = img.crop(box).convert('RGB')
+    dim = ImageChops.multiply(base, ImageChops.invert(cover).convert('RGB'))
+    img.paste(ImageChops.add(dim, premult), box)
 
 
 def _dash_path(draw, pts, on_len, off_len, fill, width, closed=True):
@@ -344,7 +434,8 @@ def _dash_path(draw, pts, on_len, off_len, fill, width, closed=True):
 def create_radar_chart(scores, category_names, w, h,
                        ghost_scores=None, window_days=None):
     """生成雷达图（w/h 为设计像素），返回 2x 像素 PIL Image。
-    ghost_scores 给出时叠加一层灰色虚线生涯平均轮廓，实心表示本期强度。"""
+    线框本体不加填充：每条边按相邻两个分类的颜色渐变，主线下方垫一层同色扩散阴影。
+    ghost_scores 给出时叠加一层冷灰蓝虚线生涯平均轮廓。"""
     n = max(1, len(category_names))
     img = Image.new('RGBA', (w * SS, h * SS), '#ffffff')
     draw = ImageDraw.Draw(img)
@@ -362,30 +453,63 @@ def create_radar_chart(scores, category_names, w, h,
         return [vertex(i, r * max(0.0, min(1.0, vals.get(cat, 0) / 100.0)))
                 for i, cat in enumerate(category_names)]
 
-    thin = max(1, int(round(0.5 * SS)))
-    for ring in range(1, 6):
-        rr = r * ring / 5
-        draw.ellipse([cx - rr, cy - rr, cx + rr, cy + rr],
-                     outline=RADAR_RING, width=thin)
+    # 底面分瓣 + 层级六边形 + 轴线：浅冷色，只当"宝石切面"用，不参与读数
+    for k in range(1, 6):
+        r0, r1 = r * (k - 1) / 5, r * k / 5
+        for i in range(n):
+            j = (i + 1) % n
+            quad = ([(cx, cy), vertex(i, r1), vertex(j, r1)] if k == 1 else
+                    [vertex(i, r0), vertex(i, r1), vertex(j, r1), vertex(j, r0)])
+            draw.polygon(quad,
+                         fill=RADAR_FACET[0] if (k + i) % 2 else RADAR_FACET[1])
+    gw = max(1, int(round(RADAR_GRID_W * SS)))
+    for k in range(1, 6):
+        rr = r * k / 5
+        draw.polygon([vertex(i, rr) for i in range(n)],
+                     outline=RADAR_RING, width=gw)
     for i in range(n):
-        draw.line([cx, cy, *vertex(i, r)], fill=RADAR_GRID, width=thin)
+        draw.line([cx, cy, *vertex(i, r)], fill=RADAR_GRID, width=gw)
 
-    line_w = max(1, int(round(0.8 * SS)))
+    ghost_w = max(1, int(round(RADAR_GHOST_W * SS)))
     if ghost_scores:
         _dash_path(draw, shape(ghost_scores), GHOST_DASH * SS, GHOST_GAP * SS,
-                   GHOST_LINE, line_w)
-    pts = shape(scores)
-    draw.polygon(pts, fill=ACCENT + '38')
-    draw.line(pts + pts[:1], fill=ACCENT, width=line_w)
+                   RADAR_GHOST, ghost_w)
 
-    # 刻度写在两根轴之间的空档（-60°），避开轴线和分类标签
-    ft = _font(RADAR_TICK_SIZE * SS)
-    ta = -math.pi / 2 + math.pi / max(1, n)
-    for ring in range(1, 6):
-        rr = r * ring / 5
-        tx = cx + (rr + 3 * SS) * math.cos(ta)
-        ty = cy + (rr - RADAR_TICK_SIZE * SS * 0.5) * math.sin(ta)
-        draw.text((tx, ty), str(ring * 20), font=ft, fill=RADAR_TICK)
+    pts = shape(scores)
+    cols = [_deepen(CATEGORY_COLORS[i % len(CATEGORY_COLORS)], RADAR_DEPTH)
+            for i in range(n)]
+    segs = []
+    for i in range(n):
+        a, b = pts[i], pts[(i + 1) % n]
+        for k in range(RADAR_EDGE_SEGS):
+            t0, t1 = k / RADAR_EDGE_SEGS, (k + 1) / RADAR_EDGE_SEGS
+            segs.append(((a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0),
+                         (a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1),
+                         _mix(cols[i], cols[(i + 1) % n], t0)))
+
+    main_w = max(1, int(round(RADAR_LINE_W * SS)))
+    glow_w = max(1, int(round((RADAR_LINE_W + RADAR_GLOW_R * RADAR_GLOW_SPREAD)
+                              * SS)))
+    _glow_under(img, segs, glow_w, RADAR_GLOW_R * RADAR_GLOW_BLUR * SS,
+                RADAR_GLOW_ALPHA, 0.0)
+    draw = ImageDraw.Draw(img)
+    for a, b, col in segs:
+        draw.line([a[0], a[1], b[0], b[1]], fill=col, width=main_w)
+    for i, p in enumerate(pts):
+        # 分段线是平头，相邻两边颜色相同、只在顶点处咬出缺口 ⇒ 补一个同色圆头
+        rad = main_w / 2
+        draw.ellipse([p[0] - rad, p[1] - rad, p[0] + rad, p[1] + rad],
+                     fill=cols[i])
+    if RADAR_DOT_R > 0:
+        for i, p in enumerate(pts):
+            if scores.get(category_names[i], 0) <= 0:
+                continue
+            for rr, cc in ((RADAR_DOT_R * SS + 0.5 * SS, '#ffffff'),
+                           (RADAR_DOT_R * SS, cols[i])):
+                draw.ellipse([p[0] - rr, p[1] - rr, p[0] + rr, p[1] + rr],
+                             fill=cc)
+
+    # 刻度数字已去掉：分瓣层本身已给出 5 级等距台阶，外置「分类名+分值」才是读数处
 
     f = _font(lh)
     fs = _font(int(lh * 0.85))
@@ -431,7 +555,7 @@ def create_radar_chart(scores, category_names, w, h,
             else:
                 _dash_path(draw, [(8 * SS, mid), (8 * SS + sw, mid)],
                            GHOST_DASH * SS * 0.6, GHOST_GAP * SS * 0.6,
-                           GHOST_LINE, line_w, closed=False)
+                           RADAR_GHOST, ghost_w, closed=False)
             draw.text((8 * SS + sw + 5 * SS, ly), text, font=fl, fill=LEGEND_FG)
             ly += RD_LEGEND_SIZE * SS + 5 * SS
     return _finish(img, w, h)
@@ -449,8 +573,107 @@ def _rounded_percents(shares, keys):
     return out
 
 
+def _polar(cx, cy, r, ang):
+    return (cx + r * math.cos(ang * math.pi / 180),
+            cy + r * math.sin(ang * math.pi / 180))
+
+
+def _sweep(out, cx, cy, r, a_from, delta, step):
+    """沿**指定的带符号角度差**取样弧线。不能用最短弧：单段可以超过 180°。"""
+    n = max(1, int(abs(delta) / step))
+    for k in range(1, n + 1):
+        out.append(_polar(cx, cy, r, a_from + delta * k / n))
+
+
+def _petal_outline(cx, cy, ri, ro, a0, a1, rho, half_gap, step=1.0):
+    """圆角花瓣轮廓。两条侧边不是半径线，而是「平行于各自边界半径、距其 half_gap」
+    的直线，所以同一条缝从内圈到外圈宽度恒等于 2*half_gap。
+    返回 (轮廓点, 首边界角, 末边界角)。"""
+    d2r = math.pi / 180
+    r0, r1 = ri + rho, ro - rho
+    w = rho + half_gap
+    cons = math.degrees(math.asin(min(1.0, w / r0)))
+    ex = math.degrees(math.asin(min(1.0, w / r1)))
+    b0, b1 = a0 - cons, a1 + cons
+    a0o, a1o = b0 + ex, b1 - ex
+    DI, DT = _polar(cx, cy, r0, a1), _polar(cx, cy, r1, a1o)
+    AI, AT = _polar(cx, cy, r0, a0), _polar(cx, cy, r1, a0o)
+
+    def normal(b):
+        return (-math.sin(b * d2r), math.cos(b * d2r))
+
+    d1, d0 = normal(b1), normal(b0)
+    pts = []
+    _sweep(pts, cx, cy, ri, a0, a1 - a0, step)                    # 内弧
+    _sweep(pts, DI[0], DI[1], rho, a1 + 180, cons - 90, step)     # 内-末圆角
+    pts.append((DI[0] + rho * d1[0], DI[1] + rho * d1[1]))        # 末侧边
+    pts.append((DT[0] + rho * d1[0], DT[1] + rho * d1[1]))
+    _sweep(pts, DT[0], DT[1], rho, b1 + 90, -(90 + ex), step)     # 外-末圆角
+    _sweep(pts, cx, cy, ro, a1o, a0o - a1o, step)                 # 外弧
+    _sweep(pts, AT[0], AT[1], rho, a0o, -(90 + ex), step)         # 外-首圆角
+    pts.append((AT[0] - rho * d0[0], AT[1] - rho * d0[1]))        # 首侧边
+    pts.append((AI[0] - rho * d0[0], AI[1] - rho * d0[1]))
+    _sweep(pts, AI[0], AI[1], rho, b0 - 90, cons - 90, step)      # 内-首圆角
+    return pts, b0, b1
+
+
+def _donut_segments(shares, ri, r_max, half_gap):
+    """排布花瓣：百分比为 0 的分类既不画、也不占角隙。
+    shares 为 {分类: 百分比}（按 all_labels 顺序），角度以 12 点为起点顺时针。
+    返回 [(分类, 外径, 圆角, 起始角, 终止角)]。"""
+    ro, rho, cons = {}, {}, {}
+    for i, c in enumerate(shares):
+        outer = r_max * (1 - DONUT_JITTER *
+                         (1 - DONUT_OUTER[i % len(DONUT_OUTER)]))
+        band = max(2.0, outer - ri)
+        corner = min(band * DONUT_CORNER, band / 2 - 0.5)
+        ro[c], rho[c] = outer, corner
+        cons[c] = math.degrees(math.asin(
+            min(1.0, (corner + half_gap) / (ri + corner))))
+    act = [c for c in shares if shares[c] > 0]
+    if len(act) < 2:          # 只有一个非零 → 整圈，无缝也无跳动
+        return [(c, r_max, rho[c], -90.0, 270.0) for c in act]
+    m = len(act)
+    gaps = [cons[act[k]] + cons[act[(k + 1) % m]] for k in range(m)]
+    budget = max(0.0, 360.0 - sum(gaps))
+    total = sum(shares[c] for c in act) or 1.0
+    segs, acc = [], -90.0
+    for k, c in enumerate(act):
+        span = budget * shares[c] / total
+        segs.append((c, ro[c], rho[c], acc, acc + span))
+        acc += span + gaps[k]
+    return segs
+
+
+def _donut_label(draw, txt, room, band):
+    """带内百分比：先按切向逐档缩字号，全放不下就改成沿半径方向（径向空间＝带厚）。
+    room/band 均为超采样像素。"""
+    for sz in DONUT_LABEL_SIZES:
+        if room > draw.textlength(txt, font=_font(sz * SS)) + 3 * SS:
+            return sz, False
+    for sz in DONUT_LABEL_SIZES:
+        if band > draw.textlength(txt, font=_font(sz * SS)) + 3 * SS:
+            return sz, True
+    return DONUT_LABEL_SIZES[-1], True
+
+
+def _paste_rotated_text(img, draw, x, y, txt, sz, ang, radial):
+    """把标签写在环带上（坐标为超采样像素）；切向字随半径旋转，倒置时翻 180°"""
+    f = _font(sz * SS)
+    tw = int(draw.textlength(txt, font=f))
+    tile = Image.new('RGBA', (tw + 8 * SS, int(sz * SS + 10 * SS)), (0, 0, 0, 0))
+    ImageDraw.Draw(tile).text((4 * SS, 5 * SS), txt, font=f,
+                              fill=(255, 255, 255, 255))
+    rot = ang if radial else ang + 90
+    phi = (rot % 360 + 360) % 360
+    if 90 < phi < 270:
+        rot += 180
+    tile = tile.rotate(-rot, expand=True, resample=Image.BICUBIC)
+    img.paste(tile, (int(x - tile.width / 2), int(y - tile.height / 2)), tile)
+
+
 def create_donut_chart(shares, donut_cats, all_labels, w, h):
-    """生成环形图（饼图仅非零分类，图例含全部分类+百分比），2x 像素"""
+    """生成环形图（圆角花瓣 + 等宽缝，图例含全部分类+百分比），2x 像素"""
     img = Image.new('RGBA', (w * SS, h * SS), '#ffffff')
     draw = ImageDraw.Draw(img)
     color_map = {c: CATEGORY_COLORS[i % len(CATEGORY_COLORS)]
@@ -474,16 +697,27 @@ def create_donut_chart(shares, donut_cats, all_labels, w, h):
         cx = (w * SS - content_w) / 2 + r
     cy = h * SS / 2
 
-    edge = max(2, int(round(1.5 * SS)))
-    total = sum(max(0.0, shares[c]) for c in donut_cats) or 1.0
-    acc = 90.0
-    for c in donut_cats:
-        sweep = 360.0 * max(0.0, shares[c]) / total
-        draw.pieslice([cx - r, cy - r, cx + r, cy + r], acc, acc + sweep,
-                      fill=color_map[c], outline=DONUT_EDGE, width=edge)
-        acc += sweep
-    hole = r * DONUT_HOLE_RATIO
-    draw.ellipse([cx - hole, cy - hole, cx + hole, cy + hole], fill='#ffffff')
+    # 带内数字与图例同源：取整后为 0% 的分类不画，环上不会出现零宽花瓣
+    plan = {c: (pct[c] if c in donut_cats else 0) for c in all_labels}
+    ri = r * (1 - DONUT_THICK)
+    half_gap = DONUT_GAP * SS / 2
+    for c, outer, corner, a0, a1 in _donut_segments(plan, ri, r, half_gap):
+        label = f"{pct[c]}%"
+        if a1 - a0 >= 359.9:      # 只有一个非零分类 → 整圈
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r],
+                         outline=color_map[c], width=int(round(r - ri)))
+            _paste_rotated_text(img, draw, *_polar(cx, cy, (ri + r) / 2, -90),
+                                label, DONUT_LABEL_SIZES[0], -90, False)
+            continue
+        pts, b0, b1 = _petal_outline(cx, cy, ri, outer, a0, a1, corner, half_gap)
+        draw.polygon(pts, fill=color_map[c])
+        mid_r = (ri + outer) / 2
+        mouth = math.degrees(math.asin(min(1.0, half_gap / mid_r)))
+        room = mid_r * (b1 - b0 - 2 * mouth) * math.pi / 180
+        sz, radial = _donut_label(draw, label, room, outer - ri)
+        ang = (a0 + a1) / 2
+        _paste_rotated_text(img, draw, *_polar(cx, cy, mid_r, ang), label,
+                            sz, ang, radial)
 
     lh = LEGEND_SIZE * SS
     ly = cy - (len(all_labels) * row_h - 8 * SS) / 2
