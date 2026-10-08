@@ -180,6 +180,86 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
             await asyncio.to_thread(remove_quietly, path)
 
 # ========== 玩家统计数据查询 ==========
+# 「拿不到数据」的原因有好几种，混成一句「未找到玩家」会把死服说成没这个人。
+# 归类只在这里做一次，四个桶对应四种用户能听懂的说法。
+_UNREACHABLE_CATS = (mod_http.CAT_REFUSED, mod_http.CAT_CONNECT_TIMEOUT,
+                     mod_http.CAT_SKIPPED, mod_http.CAT_INVALID_HOST)
+_ABNORMAL_CATS = (mod_http.CAT_TIMEOUT, mod_http.CAT_DISCONNECTED,
+                  mod_http.CAT_BAD_RESPONSE, mod_http.CAT_SERVER_ERROR)
+_MAX_LISTED = 3                      # 一条提示里同类原因最多列几台，多了刷屏
+
+
+def _stats_fail_bucket(err) -> str:
+    category = mod_http.category_of(err)
+    if not category:
+        return "abnormal"
+    if category in _UNREACHABLE_CATS:
+        return "unreachable"
+    if category in _ABNORMAL_CATS:
+        return "abnormal"
+    # 服在线、模组明确回了 404：这台服上从来没有这个玩家的统计记录。
+    # 模组原文是「玩家不在线」，语义不对（离线玩家会从磁盘读），所以不回显它
+    if category == mod_http.CAT_BUSINESS_REJECTED and getattr(err, "status", 0) == 404:
+        return "no_record"
+    # 路由都没有 = 模组版本过旧，跟玩家的记录无关
+    if category == mod_http.CAT_NOT_FOUND:
+        return "unsupported"
+    return "rejected"
+
+
+def _stats_fail_detail(items) -> str:
+    """同一原因的服务器合并成一段，例如「生存服、创造服（连不上）」"""
+    grouped = {}
+    for name, reason in items:
+        grouped.setdefault(reason, []).append(name)
+    chunks = []
+    for reason, names in list(grouped.items())[:_MAX_LISTED]:
+        shown = "、".join(names[:_MAX_LISTED])
+        if len(names) > _MAX_LISTED:
+            shown += f" 等 {len(names)} 台"
+        chunks.append(f"{shown}（{reason}）" if reason else shown)
+    if len(grouped) > _MAX_LISTED:
+        chunks.append(f"另有 {len(grouped) - _MAX_LISTED} 类原因")
+    return "；".join(chunks)
+
+
+def _stats_fail_text(player_name: str, fails: dict) -> str:
+    no_record = fails["no_record"]
+    silent = bool(fails["unreachable"] or fails["abnormal"])
+    # 「未响应」只在真的没有一台回话时才能说；有服务器答了（哪怕答的是没接口/拒绝）就得换说法
+    any_answered = bool(no_record or fails["unsupported"] or fails["rejected"])
+
+    if no_record and silent:
+        head = (f"未查到玩家 {player_name} 的统计数据："
+                f"已响应的 {len(no_record)} 台服务器里没有这个玩家的记录。")
+    elif no_record:
+        names = "、".join(n for n, _ in no_record[:_MAX_LISTED])
+        if len(no_record) > _MAX_LISTED:
+            names += f" 等 {len(no_record)} 台"
+        head = (f"未查到玩家 {player_name} 的统计数据："
+                f"{names} 都没有这个玩家的统计记录（玩家从未在该服进过游戏时就是这个结果）。")
+    elif silent and any_answered:
+        head = f"拿不到玩家 {player_name} 的统计数据，各服务器情况如下。"
+    elif silent:
+        head = f"服务器均未响应，暂时拿不到玩家 {player_name} 的统计数据。"
+    elif fails["unsupported"]:
+        head = (f"已连接的服务器都没有统计查询接口（模组版本过旧），"
+                f"查不到玩家 {player_name} 的统计数据。")
+    else:
+        head = f"未查到玩家 {player_name} 的统计数据。"
+
+    lines = [head]
+    for label, items, skip in (("该服没有这个玩家的记录", no_record, not silent),
+                               ("未响应", fails["unreachable"], False),
+                               ("响应异常", fails["abnormal"], False),
+                               ("模组没有统计接口", fails["unsupported"],
+                                not (no_record or silent or fails["rejected"])),
+                               ("模组拒绝", fails["rejected"], False)):
+        if items and not skip:
+            lines.append(f"· {label}：{_stats_fail_detail(items)}")
+    return "\n".join(lines)
+
+
 async def run_player_stats(event: AstrMessageEvent, config_manager, player_name: str, target_server: str = None):
     """查询玩家统计数据，统一使用模组 API"""
     if not player_name:
@@ -218,12 +298,16 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
             return
 
     # ---- 统一使用模组 API ----
+    fails = {"unreachable": [], "abnormal": [], "no_record": [],
+             "unsupported": [], "rejected": []}
     for srv in targets:
         host = srv["host"]
         port = wm.get_server_port(srv)
         ok, payload = await mod_http.request(
             host, port, f"/api/stats/{player_name}", method="GET", token=token)
         if not ok or not isinstance(payload, dict):
+            bucket = _stats_fail_bucket(payload)
+            fails[bucket].append((srv["name"], "" if bucket == "no_record" else str(payload)))
             continue
         response_data = payload.get("data") or {}
         if response_data:
@@ -231,18 +315,18 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
             found_server_name = srv["name"]
             all_servers_with_data.append((found_server_name, payload))
             break  # 找到第一个有效数据即跳出
+        fails["abnormal"].append((srv["name"], "模组返回了空的统计数据"))
 
     if found_data is None:
-        yield event.plain_result(f"未找到玩家 {player_name} 的统计数据。")
+        yield event.plain_result(_stats_fail_text(player_name, fails))
         return
 
     # 获取头像并生成图片
     async with aiohttp.ClientSession() as session:
         avatar = await download_avatar(session, player_name, 72, is_premium=None, uuid=None)
 
-    # 先取基线（不含当天），再落当日快照：同一天的重复查询不会自己给自己当基线
-    window_days, baseline_stats = stats_snapshot.load_baseline(
-        player_name, found_server_name) or (None, None)
+    # 先读历史快照（不含当天），再落当日快照：同一天的重复查询不会自己给自己当基线
+    snapshots = stats_snapshot.load_snapshots(player_name, found_server_name)
     stats_snapshot.save_snapshot(player_name, found_server_name, found_data)
 
     is_online = found_data.get('online', False)
@@ -257,8 +341,7 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
             is_online=is_online,
             avatar_img=avatar,
             show_server_label=(len(servers) > 1),
-            baseline_stats=baseline_stats,
-            window_days=window_days
+            snapshots=snapshots
         )
         await asyncio.to_thread(_save_png, img, img_path)
         await event.send(MessageChain([AstrImage(file=img_path)]))

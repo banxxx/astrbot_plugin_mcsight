@@ -227,10 +227,6 @@ async def request(host: str, port: Any, endpoint: str,
             # 拿到响应即说明建连成功，熔断计数归零
             _breaker_clear(key)
 
-            if resp.status == 404:
-                _log(CAT_NOT_FOUND, target, f"status={resp.status}")
-                return False, ModError(_USER_TEXT[CAT_NOT_FOUND], CAT_NOT_FOUND, resp.status)
-
             # 先读文本再自行解析：模组 5xx 或中间层返回 HTML 时不会抛 ContentTypeError，
             # 避免「服务端错误」被误报成「连不上」
             raw = await resp.text()
@@ -246,9 +242,13 @@ async def request(host: str, port: Any, endpoint: str,
             try:
                 result = json.loads(raw)
             except ValueError:
-                _log(CAT_BAD_RESPONSE, target, f"status={resp.status} body={raw[:200]}")
-                return False, ModError(_USER_TEXT[CAT_BAD_RESPONSE], CAT_BAD_RESPONSE, resp.status)
+                result = None
             if not isinstance(result, dict):
+                # 404 且响应体不是模组的业务 JSON：这条路由在当前的模组版本里不存在
+                # （模组自身的 404 一定带 code/message，例如「玩家不在线」，走下面的业务分支）
+                if resp.status == 404:
+                    _log(CAT_NOT_FOUND, target, "status=404 body=no-business-json")
+                    return False, ModError(_USER_TEXT[CAT_NOT_FOUND], CAT_NOT_FOUND, resp.status)
                 _log(CAT_BAD_RESPONSE, target, f"status={resp.status} body={raw[:200]}")
                 return False, ModError(_USER_TEXT[CAT_BAD_RESPONSE], CAT_BAD_RESPONSE, resp.status)
 

@@ -6,7 +6,8 @@
 
 import math
 import time
-from typing import Dict, Any, Optional
+from datetime import date, timedelta
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
@@ -252,8 +253,7 @@ def calc_category_scores(data, hours=None):
 
 
 def window_hours(current, baseline):
-    """本期实际游玩小时 = playTime 差值。
-    有 playTime 但本期几乎没玩时夹到 MIN_WINDOW_HOURS，防止几分钟样本炸出满格多边形；
+    """本期实际游玩小时 = playTime 差值，不夹下限（0 就是 0，调用方要据此判"没上线"）。
     拿不到 playTime 返回 None，让调用方退回生涯口径而不是除以 1 小时把分数放大 200 倍。"""
     try:
         cur = float(current.get('playTime', 0) or 0)
@@ -262,7 +262,7 @@ def window_hours(current, baseline):
         return None
     if cur <= 0:
         return None
-    return max(MIN_WINDOW_HOURS, (cur - base) / TICKS_PER_HOUR)
+    return max(0.0, (cur - base) / TICKS_PER_HOUR)
 
 
 def delta_stats(current, baseline):
@@ -278,6 +278,86 @@ def delta_stats(current, baseline):
             base = 0.0
         out[k] = max(0.0, float(v) - base)
     return out
+
+
+# ========== 本期 / 生涯 两态口径 ==========
+WINDOW_DAYS = 7                 # 本期跨度：固定 7 个日历天
+BASELINE_TOLERANCE_DAYS = 2     # 采样缺天时允许往前多找 2 天
+COMPARE_MIN_TOTAL_HOURS = 20.0  # 累计不足 20 小时不做对比：本期就是他玩过的全部
+COMPARE_MIN_PRIOR_HOURS = 10.0  # 基线前不足 10 小时＝拿近乎为空的历史跟自己比，无意义
+TINY_ACCOUNT_HOURS = 1.0        # 累计不足 1 小时连图都不画：分母太小会把每项顶到满分
+
+
+class WindowPlan(NamedTuple):
+    mode: str                        # 'window' 本期增量 / 'career' 生涯累计
+    day_from: str                    # 本期起点＝基线那天，career 时为空
+    day_to: str
+    span_days: int
+    data: Dict[str, float]           # 打分用的原始值：本期增量或生涯累计
+    hours: float                     # 打分分母（游玩小时）
+    raw_hours: float                 # 未夹下限的本期游玩小时
+    scores: Dict[str, float]
+    hist_scores: Dict[str, float]    # 生涯强度，本期态下作虚影
+    reason: str                      # 落到生涯的来路，决定底部那句说明
+
+
+def _career_plan(current, hist_scores, reason):
+    hours = play_hours(current)
+    return WindowPlan('career', '', '', 0, current, hours, 0.0,
+                      hist_scores, hist_scores, reason)
+
+
+def resolve_window(current, snapshots) -> WindowPlan:
+    """按日历天挑基线，决定这张图走本期增量还是生涯累计。
+
+    快照由每日采样按日历落盘，所以"7 天"是真实历；挑中之后还要两段都够长，
+    否则本期等于全部历史，画出来是自己跟自己重合，不如老实退回生涯。
+    """
+    hist_scores = calc_category_scores(current)
+    today = date.today()
+    target = today - timedelta(days=WINDOW_DAYS)
+    floor = target - timedelta(days=BASELINE_TOLERANCE_DAYS)
+
+    baseline = None
+    for day, stats in reversed(snapshots or []):   # 升序列表，取 ≤target 的最新一份
+        try:
+            d = date.fromisoformat(day)
+        except (TypeError, ValueError):
+            continue
+        if d > target:
+            continue
+        if d >= floor:
+            baseline = (day, stats)
+        break
+    if not baseline:
+        return _career_plan(current, hist_scores, 'no_baseline')
+
+    total_h = play_hours(current)
+    if total_h < COMPARE_MIN_TOTAL_HOURS:
+        return _career_plan(current, hist_scores, 'small_total')
+    if play_hours(baseline[1]) < COMPARE_MIN_PRIOR_HOURS:
+        return _career_plan(current, hist_scores, 'thin_history')
+
+    raw_h = window_hours(current, baseline[1])
+    if raw_h is None:
+        return _career_plan(current, hist_scores, 'no_playtime')
+    if raw_h <= 0:
+        return _career_plan(current, hist_scores, 'idle')
+
+    data = delta_stats(current, baseline[1])
+    scores = calc_category_scores(data, hours=max(MIN_WINDOW_HOURS, raw_h))
+    if sum(scores.values()) <= 0:
+        # 在线挂着但一项玩法统计都没动，本期画出来是圆心一个点——不如画生涯
+        return _career_plan(current, hist_scores, 'idle')
+
+    return WindowPlan('window', baseline[0], _day_str(today),
+                      (today - date.fromisoformat(baseline[0])).days,
+                      data, max(MIN_WINDOW_HOURS, raw_h), raw_h,
+                      scores, hist_scores, '')
+
+
+def _day_str(d: date) -> str:
+    return d.strftime('%Y-%m-%d')
 
 
 # ========== Pillow 图表（不依赖 matplotlib，避免 AstrBot 双份 numpy/PIL 副本原生崩溃） ==========
@@ -431,11 +511,10 @@ def _dash_path(draw, pts, on_len, off_len, fill, width, closed=True):
         k += 1
 
 
-def create_radar_chart(scores, category_names, w, h,
-                       ghost_scores=None, window_days=None):
+def create_radar_chart(scores, category_names, w, h, ghost_scores=None):
     """生成雷达图（w/h 为设计像素），返回 2x 像素 PIL Image。
     线框本体不加填充：每条边按相邻两个分类的颜色渐变，主线下方垫一层同色扩散阴影。
-    ghost_scores 给出时叠加一层冷灰蓝虚线生涯平均轮廓。"""
+    ghost_scores 给出时叠加一层冷灰蓝虚线生涯平均轮廓（只有本期态会给）。"""
     n = max(1, len(category_names))
     img = Image.new('RGBA', (w * SS, h * SS), '#ffffff')
     draw = ImageDraw.Draw(img)
@@ -542,7 +621,7 @@ def create_radar_chart(scores, category_names, w, h,
     if ghost_scores:
         # 图例放左上角：这里是外圈标签与多边形都够不到的空档
         fl = _font(RD_LEGEND_SIZE * SS)
-        rows = [(f"近 {int(window_days or 7)} 天", True), ("生涯平均", False)]
+        rows = [("本期", True), ("生涯平均", False)]
         sw = 14 * SS
         sw_h = RD_LEGEND_SIZE * SS * 0.8
         ly = 6 * SS
@@ -903,7 +982,13 @@ def _build_stats(draw, ops, doc, y):
 
 
 # ========== 入口 ==========
-DEFAULT_WINDOW_DAYS = 7
+CAREER_NOTE = {
+    'no_baseline': "还没有 7 天前的历史快照，两图按生涯累计",
+    'small_total': f"累计游玩不足 {COMPARE_MIN_TOTAL_HOURS:.0f} 小时，两图按生涯累计",
+    'thin_history': "7 天前几乎没有游玩记录，本期与生涯没有差别",
+    'idle': "最近 7 天没有活动记录，两图按生涯累计",
+    'no_playtime': "基线缺少游玩时长，两图按生涯累计",
+}
 
 
 def draw_player_stats_image(
@@ -913,33 +998,23 @@ def draw_player_stats_image(
     is_online: bool = True,
     avatar_img: Optional[Image.Image] = None,
     show_server_label: bool = True,
-    baseline_stats: Optional[Dict[str, Any]] = None,
-    window_days: Optional[int] = None
+    snapshots: Optional[List[Tuple[str, Dict[str, float]]]] = None
 ) -> Image.Image:
     """生成玩家统计图片（雷达图+环形图+分类明细，2x 超采样）
 
     同步函数、纯 CPU 重活：调用方必须用 asyncio.to_thread 执行，
     直接在事件循环里调用会卡住整个后端。
 
-    baseline_stats 为历史某日的累计值；给了它，两图就改画"近 window_days 天"
-    的增量（雷达另用灰色虚线保留历史累计轮廓作参照）。
+    snapshots 为历史每日快照 [(day, 当日累计值)]；够对比条件时两图改画最近
+    7 天增量（雷达叠一层生涯平均虚影作参照），否则一律画生涯累计。
     """
     category_names = list(CATEGORIES.keys())
     hours = play_hours(stats_data)
-    hist_scores = calc_category_scores(stats_data)     # 生涯每小时强度
-    has_baseline = bool(baseline_stats)
-    if has_baseline:
-        window_days = int(window_days or DEFAULT_WINDOW_DAYS)
-        period_tag = f"近 {window_days} 天"
-        chart_data = delta_stats(stats_data, baseline_stats)
-        win_h = window_hours(stats_data, baseline_stats)
-        scores = calc_category_scores(chart_data, hours=win_h)
-    else:
-        window_days = None
-        period_tag = ""
-        chart_data = stats_data
-        win_h = hours
-        scores = hist_scores
+    tiny = hours < TINY_ACCOUNT_HOURS
+    plan = resolve_window(stats_data, snapshots or [])
+    is_window = plan.mode == 'window'
+    scores = plan.scores
+    period = (f"{plan.day_from[5:]} ~ {plan.day_to[5:]} " if is_window else "")
 
     # 环形分母 = 六类强度得分之和。得分已各自对过参考值、无量纲，跨类可比；
     # 换成"次数求和"会被 jump 这类高频被动事件吃掉（实测一项占 74%），所以不用次数。
@@ -947,11 +1022,17 @@ def draw_player_stats_image(
     shares = {c: (scores[c] / total_score if total_score > 0 else 0.0)
               for c in scores}
 
-    # 样本不足只在底部说一句，不在图里到处贴警告
+    # 口径与样本说明只在底部说一句，不在图里到处贴警告
     if hours <= 0:
         note = "模组未提供游玩时长，按累计值折算"
-    elif has_baseline and win_h is not None and win_h <= MIN_WINDOW_HOURS:
+    elif tiny:
+        note = f"累计游玩仅 {hours:.1f} 小时，样本太小，两图暂不出"
+    elif is_window and plan.raw_hours < MIN_WINDOW_HOURS:
         note = f"本期游玩不足 {MIN_WINDOW_HOURS:.0f} 小时，强度按下限折算"
+    elif is_window and plan.hours < MIN_SAMPLE_HOURS:
+        note = f"样本较少：本期游玩仅 {plan.hours:.1f} 小时"
+    elif not is_window and plan.reason:
+        note = CAREER_NOTE.get(plan.reason, "")
     elif hours < MIN_SAMPLE_HOURS:
         note = f"样本较少：累计游玩仅 {hours:.1f} 小时"
     else:
@@ -981,17 +1062,19 @@ def draw_player_stats_image(
                                AVATAR_R * SCALE)
 
     chart_w = int((WIDTH - PAD * 2 - CH_GAP) / 2) - 2 * CH_PAD_X
-    radar = create_radar_chart(scores, category_names, chart_w, CH_H,
-                               ghost_scores=hist_scores if has_baseline else None,
-                               window_days=window_days)
-    donut_cats = [c for c in category_names if shares.get(c, 0) > 0]
-    if donut_cats:
-        donut = create_donut_chart(shares, donut_cats, category_names,
-                                   chart_w, CH_H)
+    if tiny:
+        # 分母不足 1 小时时每项强度都会被放大到封顶，画出来像个肝帝，宁可不画
+        radar = create_blank_chart(chart_w, CH_H, "游玩时长不足 1 小时，暂不出图")
+        donut = create_blank_chart(chart_w, CH_H, "游玩时长不足 1 小时，暂不出图")
     else:
-        donut = create_blank_chart(chart_w, CH_H,
-                                   "本期没有活动记录" if has_baseline
-                                   else "暂无活动记录")
+        radar = create_radar_chart(scores, category_names, chart_w, CH_H,
+                                   ghost_scores=plan.hist_scores if is_window else None)
+        donut_cats = [c for c in category_names if shares.get(c, 0) > 0]
+        if donut_cats:
+            donut = create_donut_chart(shares, donut_cats, category_names,
+                                       chart_w, CH_H)
+        else:
+            donut = create_blank_chart(chart_w, CH_H, "暂无活动记录")
 
     server_label = ""
     if server_name and show_server_label:
@@ -1014,10 +1097,10 @@ def draw_player_stats_image(
         'is_online': is_online,
         'avatar': avatar,
         'radar': radar,
-        'radar_title': (f"{period_tag}强度 · 雷达图" if has_baseline
+        'radar_title': (f"{period}强度 · 雷达图" if is_window
                         else "生涯强度 · 雷达图"),
         'donut': donut,
-        'donut_title': (f"{period_tag}精力构成 · 环形图" if has_baseline
+        'donut_title': (f"{period}精力构成 · 环形图" if is_window
                         else "精力构成 · 环形图"),
         'display_categories': display_categories,
         'now_str': " · ".join(s for s in (time.strftime("%Y/%m/%d  %H:%M:%S"),

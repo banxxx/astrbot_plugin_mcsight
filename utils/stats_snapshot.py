@@ -1,7 +1,7 @@
 """玩家统计快照存储（插件本地 sqlite）
 
-/查询 每次取到模组的累计统计后落一份当日快照；下次查询时用「窗口内最早的那份」
-做基线，从而画出"近 N 天增量"。数据只在本插件目录，后续确认有用再整体迁中心库。
+每日定时采样 + /查询 各落一份当日累计快照；读的时候按日历天挑基线，
+所以时间轴由日历驱动，与「有没有人查询」无关。数据只在本插件目录。
 """
 
 import json
@@ -10,7 +10,7 @@ import sqlite3
 import threading
 import time
 from datetime import date, timedelta
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from astrbot.api import logger
 
@@ -18,9 +18,8 @@ _DB_PATH = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
                  '..', 'data', 'stats_snapshots.sqlite3'))
 
-MIN_BASELINE_AGE_DAYS = 1    # 当天的快照不能给自己当基线
-MAX_BASELINE_AGE_DAYS = 14   # 太久远的基线已经没有参照意义
 RETENTION_DAYS = 30          # 超出即清理，控制体积
+
 
 _lock = threading.Lock()
 _conn: Optional[sqlite3.Connection] = None
@@ -63,33 +62,53 @@ def _numeric_only(stats: Dict[str, Any]) -> Dict[str, float]:
     return out
 
 
-def load_baseline(player: str, server: str,
-                  max_age_days: int = MAX_BASELINE_AGE_DAYS,
-                  min_age_days: int = MIN_BASELINE_AGE_DAYS
-                  ) -> Optional[Tuple[int, Dict[str, float]]]:
-    """返回 (间隔天数, 基线累计值)；没有可用基线时返回 None。失败不抛异常。"""
+def load_snapshots(player: str, server: str,
+                   keep_days: int = RETENTION_DAYS
+                   ) -> List[Tuple[str, Dict[str, float]]]:
+    """返回 (day, 当日累计值) 列表，按天升序，不含今天。失败返回空列表。
+
+    挑哪一份当基线是出图侧的口径判断，这里只按日历把历史区间交出去。
+    """
     try:
         p, s = _key(player, server)
         today = date.today()
         sql = ("SELECT day, stats FROM stats_snapshot"
                " WHERE player=? AND server=? AND day<? AND day>=?"
-               " ORDER BY day ASC LIMIT 1")
+               " ORDER BY day ASC")
         with _lock:
-            row = _open().execute(
+            rows = _open().execute(
                 sql, (p, s, _day_str(today),
-                      _day_str(today - timedelta(days=max_age_days)))).fetchone()
-        if not row:
-            return None
-        stats = json.loads(row[1])
-        if not isinstance(stats, dict) or not stats:
-            return None
-        age = (today - date.fromisoformat(row[0])).days
-        if age < min_age_days:
-            return None
-        return age, stats
+                      _day_str(today - timedelta(days=keep_days)))).fetchall()
+        out = []
+        for day, raw in rows:
+            try:
+                stats = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(stats, dict) and stats:
+                out.append((day, stats))
+        return out
     except Exception as e:
-        logger.warning(f"读取统计快照基线失败: {e}")
-        return None
+        logger.warning(f"读取统计快照失败: {e}")
+        return []
+
+
+def list_sampled(keep_days: int = RETENTION_DAYS) -> List[Tuple[str, str]]:
+    """最近仍有快照的 (player, server)，即每日采样的名单。失败返回空列表。
+
+    名单来自快照表本身：被查询过的人才会被继续采样，30 天保留期一到自动退出。
+    名字是当初查询用的那个大小写，模组按名找 UUID 不区分大小写，可以直接回传。
+    """
+    try:
+        since = _day_str(date.today() - timedelta(days=keep_days))
+        with _lock:
+            rows = _open().execute(
+                "SELECT DISTINCT player, server FROM stats_snapshot"
+                " WHERE day>=? ORDER BY player, server", (since,)).fetchall()
+        return [(r[0], r[1]) for r in rows]
+    except Exception as e:
+        logger.warning(f"读取采样名单失败: {e}")
+        return []
 
 
 def save_snapshot(player: str, server: str, stats: Dict[str, Any]) -> None:

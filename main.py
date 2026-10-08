@@ -5,7 +5,7 @@ from .commands.mc_handler import handle_mc_command
 from .commands.common import start_db_keepalive, stop_db_keepalive
 from .config.server_config import ConfigManager
 from .config.whitelist_config import WhitelistManager
-from .utils import mod_http
+from .utils import mod_http, stats_sampler
 
 @register("astrbot_plugin_mcsight", "poso", "Minecraft 多服务器状态监控插件", "v1.0.0")
 class MCWatcher(Star):
@@ -13,6 +13,10 @@ class MCWatcher(Star):
         super().__init__(context)
         WhitelistManager().set_context(context)
         start_db_keepalive()
+
+    async def initialize(self):
+        # 内核在插件实例化后 await 本方法，此时事件循环已在跑，采样任务要起在这里
+        stats_sampler.start()
 
     @filter.command("mc")
     async def mc(self, event: AstrMessageEvent):
@@ -196,6 +200,7 @@ class MCWatcher(Star):
             yield result
 
     async def terminate(self):
+        await stats_sampler.stop()
         stop_db_keepalive()
         await mod_http.close_session()
         logger.info("MCWatcher 插件已卸载")
