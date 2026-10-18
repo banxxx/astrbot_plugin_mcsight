@@ -314,7 +314,9 @@ astrbot_plugin_mcsight/
 
 ## 🔖 版本与发版
 
-版本号只有一个来源：`metadata.yaml` 的 `version`（形如 `v1.1.0`）。WebUI 插件页显示的是它，AstrBot 判断新旧也用它，因此必须与 GitHub 的 tag 逐字一致。
+版本号有两个写法，数字必须一致：`metadata.yaml` 的 `version` **不带 `v`**（形如 `1.1.2`），GitHub 的 tag 与 Release **带 `v`**（`v1.1.2`）。WebUI 插件页显示的是前者。
+
+发到插件市场（[AstrBot Cloud 发布页](https://cloud.astrbot.app/publish)）后，市场索引里的版本号会被规范化成不带 `v` 的形式；而「有新版本」标记是拿本地 `metadata.yaml` 的 `version` 和索引里的值**直接比字符串**、不做归一化。所以 `version` 一旦写成 `v1.1.2`，本地与市场就对不上，标记会一直挂着，点「更新」也灭不掉。
 
 WebUI「插件管理」里的**更新**按钮按 `metadata.yaml` 的 `repo` 取包，取哪一份取决于写法：
 
@@ -323,13 +325,16 @@ WebUI「插件管理」里的**更新**按钮按 `metadata.yaml` 的 `repo` 取�
 | 不带 `/tree/<分支>`（本仓库当前用法） | 仓库**最新的 GitHub Release** 源码包；一个 Release 都没有才回落默认分支 |
 | 带 `/tree/<分支>` | 该分支的最新提交，完全不看 Release |
 
-发版三步，都在仓库目录里执行：
+发版四步，前三步都在仓库目录里执行：
 
-1. 改 `metadata.yaml` 的 `version`，在 `CHANGELOG.md` 顶部加一段，一起提交并推送；
-2. 打 tag 并推上去：`git tag v1.1.0` → `git push origin v1.1.0`；
-3. 建 Release：`gh release create v1.1.0 --generate-notes`（标题用同一个版本号）。
+1. 改 `metadata.yaml` 的 `version`（不带 `v`），在 `CHANGELOG.md` 顶部加一段，一起提交并推送；
+2. 打 tag 并推上去：`git tag v1.1.2` → `git push origin v1.1.2`；
+3. 建 Release：`gh release create v1.1.2 --generate-notes --title v1.1.2`；
+4. 到 AstrBot Cloud 发布页发布同一个版本号，市场索引才会跟着更新（平台不会自己去扫你的 tag）。
 
-**只做前两步是不够的**：少了 Release，点「更新」拿到的还是上一个 Release 的代码，不是刚推的提交。
+**只做前两步是不够的**：少了 Release，点「更新」拿到的还是上一个 Release 的代码，不是刚推的提交。**少了第四步**：市场里挂的还是旧版本号，已安装用户看不到新版本。
+
+发布压缩包（zip）大小不得超过 16MB，超了平台会直接拒收；仓库里的字体是主要体积来源，加图片前留意余量。
 
 `CHANGELOG.md` 必须进仓库——WebUI 的「更新日志」读的是插件目录里的这个文件。更新会整包重装插件目录，运行期数据不受影响（见「数据与文件」）。
 
