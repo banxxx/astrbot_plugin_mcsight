@@ -8,7 +8,8 @@ from astrbot.api.message_components import Image as AstrImage
 from astrbot.api import logger
 from ..config.server_config import ConfigManager
 from ..config.whitelist_config import WhitelistManager
-from ..utils.permission import check_permission, is_astrbot_super_admin
+from ..utils.permission import (check_permission, is_astrbot_super_admin,
+                                PERMISSION_REQUIRED, LEVEL_SUPER_ADMIN)
 from ..utils import debounce
 
 # 导入拆分的处理函数
@@ -17,6 +18,7 @@ from ..commands import (
     handle_add, handle_remove, handle_edit, handle_batchadd, handle_batchremove,
     handle_list, handle_move, handle_swap, handle_lastonline,
     handle_say, handle_tps, handle_status, handle_stats,
+    handle_exec, handle_token,
     handle_bind, handle_unbind, handle_check,
     handle_checknick, handle_nicknamecheck_switch, handle_bindcheck
 )
@@ -66,10 +68,14 @@ async def handle_mc_command(event: AstrMessageEvent):
             return
 
     # 权限检查（管理命令）
-    admin_cmds = {"add", "remove", "edit", "batchadd", "batchremove", "move", "swap", "lastonline", "checknick", "nicknamecheck", "bindcheck", "say"}
+    admin_cmds = {"add", "remove", "edit", "batchadd", "batchremove", "move", "swap", "lastonline", "checknick", "nicknamecheck", "bindcheck", "say", "exec", "token"}
     if sub_cmd in admin_cmds:
         if not await check_permission(event, sub_cmd):
-            yield event.plain_result("权限不足：该操作需要群管理员或插件管理员权限。")
+            # 按要求的等级说话：超管项若说成「群管理员即可」会把人引到错的权限上
+            if PERMISSION_REQUIRED.get(sub_cmd) == LEVEL_SUPER_ADMIN:
+                yield event.plain_result("权限不足：该操作需要超级管理员权限。")
+            else:
+                yield event.plain_result("权限不足：该操作需要群管理员或插件管理员权限。")
             return
 
     # 路由到各个处理函数
@@ -91,6 +97,9 @@ async def handle_mc_command(event: AstrMessageEvent):
     elif sub_cmd == "edit":
         async for result in handle_edit(event, config, parts):
             yield result
+    elif sub_cmd == "token":
+        async for result in handle_token(event, config, parts):
+            yield result
     elif sub_cmd == "batchadd":
         async for result in handle_batchadd(event, config, parts):
             yield result
@@ -111,6 +120,10 @@ async def handle_mc_command(event: AstrMessageEvent):
             yield result
     elif sub_cmd == "say":
         async for result in handle_say(event, config, parts):
+            yield result
+    elif sub_cmd == "exec":
+        # 服名要按 [xxx] 定界，必须拿到未拆分的原始余下文本（多空格不能塌缩）
+        async for result in handle_exec(event, config, msg[len(sub_cmd):]):
             yield result
     elif sub_cmd == "tps":
         async for result in handle_tps(event, config, parts):

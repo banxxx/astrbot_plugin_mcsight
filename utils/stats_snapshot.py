@@ -1,7 +1,7 @@
 """玩家统计快照存储（插件本地 sqlite）
 
 每日定时采样 + /查询 各落一份当日累计快照；读的时候按日历天挑基线，
-所以时间轴由日历驱动，与「有没有人查询」无关。数据只在本插件目录。
+所以时间轴由日历驱动，与「有没有人查询」无关。
 """
 
 import json
@@ -14,9 +14,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from astrbot.api import logger
 
+from .plugin_paths import data_dir
+
 _DB_PATH = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                 '..', 'data', 'stats_snapshots.sqlite3'))
+    os.path.join(data_dir(), 'stats_snapshots.sqlite3'))
 
 RETENTION_DAYS = 30          # 超出即清理，控制体积
 
@@ -29,7 +30,6 @@ def _open() -> sqlite3.Connection:
     global _conn
     if _conn is not None:
         return _conn
-    os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
     _conn = sqlite3.connect(_DB_PATH, timeout=2.0, check_same_thread=False)
     _conn.execute(
         "CREATE TABLE IF NOT EXISTS stats_snapshot ("

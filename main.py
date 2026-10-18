@@ -76,6 +76,21 @@ class MCWatcher(Star):
         async for result in handle_mc_command(event):
             yield result
 
+    # ---------- 控制台命令 ----------
+    @filter.command("执行", aliases=["exec"])
+    async def exec_command(self, event: AstrMessageEvent):
+        """在指定服务器上执行控制台命令（群管理员及以上）"""
+        raw_msg = event.message_str.strip()
+        if raw_msg.startswith('/'):
+            raw_msg = raw_msg[1:]
+        rest = raw_msg[len("执行"):].strip() if raw_msg.startswith("执行") else raw_msg[len("exec"):].strip()
+        if rest:
+            event.message_str = f"/mc exec {rest}"
+        else:
+            event.message_str = "/mc exec"
+        async for result in handle_mc_command(event):
+            yield result
+
     @filter.command("tps")
     async def tps_command(self, event: AstrMessageEvent):
         raw_msg = event.message_str.strip()

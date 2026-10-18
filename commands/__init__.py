@@ -1,12 +1,13 @@
 # 导出所有处理函数
 from .help_whitelist import handle_whitelist, handle_help, handle_bindhelp
 from .management import (
-    handle_add, handle_remove, handle_edit,
+    handle_add, handle_remove, handle_edit, handle_token,
     handle_batchadd, handle_batchremove,
     handle_list, handle_move, handle_swap,
     handle_lastonline
 )
 from .services import handle_say, handle_tps, handle_status, handle_stats
+from .console import handle_exec
 from .bind import handle_bind, handle_unbind, handle_check
 from .nickname_check import handle_checknick, handle_nicknamecheck_switch
 from .bind_check import handle_bindcheck

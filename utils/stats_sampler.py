@@ -15,6 +15,7 @@ from astrbot.api import logger
 
 from ..config.whitelist_config import WhitelistManager
 from . import mod_http, stats_snapshot
+from .plugin_paths import data_dir
 
 # 每天本地时间 04:37：避开整点，也和备份/其它服任务错开
 SAMPLE_AT = (4, 37)
@@ -30,10 +31,9 @@ _task: asyncio.Task = None
 
 def _server_endpoints() -> Dict[str, Tuple[str, int]]:
     """服务器名（小写）→ (host, port)。各群配置里同名服务器视为同一台。"""
-    root = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
     wm = WhitelistManager()
     out = {}
-    for path in glob.glob(os.path.join(root, 'group_configs', 'servers_*.json')):
+    for path in glob.glob(os.path.join(data_dir(), 'group_configs', 'servers_*.json')):
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 servers = json.load(f).get("servers", [])

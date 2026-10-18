@@ -16,7 +16,7 @@ WINDOW_LIGHT = 1.0
 
 HEAVY_CMDS = {"status", "stats", "tps", "checknick", "bindcheck"}
 # help/bindhelp 命中缓存不出网，但每次都是一条图片消息
-MEDIUM_CMDS = {"bind", "unbind", "check", "say", "help", "bindhelp"}
+MEDIUM_CMDS = {"bind", "unbind", "check", "say", "help", "bindhelp", "exec", "token"}
 
 # 键含用户，长跑必须给上限；到期回收 + 超限丢最旧
 _MAX_KEYS = 4096

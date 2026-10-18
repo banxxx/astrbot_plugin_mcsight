@@ -2,15 +2,25 @@ import json
 import os
 from typing import List, Dict, Tuple, Optional
 
+from ..utils.plugin_paths import sub_dir
+
 # 每个群最多绑定的服务器数量（/mc add、/mc batchadd 时拦截）
 MAX_SERVERS_PER_GROUP = 20
 
+# 服务器名不能含方括号：/执行 用 [服名] 定界，名字里带括号会让解析错位
+INVALID_NAME_CHARS = ("[", "]", "【", "】")
+
+
+def validate_server_name(name: str) -> str:
+    """返回拒绝原因；合法返回空串"""
+    bad = [c for c in INVALID_NAME_CHARS if c in name]
+    if bad:
+        return "名称不能包含方括号（{}），/执行 要用 [服务器名] 定界".format(" ".join(bad))
+    return ""
+
 class ConfigManager:
-    def __init__(self, group_id: Optional[int] = None, session_id: Optional[str] = None, base_path: str = None):
-        if base_path is None:
-            base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
-        self.config_dir = os.path.join(base_path, 'group_configs')
-        os.makedirs(self.config_dir, exist_ok=True)
+    def __init__(self, group_id: Optional[int] = None, session_id: Optional[str] = None):
+        self.config_dir = sub_dir('group_configs')
         # 优先使用 group_id，如果为 None 则使用 session_id（私聊场景）
         if group_id is not None:
             self.config_file = os.path.join(self.config_dir, f'servers_{group_id}.json')
@@ -86,6 +96,19 @@ class ConfigManager:
                 return True
         return False
 
+    # ---------- 新增：按服设置命令 Token；token 传空表示清除 ----------
+    def edit_server_console_token(self, name: str, token: str) -> bool:
+        data = self._load()
+        for s in data["servers"]:
+            if s["name"] == name:
+                if token:
+                    s["console_token"] = token
+                else:
+                    s.pop("console_token", None)
+                self._save(data)
+                return True
+        return False
+
     def rename_server(self, old_name: str, new_name: str) -> bool:
         data = self._load()
         servers = data["servers"]
@@ -99,8 +122,9 @@ class ConfigManager:
         return False
 
     # ---------- 修改：batch_add 支持端口 ----------
-    def batch_add(self, servers_str: str, host_validator=None) -> Tuple[int, List[str]]:
-        """host_validator: 可选回调 (host) -> 拒绝原因或 None，非法 host 记入失败列表"""
+    def batch_add(self, servers_str: str, host_validator=None, name_validator=None) -> Tuple[int, List[str]]:
+        """host_validator: 可选回调 (host) -> 拒绝原因或 None，非法 host 记入失败列表
+        name_validator: 同上，校验服务器名"""
         data = self._load()
         existing = {s["name"] for s in data["servers"]}
         success = 0
@@ -128,6 +152,11 @@ class ConfigManager:
             if not name or not host:
                 failed.append(pair)
                 continue
+            if name_validator is not None:
+                name_err = name_validator(name)
+                if name_err:
+                    failed.append(f"{name} ({name_err})")
+                    continue
             if host_validator is not None:
                 host_err = host_validator(host)
                 if host_err:

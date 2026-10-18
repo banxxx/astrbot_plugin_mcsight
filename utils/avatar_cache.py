@@ -10,9 +10,11 @@ from astrbot.api import logger
 import aiohttp
 from PIL import Image, ImageDraw
 
+from .plugin_paths import sub_dir
+
 
 # ================= 配置常量 =================
-CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'avatar_cache')
+CACHE_DIR = sub_dir('avatar_cache')
 LOCAL_STEVE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'resources', 'images', 'steve-avatar.png')
 MAX_MEMORY_CACHE = 200          # 内存最多缓存 200 个头像
 DISK_CACHE_EXPIRE_DAYS = 7      # 磁盘缓存过期天数
@@ -161,7 +163,6 @@ async def download_avatar(session: aiohttp.ClientSession,
             return cached.copy()
 
     # 磁盘缓存检查（用户名做哈希作为文件名：防止恶意/异常用户名携带 ../ 等做路径穿越）
-    os.makedirs(CACHE_DIR, exist_ok=True)
     digest = hashlib.sha1(str(username).encode("utf-8")).hexdigest()
     cache_path = os.path.join(CACHE_DIR, f"{digest}.png")
 

@@ -1,5 +1,5 @@
 from astrbot.api.event import AstrMessageEvent
-from ..config.server_config import ConfigManager, MAX_SERVERS_PER_GROUP
+from ..config.server_config import ConfigManager, MAX_SERVERS_PER_GROUP, validate_server_name
 from ..config.whitelist_config import WhitelistManager
 from ..utils.host_validator import validate_host
 from ..utils.permission import is_astrbot_super_admin
@@ -17,6 +17,10 @@ async def handle_add(event: AstrMessageEvent, config: ConfigManager, parts: list
         return
     name = parts[1]
     host = parts[2]
+    name_err = validate_server_name(name)
+    if name_err:
+        yield event.plain_result(f"❌ 添加失败：{name_err}")
+        return
     port = None
     if len(parts) == 4:
         try:
@@ -58,6 +62,10 @@ async def handle_edit(event: AstrMessageEvent, config: ConfigManager, parts: lis
     mode = parts[2].lower()
     value = parts[3]
     if mode == "name":
+        name_err = validate_server_name(value)
+        if name_err:
+            yield event.plain_result(f"❌ 修改失败：{name_err}")
+            return
         success = config.rename_server(target, value)
         yield event.plain_result(f"重命名{'成功' if success else '失败（名称不存在或新名称已占用）'}。")
     elif mode == "host":
@@ -84,6 +92,58 @@ async def handle_edit(event: AstrMessageEvent, config: ConfigManager, parts: lis
     else:
         yield event.plain_result("第二个参数必须为 name、host、port 或 remark。")
 
+# Token 会进 Bearer 头：必须无空白可见 ASCII；长度下限与模组端的弱口令拒绝启动门一致
+MIN_TOKEN_CHARS = 16
+MAX_TOKEN_CHARS = 128
+CLEAR_TOKEN_WORDS = ("清除", "删除", "unset", "clear", "off")
+
+
+def _validate_console_token(raw: str) -> str:
+    """返回错误原因，合法返回空串"""
+    if len(raw) < MIN_TOKEN_CHARS:
+        return f"Token 太短（至少 {MIN_TOKEN_CHARS} 个字符），当前 {len(raw)} 个"
+    if len(raw) > MAX_TOKEN_CHARS:
+        return f"Token 太长（最多 {MAX_TOKEN_CHARS} 个字符），当前 {len(raw)} 个"
+    if any(ord(c) < 0x21 or ord(c) > 0x7e for c in raw):
+        return "Token 只能由不含空格的可见字符组成"
+    return ""
+
+
+async def handle_token(event: AstrMessageEvent, config: ConfigManager, parts: list):
+    """/mc token <服务器名> <Token|清除>：按服务器单独配置命令 Token（超管）"""
+    if len(parts) < 3:
+        yield event.plain_result(
+            "用法:\n"
+            "/mc token <服务器名> <Token>   为该服设置命令 Token\n"
+            "/mc token <服务器名> 清除      关闭该服的 /执行"
+        )
+        return
+    target = parts[1]
+    value = parts[2]
+    servers = config.get_all_servers()
+    if not any(s["name"] == target for s in servers):
+        yield event.plain_result(f"未找到名为「{target}」的服务器。")
+        return
+
+    if value in CLEAR_TOKEN_WORDS or value.lower() in CLEAR_TOKEN_WORDS:
+        config.edit_server_console_token(target, "")
+        yield event.plain_result(f"✅ 已清除「{target}」的命令 Token，该服务器的 /执行 已关闭。")
+        return
+
+    err = _validate_console_token(value)
+    if err:
+        yield event.plain_result(f"❌ 设置失败：{err}")
+        return
+
+    entry = next(s for s in servers if s["name"] == target)
+    config.edit_server_console_token(target, value)
+    # 不回显 Token 明文：聊天记录和日志都会留档
+    reply = (f"✅ 已为「{target}」设置命令 Token（{len(value)} 个字符）。\n"
+             f"需与该服务器模组的 consoleToken 完全一致；模组侧改动要重启服务器才生效。")
+    if entry.get("api_port") is None:
+        reply += f"\n⚠️ 该服务器还没有配置 API 端口，先用 /mc edit {target} port <端口> 补上。"
+    yield event.plain_result(reply)
+
 async def handle_batchadd(event: AstrMessageEvent, config: ConfigManager, parts: list):
     if len(parts) < 2:
         yield event.plain_result("用法: /mc batchadd name1:ip1[:port1],name2:ip2[:port2],...")
@@ -91,7 +151,8 @@ async def handle_batchadd(event: AstrMessageEvent, config: ConfigManager, parts:
     allow_private = _caller_allows_private(event)
     s, f = config.batch_add(
         parts[1],
-        host_validator=lambda h: validate_host(h, allow_private=allow_private))
+        host_validator=lambda h: validate_host(h, allow_private=allow_private),
+        name_validator=validate_server_name)
     yield event.plain_result(f"批量添加：成功 {s} 个" + (f"，失败: {', '.join(f)}" if f else ""))
 
 async def handle_batchremove(event: AstrMessageEvent, config: ConfigManager, parts: list):

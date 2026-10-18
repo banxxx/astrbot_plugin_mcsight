@@ -10,6 +10,8 @@ import re
 import tempfile
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
+from ...utils.plugin_paths import sub_dir
+
 # ========== 画布与配色 ==========
 SCALE = 2             # 超采样倍数：布局按设计单位计算，渲染时整体放大，保证文字锐利
 WIDTH = 1080
@@ -406,6 +408,9 @@ HELP_CARDS = [
             _row(_runs(("/广播 ", ACCENT), ("[服务器名] <消息>", DIM)),
                  pills=["/mc say"],
                  desc=_plain("向游戏内发送广播；省略服务器名则广播至全部服务器")),
+            _row(_runs(("/执行 ", ACCENT), ("[服务器名] <命令>", DIM)),
+                 pills=["/mc exec"], tags=[ADMIN_TAG],
+                 desc=_plain("在指定服务器执行控制台命令并回显输出（需先为该服配置命令 Token）")),
         ], hint="所有人可用"),
     ],
     [
@@ -449,6 +454,9 @@ HELP_CARDS = [
                  desc=_plain("移动排序位置（从 0 开始）")),
             _row(_runs(("/mc swap ", ACCENT), ("名1 名2", DIM)),
                  desc=_plain("交换两台服务器位置")),
+            _row(_runs(("/mc token ", ACCENT), ("名称 Token|清除", DIM)),
+                 tags=[SUPER_TAG],
+                 desc=_plain("单独设置该服的命令 Token")),
         ], hint_tag=ADMIN_TAG, hint="需要群管或插件管理员权限", grid=True),
         _sec(AMBER, "昵称检测与显示", [
             _row(_c("/检测昵称"), pills=["/mc checknick"],
@@ -497,9 +505,7 @@ def draw_help_image() -> Image.Image:
 
 
 # ========== 渲染缓存（内容静态，进程内渲染一次后复用文件） ==========
-_CACHE_DIR = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                 '..', '..', 'data', 'help_cache'))
+_CACHE_DIR = sub_dir('help_cache')
 _cached_paths = {}
 
 
@@ -507,7 +513,6 @@ def cached_image_path(key: str, filename: str, factory) -> str:
     path = _cached_paths.get(key)
     if path and os.path.exists(path):
         return path
-    os.makedirs(_CACHE_DIR, exist_ok=True)
     final = os.path.join(_CACHE_DIR, filename)
     img = factory()
     fd, tmp = tempfile.mkstemp(dir=_CACHE_DIR, suffix='.png')

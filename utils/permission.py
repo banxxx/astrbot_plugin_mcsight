@@ -23,7 +23,11 @@ PERMISSION_REQUIRED = {
     "move": LEVEL_GROUP_ADMIN,
     "swap": LEVEL_GROUP_ADMIN,
     "whitelist": LEVEL_SUPER_ADMIN,
+    # 按服配置命令 Token：等同交出该服控制台权限的钥匙，只给超管
+    "token": LEVEL_SUPER_ADMIN,
     "say": LEVEL_GROUP_ADMIN,
+    # 执行控制台命令：等同服务器控制台权限，群管理员/群主可用
+    "exec": LEVEL_GROUP_ADMIN,
     "tps": LEVEL_MEMBER,
     "bind": LEVEL_MEMBER,          # 允许普通玩家绑定自己
     "unbind": LEVEL_GROUP_ADMIN,   # 解绑需要管理员权限
