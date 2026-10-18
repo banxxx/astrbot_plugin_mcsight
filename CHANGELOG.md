@@ -1,6 +1,15 @@
 # 更新日志
 
-版本号与 `metadata.yaml` 的 `version`、GitHub Release 的 tag 三者保持一致（如 `v1.1.0`）。
+版本号与 `metadata.yaml` 的 `version`、GitHub Release 的 tag 三者保持一致（如 `v1.1.1`）。
+
+## v1.1.1 — 2026-10-18
+
+### 新增
+- 插件图标：仓库根目录的 `logo.png`，WebUI 插件卡片会显示（文件名固定，别的名字不认）。
+- `metadata.yaml` 补 `tags`（Minecraft / 我的世界 / 服务器 / 监控 / 查询 / 群管理）与 `support_platforms`（OneBot v11，即 `aiocqhttp`）；`desc` 扩成多行，写清功能范围和命令列表。
+
+### 说明
+- v1.1.0 只打了 tag、没有分发过，其内容随本版一起上线。
 
 ## v1.1.0 — 2026-10-18
 
