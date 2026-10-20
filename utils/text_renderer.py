@@ -1,12 +1,11 @@
 """
 纯 Pillow 混合文本渲染工具
-支持中英文与彩色 Emoji 混合渲染，完全本地化，不依赖网络
+中英文与彩色 Emoji 图标混排，图标取自 resources/emoji 下的 PNG 贴图，完全本地化，不依赖网络
 """
 
 import os
 import re
-from PIL import Image, ImageDraw, ImageFont
-from astrbot.api import logger
+from PIL import Image
 
 
 # Emoji 匹配正则（涵盖主流 Emoji 的 Unicode 范围）
@@ -26,80 +25,42 @@ _EMOJI_PATTERN = re.compile(
     re.UNICODE
 )
 
-# Emoji 字体缓存：'font' 存字体对象，'native_size' 存原生像素尺寸
-_emoji_font_cache = {}
+# Emoji 图标贴图：只放实际用到的几个，缺位的 emoji 一律不画也不占位
+_EMOJI_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'resources', 'emoji'
+)
+_tile_cache = {}
 
 
-def _get_emoji_font():
-    """
-    加载 NotoColorEmoji.ttf。自动探测该字体支持的原生位图尺寸。
-    返回 (font, native_size) 或 (None, None)。
-    """
-    if 'font' in _emoji_font_cache:
-        return _emoji_font_cache['font'], _emoji_font_cache.get('native_size')
-    if 'failed' in _emoji_font_cache:
-        return None, None
-
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    font_path = os.path.join(base, 'resources', 'fonts', 'NotoColorEmoji.ttf')
-
-    if not os.path.exists(font_path):
-        logger.warning(f"❌ NotoColorEmoji.ttf 不存在: {font_path}")
-        _emoji_font_cache['failed'] = True
-        _emoji_font_cache['font'] = None
-        return None, None
-
-    # 逐个尝试候选尺寸
-    candidates = [109, 128, 136, 96, 112, 160, 64, 32]
-    for size in candidates:
-        try:
-            font = ImageFont.truetype(font_path, size)
-            _emoji_font_cache['font'] = font
-            _emoji_font_cache['native_size'] = size
-            logger.info(f"✅ NotoColorEmoji 加载成功，原生尺寸 = {size}")
-            return font, size
-        except Exception:
+def _tile_for(run: str):
+    """取该 emoji 段的贴图，没有对应图标返回 None（结果连同缺失一起缓存，不重复探盘）"""
+    for ch in run:
+        cp = ord(ch)
+        if cp in (0xFE0E, 0xFE0F, 0x200D):   # 变体选择符与零宽连接符不单独定图标
             continue
-
-    logger.warning(f"❌ NotoColorEmoji.ttf 加载失败：所有候选尺寸 {candidates} 都不支持")
-    _emoji_font_cache['failed'] = True
-    _emoji_font_cache['font'] = None
-    return None, None
+        key = f"{cp:04X}"
+        if key not in _tile_cache:
+            try:
+                img = Image.open(os.path.join(_EMOJI_DIR, key + '.png'))
+                img.load()
+            except (OSError, ValueError):
+                img = None
+            _tile_cache[key] = img
+        return _tile_cache[key]
+    return None
 
 
 def _render_emoji_image(emoji: str, target_size: int):
     """
-    把单个 emoji 渲染为指定大小的 RGBA 图片。
-    - 使用字体原生位图尺寸绘制到带 padding 的画布
-    - 不做 getbbox 裁剪，避免切掉 emoji 边缘
-    - 整体缩放到目标大小
-    失败返回 None。
+    把 emoji 段取成目标大小的 RGBA 图片。
+    贴图按 133px 画布烘制（109 原生位图 + 12px 内边距 ×2），
+    与原先从字体绘制再缩放的尺寸约定一致，因此缩放结果不变。
+    没有对应图标时返回 None。
     """
-    font, native_size = _get_emoji_font()
-    if font is None or native_size is None:
+    tile = _tile_for(emoji)
+    if tile is None or target_size <= 0:
         return None
-
-    try:
-        padding = 12
-        canvas_size = native_size + padding * 2
-        tmp = Image.new('RGBA', (canvas_size, canvas_size), (0, 0, 0, 0))
-        tmp_draw = ImageDraw.Draw(tmp)
-        tmp_draw.text((padding, padding), emoji, font=font, embedded_color=True)
-
-        if tmp.getbbox() is None:
-            # 回退：不启用 embedded_color
-            tmp = Image.new('RGBA', (canvas_size, canvas_size), (0, 0, 0, 0))
-            tmp_draw = ImageDraw.Draw(tmp)
-            tmp_draw.text((padding, padding), emoji, font=font, fill=(0, 0, 0, 255))
-            if tmp.getbbox() is None:
-                logger.warning(f"⚠️ emoji '{emoji}' 渲染后为空")
-                return None
-
-        scaled = tmp.resize((target_size, target_size), Image.LANCZOS)
-        return scaled
-    except Exception as e:
-        logger.warning(f"渲染 emoji '{emoji}' 失败: {e}")
-        return None
+    return tile.resize((target_size, target_size), Image.LANCZOS)
 
 
 def split_emoji_runs(text: str):
@@ -130,7 +91,8 @@ def measure_text_with_emoji(draw, text, font, emoji_scale=1.0):
     total_w = 0.0
     for is_emoji, segment in split_emoji_runs(text):
         if is_emoji:
-            total_w += emoji_size
+            if _tile_for(segment) is not None:
+                total_w += emoji_size
         else:
             total_w += draw.textlength(segment, font=font)
     return total_w
@@ -152,8 +114,9 @@ def draw_text_with_emoji(img, draw, pos, text, font, fill,
     for is_emoji, segment in split_emoji_runs(text):
         if is_emoji:
             emoji_img = _render_emoji_image(segment, emoji_size)
-            if emoji_img is not None:
-                img.paste(emoji_img, (int(x), int(y + emoji_offset_y)), emoji_img)
+            if emoji_img is None:
+                continue    # 没有图标就整段跳过，不占位：避免昵称里留下空格洞
+            img.paste(emoji_img, (int(x), int(y + emoji_offset_y)), emoji_img)
             x += emoji_size
         else:
             draw.text((x, y), segment, font=font, fill=fill)

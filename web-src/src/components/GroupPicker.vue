@@ -91,7 +91,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
 
 .trig b {
   color: var(--ac);
-  font-family: var(--fm);
+  font-family: var(--ff);
   font-size: 13px;
   font-weight: 600;
 }
@@ -115,7 +115,6 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
   border: 1px solid var(--bd);
   border-radius: 8px;
   background: var(--surface);
-  box-shadow: 0 12px 30px rgba(30, 37, 50, 0.14);
 }
 
 .filter {

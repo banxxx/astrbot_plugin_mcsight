@@ -27,6 +27,8 @@ const FORMS = ["add-server", "edit-server"];
 const CONFIRMS = ["clear-token", "del-server", "del-group"];
 const LISTS = ["ignore-list", "list-manage"];
 const JSONS = ["json-group", "json-config"];
+/* 画布上「等价命令 / 文件操作」副标题是等宽主色，说明行是正体灰；只有 JSON 弹窗标题用等宽 */
+const NOTE_SUBS = ["add-group", "json-group", "json-config"];
 
 const modalCls = computed(() => {
   if (CONFIRMS.includes(name.value)) return "m-confirm";
@@ -97,23 +99,30 @@ const sub = computed(() => {
 });
 
 const isForm = computed(() => FORMS.includes(name.value));
+const footInfo = computed(() => {
+  if (name.value === "add-server") return `当前 ${servers.value.length} / ${S.maxServers} 台 · 每群上限`;
+  if (name.value === "edit-server") return "改地址不影响已有绑定";
+  return "";
+});
 const listNote = computed(() =>
   name.value === "ignore-list"
-    ? `名单内 ${listItems.value.length} 个 · 添加与移除即时写入 servers_<群号>.json`
+    ? `名单内 ${listItems.value.length} 个 QQ · 添加与移除即时写入 servers_<群号>.json`
     : `名单内 ${listItems.value.length} 个 · 保存时整表写回 _conf_schema.json`,
 );
-const confirmBody = computed(() => {
-  if (name.value === "clear-token") {
-    return "清除后该服的 /执行 立即不可用，需重新设置才能恢复。现值不会被显示，也无法找回。";
-  }
-  if (name.value === "del-server") {
-    return `将从 servers_${S.gid}.json 移除「${srv.value?.name ?? ""}」，其命令 Token 一并删除。/在线 少一列；绑定记录不受影响。`;
-  }
-  return `该群还有 ${servers.value.length} 台服务器条目，删除后 /在线 /绑定 /查询 在这个群全部失效，且不会自动恢复。绑定记录不在此文件内，不受影响。`;
+const confirmWarn = computed(() => {
+  if (name.value === "clear-token") return "清除后该服的 /执行 立即不可用，需重新设置才能恢复。";
+  if (name.value === "del-server") return `将从 servers_${S.gid}.json 移除「${srv.value?.name ?? ""}」，其命令 Token 一并删除。`;
+  return `该群还有 ${servers.value.length} 台服务器条目，删除后 /在线 /绑定 /查询 在这个群全部失效，且不会自动恢复。`;
+});
+const confirmNote = computed(() => {
+  if (name.value === "clear-token") return "现值不会被显示，也无法找回；密钥字段按「留空＝功能关闭」处理。";
+  if (name.value === "del-server") return "绑定记录不受影响。";
+  return "本群开关与忽略名单一并随文件删除。绑定记录不在此文件内，不受影响。";
 });
 const confirmVerb = computed(() =>
   name.value === "clear-token" ? "确认清除" : name.value === "del-server" ? "确认删除" : "确认删除文件",
-);const footAction = computed(() => {
+);
+const footAction = computed(() => {
   switch (name.value) {
     case "add-server":
       return submitAddServer;
@@ -307,16 +316,35 @@ async function removeIgnore(qq: string) {
 </script>
 
 <template>
-  <UiModal v-if="d" :cls="modalCls" :title="title" :sub="sub" :sub-mono="name !== 'add-group'">
+  <UiModal
+    v-if="d"
+    :cls="modalCls"
+    :title="title"
+    :title-mono="JSONS.includes(name)"
+    :sub="sub"
+    :sub-mono="!NOTE_SUBS.includes(name)"
+    :sub-note="NOTE_SUBS.includes(name)"
+    :info="footInfo"
+  >
     <template v-if="isForm">
       <UiField label="名称" required help="不能含方括号：/执行 用 [服务器名] 定界；最多20个字符">
         <UiInput v-model="f.name" placeholder="一区" />
       </UiField>
-      <UiField label="主机地址" required help="一条地址字段；含 : 会被现行校验拒绝。内网 / 回环地址仅超管可加">
-        <UiInput v-model="f.host" placeholder="mc-a1.example.net" />
+      <UiField
+        label="主机地址"
+        required
+        :help="name === 'add-server' ? '一条地址字段；不写端口则按 25565 探测。内网 / 回环地址仅超管可加' : '一条字段；可带 :游戏端口（探测层已按冒号拆分）'"
+      >
+        <UiInput
+          v-model="f.host"
+          :placeholder="name === 'add-server' ? 'mc-a1.example.net 或 …net:25565' : undefined"
+        />
       </UiField>
-      <UiField label="模组 API 端口" help="填了才会走模组 HTTP；留空时 /执行 与 /广播 不可用">
-        <UiInput v-model="f.port" :placeholder="String(S.defaultApiPort)" />
+      <UiField
+        label="模组 API 端口"
+        :help="name === 'add-server' ? '填了才会走模组 HTTP；留空时 /执行 与 /广播 不可用' : '清空并保存＝删掉 api_port，退回「未装模组」'"
+      >
+        <UiInput v-model="f.port" placeholder="留空则视为未装模组" />
       </UiField>
       <UiField label="备注" help="显示在 /在线 卡片服务器名下方">
         <UiInput v-model="f.remark" placeholder="整合包 A 3.4.0" />
@@ -324,27 +352,36 @@ async function removeIgnore(qq: string) {
     </template>
 
     <template v-else-if="name === 'add-group'">
-      <UiField label="QQ 群号" required help="只接受 5-12 位数字。落点：servers_&lt;群号&gt;.json">
+      <UiField label="QQ 群号" required help="只接受 5-12 位数字。落点：servers_<群号>.json">
         <UiInput v-model="f.gid" placeholder="例如 100000001" />
       </UiField>
-      <UiNotice tone="info">这条操作没有对应的 QQ 命令：现有代码里群文件是群内首次 /mc add 时自动创建，页面把它显式化。</UiNotice>
     </template>
 
     <template v-else-if="name === 'token'">
       <UiNotice tone="info" lock>该字段是密钥，只在首次生成时显示，设置后只能重置或者本地文件查看</UiNotice>
       <UiField label="新 Token" required help="需与模组端 qqbind-config.json 的 CONSOLE_TOKEN 一致">
-        <UiInput v-model="f.token" :error="!!err.token" placeholder="16-128 个不含空格的可见字符" mono />
+        <UiInput v-model="f.token" class="tok" :rows="2" :error="!!err.token" placeholder="16-128 个不含空格的可见字符" mono />
       </UiField>
       <div v-if="err.token" class="err">{{ err.token }}</div>
+      <UiNotice v-if="srv && srv.api_port === null" tone="bad">
+        该服未配模组 API 端口，Token 写入后 /执行 仍不可用。
+      </UiNotice>
     </template>
 
-    <p v-else-if="CONFIRMS.includes(name)" class="cbody">{{ confirmBody }}</p>
+    <template v-else-if="CONFIRMS.includes(name)">
+      <UiNotice tone="bad">{{ confirmWarn }}</UiNotice>
+      <div class="cnote">{{ confirmNote }}</div>
+    </template>
 
     <template v-else-if="name === 'batch-add'">
-      <UiField label="条目文本" help="逗号或换行分隔；第三段端口留空则不写 api_port">
-        <UiInput v-model="f.text" :rows="8" placeholder="起床服:mc7.example.net:25566" />
-      </UiField>
-      <UiNotice v-if="batchResult.message" tone="ok">{{ batchResult.message }}</UiNotice>
+      <UiInput v-model="f.text" class="btext" :rows="4" mono placeholder="起床服:mc7.example.net:25566" />
+      <div class="bhelp">逗号或换行分隔；第三段端口留空则继承全局 default_api_port</div>
+      <div class="rlbl">回显与命令输出同格式</div>
+      <div v-if="batchResult.message" class="rbox mono">
+        <div>{{ batchResult.message }}</div>
+        <div v-for="(x, i) in batchResult.failed" :key="i">{{ x }}</div>
+      </div>
+      <div class="bhelp">逐条校验：名称含方括号、非法/内网 host、端口越界、重名、超上限——各自计入失败列表，其余照常写入。</div>
     </template>
 
     <template v-else-if="name === 'batch-del'">
@@ -357,18 +394,21 @@ async function removeIgnore(qq: string) {
           type="button"
           @click="selected[s.name] = !selected[s.name]"
         >
+          <span class="cb"><UiIcon v-if="selected[s.name]" name="check" :size="11" /></span>
           <b>{{ s.name }}</b><span class="mono">{{ s.host }}</span>
         </button>
       </div>
-      <div class="pnote">已选 {{ selectedNames.length }} / {{ servers.length }}，未选中的保持不动。</div>
+      <UiNotice tone="neutral">
+        已选 {{ selectedNames.length }} / {{ servers.length }} · 勾选即选中，未勾选的保持不动；确认后回显与命令输出同格式
+      </UiNotice>
     </template>
 
     <pre v-else-if="JSONS.includes(name)" class="json mono">{{ jsonText.text || "读取中…" }}</pre>
 
     <template v-else-if="LISTS.includes(name)">
       <div class="addrow">
-        <UiInput v-model="f.qq" placeholder="输入 QQ 号" class="grow" mono />
-        <UiButton v-if="name === 'ignore-list'" kind="pri" @click="addIgnore"><UiIcon name="plus" :size="13" />添加</UiButton>
+        <UiInput v-model="f.qq" placeholder="输入 QQ 号" class="grow" />
+        <UiButton v-if="name === 'ignore-list'" kind="pri" class="add" @click="addIgnore"><UiIcon name="plus" :size="13" />添加</UiButton>
       </div>
       <div class="rows">
         <div v-for="q in listItems" :key="q" class="li">
@@ -377,7 +417,7 @@ async function removeIgnore(qq: string) {
         </div>
         <div v-if="!listItems.length" class="li empty">名单为空 · 添加后即时生效</div>
       </div>
-      <UiNotice tone="info">{{ listNote }}</UiNotice>
+      <UiNotice tone="neutral">{{ listNote }}</UiNotice>
     </template>
 
     <template #foot>
@@ -400,11 +440,10 @@ async function removeIgnore(qq: string) {
 </template>
 
 <style scoped>
-.cbody {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--ink2);
+.cnote {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink3);
 }
 
 .err {
@@ -413,19 +452,61 @@ async function removeIgnore(qq: string) {
   color: var(--bad);
 }
 
-.picks {
+/* 画布上 Token 输入是 60 高的两行文本域，字号 12 */
+.tok {
+  min-height: 60px;
+  font-size: 12px;
+}
+
+/* 批量添加的条目文本域画布定 96 高 */
+.btext {
+  min-height: 96px;
+  font-size: 12px;
+}
+
+.bhelp {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink3);
+}
+
+.rlbl {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.rbox {
   display: flex;
   flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--bad-bd);
+  border-radius: var(--r-ctl);
+  background: var(--bad-bg);
+  color: var(--bad-deep);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.picks {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  overflow-y: auto;
 }
 
 .pick {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex: none;
   height: 40px;
   padding: 0 6px;
   border: none;
   border-bottom: 1px solid var(--row);
+  border-radius: var(--r-ctl);
   background: none;
   color: var(--ink);
   font-family: var(--ff);
@@ -443,21 +524,34 @@ async function removeIgnore(qq: string) {
   color: var(--ink2);
 }
 
+.pick .cb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--ac-line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: #fff;
+}
+
 .pick.on {
   background: var(--bad-bg);
 }
 
-.pnote {
-  font-size: 11px;
-  color: var(--ink3);
+.pick.on .cb {
+  border-color: var(--bad);
+  background: var(--bad);
 }
 
 .json {
   flex: 1 1 auto;
   min-height: 0;
   margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--bd);
+  padding: 12px 14px;
+  border: 1px solid var(--row);
   border-radius: var(--r-ctl);
   background: var(--thead);
   color: var(--ink);
@@ -475,6 +569,10 @@ async function removeIgnore(qq: string) {
 .addrow .grow {
   flex: 1 1 auto;
   width: auto;
+}
+
+.addrow .add {
+  height: 34px;
 }
 
 .rows {

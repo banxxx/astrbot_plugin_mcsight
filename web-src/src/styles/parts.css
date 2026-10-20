@@ -134,6 +134,10 @@
   color: var(--ink4);
 }
 
+.tf .tip svg {
+  color: var(--ink5);
+}
+
 /* 文本档位：与画布字号一一对应 */
 .t-title {
   font-size: 13px;
@@ -182,8 +186,8 @@
 }
 
 .bdg.off {
-  border-color: var(--bd);
-  color: var(--ink3);
+  border-color: var(--row);
+  color: var(--ink4);
   font-weight: 400;
 }
 
@@ -200,7 +204,7 @@
 }
 
 .bdg.port {
-  background: var(--surface);
+  background: var(--canvas);
   border-color: var(--bd);
   color: var(--ink3);
 }
@@ -208,24 +212,32 @@
 /* ---------- 提示条 ---------- */
 .notice {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   padding: 10px 12px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--r-ctl);
   font-size: 12px;
   line-height: 1.5;
 }
 
 .notice svg {
   flex: none;
-  margin-top: 2px;
 }
 
 .notice.info {
   background: var(--ac-soft);
   border-color: var(--ac-line);
-  color: var(--ac-deep);
+  color: var(--ac);
+}
+
+.notice.neutral {
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--thead);
+  border-color: var(--bd);
+  color: var(--ink3);
+  font-size: 11px;
 }
 
 .notice.warn {
@@ -290,8 +302,12 @@
   border-radius: var(--r-ctl);
   background: var(--surface);
   color: var(--ink);
-  font-family: var(--fm);
+  font-family: var(--ff);
   font-size: 13px;
+}
+
+.inp.mono {
+  font-family: var(--fm);
 }
 
 .inp:focus {

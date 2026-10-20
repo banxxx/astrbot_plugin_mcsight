@@ -15,10 +15,11 @@ const modCount = computed(() => g.value?.mod_count ?? 0);
 const tokenCount = computed(() => g.value?.token_count ?? 0);
 const groupCount = computed(() => S.groups.length);
 const ignoreCount = computed(() => g.value?.nickname_check_ignore_ids.length ?? 0);
+const noPortCount = computed(() => servers.value.filter((s) => s.api_port === null).length);
 
 const sub = computed(() =>
   g.value
-    ? `${g.value.gid} · ${servers.value.length} 台 · 已装模组 ${modCount.value} · 未配端口 ${servers.value.length - modCount.value}`
+    ? `${g.value.gid} · ${servers.value.length} 台 · 已装模组 ${modCount.value} · 未配端口 ${noPortCount.value}`
     : "还没有群配置文件",
 );
 
@@ -78,9 +79,9 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
         <span class="bar" />
         <h2>服务器条目</h2>
         <div class="acts">
-          <UiButton :disabled="!g" @click="openDialog('json-group')">查看 JSON</UiButton>
-          <UiButton :disabled="servers.length === 0" @click="openDialog('batch-del')">批量删除</UiButton>
-          <UiButton :disabled="!g" @click="openDialog('batch-add')">批量添加</UiButton>
+          <UiButton kind="tool" :disabled="!g" @click="openDialog('json-group')">查看 JSON</UiButton>
+          <UiButton kind="tool" :disabled="servers.length === 0" @click="openDialog('batch-del')">批量删除</UiButton>
+          <UiButton kind="tool" :disabled="!g" @click="openDialog('batch-add')">批量添加</UiButton>
           <UiButton kind="pri" :disabled="!g" @click="openDialog('add-server')"><UiIcon name="plus" :size="14" />添加服务器</UiButton>
         </div>
       </div>
@@ -97,8 +98,8 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
         <div class="cols">
           <span class="c-name"><span class="cell-label">名称</span><b class="nm ell">{{ s.name }}</b></span>
           <span class="c-host"><span class="cell-label">地址</span><span class="ell">{{ s.host }}</span></span>
-          <span class="c-port"><span class="cell-label">端口</span>{{ s.api_port ?? "—" }}</span>
-          <span class="c-rmk"><span class="cell-label">备注</span><span class="ell">{{ s.remark || "—" }}</span></span>
+          <span class="c-port"><span class="cell-label">端口</span><span :class="{ dash: s.api_port === null }">{{ s.api_port ?? "—" }}</span></span>
+          <span class="c-rmk"><span class="cell-label">备注</span><span class="ell" :class="{ dash: !s.remark }">{{ s.remark || "—" }}</span></span>
           <span class="c-tk"><UiBadge :tone="s.has_token ? 'neutral' : 'off'">{{ s.has_token ? "已配置" : "未设置" }}</UiBadge></span>
           <span class="c-mod">
             <UiBadge v-if="s.api_port === null" tone="port">未配端口</UiBadge>
@@ -107,8 +108,8 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
           <span class="c-op ops">
             <button class="lnk" type="button" @click="openDialog('edit-server', { server: s, index: i })">编辑</button>
             <button class="lnk" type="button" @click="openDialog('token', { server: s })">换 Token</button>
-            <button class="ic" type="button" title="上移" :disabled="i === 0" @click="move(s, -1)"><UiIcon name="chevron-down" :size="12" class="up" /></button>
-            <button class="ic" type="button" title="下移" :disabled="i === servers.length - 1" @click="move(s, 1)"><UiIcon name="chevron-down" :size="12" /></button>
+            <button class="arw" type="button" title="上移" :disabled="i === 0" @click="move(s, -1)">↑</button>
+            <button class="arw" type="button" title="下移" :disabled="i === servers.length - 1" @click="move(s, 1)">↓</button>
             <button class="lnk bad" type="button" @click="openDialog('del-server', { server: s })">删除</button>
           </span>
         </div>
@@ -118,7 +119,7 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
 
       <div class="tf">
         <span>共 {{ servers.length }} 条 · 每群上限 {{ S.maxServers }} 台（代码常量 MAX_SERVERS_PER_GROUP）</span>
-        <span class="tip"><UiIcon name="arrow-up-down" :size="12" />对应 /mc move（位置序号从 0 开始）</span>
+        <span class="tip"><UiIcon name="arrow-up-down" :size="12" />↑↓ 对应 /mc move（位置序号从 0 开始）</span>
       </div>
     </section>
 
@@ -126,14 +127,14 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
       <div class="ch">
         <span class="bar" />
         <h2>本群开关</h2>
-        <span class="hint">与服务条目同文件（servers_&lt;群号&gt;.json）</span>
+        <span class="hint">与服务器条目同文件（servers_&lt;群号&gt;.json）</span>
       </div>
 
       <div class="swrow">
         <div class="sl">
           <b>上次在线显示</b>
           <span>开启后 /在线 会显示服务器最后活动时间</span>
-          <em>/上次在线 开关</em>
+          <em>/上次在线 开|关</em>
         </div>
         <UiSwitch :on="!!g?.last_online_enabled" :disabled="!g" @toggle="toggleFlag('last_online_enabled', !g?.last_online_enabled)" />
       </div>
@@ -142,7 +143,7 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
         <div class="sl">
           <b>昵称检测</b>
           <span>开启后本群可使用 /检测昵称</span>
-          <em>/mc nicknamecheck 开关</em>
+          <em>/mc nicknamecheck 开|关</em>
         </div>
         <UiSwitch :on="!!g?.nickname_check_enabled" :disabled="!g" @toggle="toggleFlag('nickname_check_enabled', !g?.nickname_check_enabled)" />
       </div>
@@ -155,7 +156,7 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
         </div>
         <div class="sr">
           <span class="cnt">名单内 {{ ignoreCount }} 个 QQ</span>
-          <UiButton :disabled="!g" @click="openDialog('ignore-list')"><UiIcon name="list" :size="13" />管理名单</UiButton>
+          <UiButton kind="line" :disabled="!g" @click="openDialog('ignore-list')"><UiIcon name="list" :size="13" />管理名单</UiButton>
         </div>
       </div>
     </section>
@@ -300,10 +301,24 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
   color: var(--ink);
 }
 
+.c-host,
+.c-port {
+  color: var(--ink2);
+}
+
+.c-rmk {
+  font-size: 12px;
+  color: var(--ink3);
+}
+
+.dash {
+  color: var(--ink5);
+}
+
 .ops {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
 }
 
 .lnk {
@@ -312,7 +327,8 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
   background: none;
   color: var(--ac);
   font-family: var(--ff);
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -324,27 +340,33 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
   text-decoration: underline;
 }
 
-.ic {
+.arw {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   padding: 0;
   border: none;
   background: none;
   color: var(--ink4);
+  font-family: var(--ff);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
   cursor: pointer;
 }
 
-.ic:disabled {
+.arw:disabled {
   color: var(--ink5);
   cursor: not-allowed;
 }
 
-.ic .up {
-  transform: rotate(180deg);
-}
-
 .swc .ch {
   border-bottom: 1px solid var(--row);
+}
+
+/* 画布 sc-h 里说明文字紧跟标题左排，不像参数页那样推到右端 */
+.swc .ch .hint {
+  margin-left: 0;
 }
 
 .swrow {
@@ -382,6 +404,7 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
 .sl em {
   font-size: 11px;
   font-style: normal;
+  font-weight: 500;
   color: var(--ac);
 }
 
@@ -401,7 +424,7 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
   margin-top: 4px;
 }
 
-@container page (max-width: 1160px) {
+@container page (max-width: 1040px) {
   .stats {
     height: auto;
     flex-wrap: wrap;

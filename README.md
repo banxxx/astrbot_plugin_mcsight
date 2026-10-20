@@ -54,7 +54,7 @@ AstrBot/data/plugins/astrbot_plugin_mcsight/
 | 用途 | 位置 | 说明 |
 |------|------|------|
 | 中文正文 | `resources/fonts/msyh.ttf` | 找不到则依次回落系统 `msyh.ttc` / `msyh.ttf` / `PingFang.ttc` / `wqy-microhei.ttc` |
-| Emoji | `resources/fonts/NotoColorEmoji.ttf` | 仓库内已附带 |
+| Emoji 图标 | `resources/emoji/<码位>.png` | 只带统计图用到的三个（🗡 💀 ）；其余 emoji 在图片里不显示，也不占位 |
 
 ### 4. 配套模组（推荐）
 

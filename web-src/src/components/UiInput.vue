@@ -26,7 +26,7 @@ function onInput(v: string) {
   <textarea
     v-if="props.rows"
     class="inp"
-    :class="{ err: props.error }"
+    :class="[{ err: props.error }, props.mono ? 'mono' : '']"
     :id="props.id"
     :rows="props.rows"
     :placeholder="props.placeholder"
@@ -36,7 +36,7 @@ function onInput(v: string) {
   <input
     v-else
     class="inp"
-    :class="[{ err: props.error }, props.mono === false ? '' : 'mono']"
+    :class="[{ err: props.error }, props.mono ? 'mono' : '']"
     :id="props.id"
     :placeholder="props.placeholder"
     :autocomplete="props.autocomplete"

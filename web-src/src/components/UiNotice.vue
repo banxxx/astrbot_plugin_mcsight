@@ -2,7 +2,7 @@
 import UiIcon from "./UiIcon.vue";
 import { computed } from "vue";
 
-const props = withDefaults(defineProps<{ tone?: "info" | "warn" | "bad" | "ok"; lock?: boolean }>(), {
+const props = withDefaults(defineProps<{ tone?: "info" | "warn" | "bad" | "ok" | "neutral"; lock?: boolean }>(), {
   tone: "info",
 });
 

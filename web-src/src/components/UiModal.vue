@@ -1,15 +1,18 @@
 <script setup lang="ts">
 /* 弹窗规矩：遮罩点击与 Esc 都不关闭，只走按钮；同档位内尺寸恒定，
-   高度按该档位最重状态定高；窄屏允许宽度收缩（max-width），高度不变。 */
+   高度按该档位最重状态定高；窄屏允许宽度收缩（max-width），高度不变。
+   标题/副标题的字体与颜色按画布逐格分：等价命令行＝等宽+主色，说明行＝正体+灰。 */
 withDefaults(
   defineProps<{
     cls?: "m-confirm" | "m-single" | "m-form" | "m-list" | "m-json";
     title: string;
+    titleMono?: boolean;
     sub?: string;
     subMono?: boolean;
+    subNote?: boolean;
     info?: string;
   }>(),
-  { cls: "m-form", subMono: false },
+  { cls: "m-form", titleMono: false, subMono: false, subNote: false },
 );
 </script>
 
@@ -17,8 +20,8 @@ withDefaults(
   <div class="veil">
     <div class="modal" :class="cls" role="dialog" :aria-label="title">
       <div class="mh">
-        <h3 :class="subMono ? 'mono' : ''">{{ title }}</h3>
-        <div v-if="sub" class="ms" :class="subMono ? 'mono' : ''">{{ sub }}</div>
+        <h3 :class="titleMono ? 'mono' : ''">{{ title }}</h3>
+        <div v-if="sub" class="ms" :class="[subMono ? 'mono' : '', subNote ? 'note' : '']">{{ sub }}</div>
       </div>
       <div class="mb"><slot /></div>
       <div class="mf">
@@ -48,7 +51,6 @@ withDefaults(
   border: 1px solid var(--bd);
   border-radius: var(--r-card);
   background: var(--surface);
-  box-shadow: 0 18px 44px rgba(30, 37, 50, 0.16);
 }
 
 .m-confirm {
@@ -93,6 +95,10 @@ withDefaults(
   color: var(--ac);
 }
 
+.ms.note {
+  color: var(--ink3);
+}
+
 .mb {
   display: flex;
   flex: 1 1 auto;
@@ -101,6 +107,10 @@ withDefaults(
   min-height: 0;
   padding: 16px 20px;
   overflow-y: auto;
+}
+
+.m-form .mb {
+  gap: 14px;
 }
 
 .mf {
@@ -121,25 +131,6 @@ withDefaults(
 
 .mf .spacer {
   flex: 1 1 auto;
-}
-
-.x {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 22px;
-  height: 22px;
-  border: none;
-  border-radius: 4px;
-  background: none;
-  color: var(--ink4);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.x:hover {
-  color: var(--bad);
 }
 
 @media (max-width: 560px) {
