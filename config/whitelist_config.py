@@ -30,6 +30,10 @@ class WhitelistManager:
         self._context = context
         self._config_cache = None  # 清除缓存，强制重新读取
 
+    def clear_cache(self):
+        """丢弃配置缓存，让面板刚写入的配置项不用重载插件就能读到新值"""
+        self._config_cache = None
+
     def _get_config(self):
         """
         获取插件配置（带缓存）

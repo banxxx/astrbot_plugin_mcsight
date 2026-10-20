@@ -18,12 +18,22 @@ def validate_server_name(name: str) -> str:
         return "名称不能包含方括号（{}），/执行 要用 [服务器名] 定界".format(" ".join(bad))
     return ""
 
+
+def group_config_path(group_id) -> str:
+    """按群号拼出 servers_<群号>.json 的路径，只拼不建（WebUI 读取前要判存在性）"""
+    return os.path.join(sub_dir('group_configs'), f'servers_{group_id}.json')
+
+
+# edit_server 的「这个字段本次不动」哨兵，和显式传入的 None/"" 区分开
+_UNSET = object()
+
+
 class ConfigManager:
     def __init__(self, group_id: Optional[int] = None, session_id: Optional[str] = None):
         self.config_dir = sub_dir('group_configs')
         # 优先使用 group_id，如果为 None 则使用 session_id（私聊场景）
         if group_id is not None:
-            self.config_file = os.path.join(self.config_dir, f'servers_{group_id}.json')
+            self.config_file = group_config_path(group_id)
         elif session_id is not None:
             self.config_file = os.path.join(self.config_dir, f'servers_{session_id}.json')
         else:
@@ -120,6 +130,37 @@ class ConfigManager:
                 self._save(data)
                 return True
         return False
+
+    def edit_server(self, name: str, new_name=_UNSET, host=_UNSET,
+                    api_port=_UNSET, remark=_UNSET) -> Tuple[bool, str]:
+        """一次写回一条服务器的名称/地址/模组端口/备注（WebUI 编辑弹窗用）。
+
+        api_port=None 表示删除该字段（该服退回「未装模组」），remark="" 表示清除备注；
+        未传的字段保持原样。返回 (是否成功, 面向用户的失败原因)。
+        """
+        data = self._load()
+        servers = data["servers"]
+        target = next((s for s in servers if s["name"] == name), None)
+        if target is None:
+            return False, "失败（名称不存在）"
+        if new_name is not _UNSET and new_name != name:
+            if any(s["name"] == new_name for s in servers):
+                return False, "失败（名称已存在）"
+            target["name"] = new_name
+        if host is not _UNSET:
+            target["host"] = host
+        if api_port is not _UNSET:
+            if api_port is None:
+                target.pop("api_port", None)
+            else:
+                target["api_port"] = api_port
+        if remark is not _UNSET:
+            if remark:
+                target["remark"] = remark
+            else:
+                target.pop("remark", None)
+        self._save(data)
+        return True, ""
 
     # ---------- 修改：batch_add 支持端口 ----------
     def batch_add(self, servers_str: str, host_validator=None, name_validator=None) -> Tuple[int, List[str]]:

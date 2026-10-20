@@ -1,0 +1,8 @@
+{
+  "pages": {
+    "config": {
+      "title": "MCSight",
+      "description": "Manage per-group server entries and switches, edit plugin parameters, view code constants."
+    }
+  }
+}

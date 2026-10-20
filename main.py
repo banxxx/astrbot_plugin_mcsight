@@ -6,13 +6,16 @@ from .commands.common import start_db_keepalive, stop_db_keepalive
 from .config.server_config import ConfigManager
 from .config.whitelist_config import WhitelistManager
 from .utils import mod_http, stats_sampler
+from .web.api import register_view_api
 
 @register("astrbot_plugin_mcsight", "poso", "Minecraft 多服务器状态监控插件", "v1.0.0")
 class MCWatcher(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config=None):
         super().__init__(context)
         WhitelistManager().set_context(context)
         start_db_keepalive()
+        # config 是 data/config/<插件名>_config.json 的内存对象，配置页写它就等于面板改配置
+        register_view_api(context, config)
 
     async def initialize(self):
         # 内核在插件实例化后 await 本方法，此时事件循环已在跑，采样任务要起在这里

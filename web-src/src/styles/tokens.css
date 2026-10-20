@@ -1,0 +1,106 @@
+/* 设计令牌：全部取自画布 MCSight.pen 的实测值，明暗两套。 */
+:root,
+[data-theme="light"] {
+  --canvas: #f2f4f8;
+  --surface: #ffffff;
+  --thead: #f7f8fb;
+  --bd: #e2e6ee;
+  --bd-soft: #dde3ef;
+  --row: #edf0f5;
+  --ac: #3d4e9b;
+  --ac-h: #34438a;
+  --ac-soft: #edf0fa;
+  --ac-line: #c9d2ee;
+  --ac-deep: #33417f;
+  --ink: #1e2532;
+  --ink2: #55606f;
+  --ink3: #8892a2;
+  --ink4: #a6aebb;
+  --ink5: #c8cdd8;
+  --ok: #2e8b62;
+  --ok-bg: #eaf5f0;
+  --ok-bd: #cfe7dc;
+  --ok2-bg: #f1f7f4;
+  --ok2-bd: #cde3d8;
+  --warn: #a9741a;
+  --warn-bg: #fdf9f1;
+  --warn-bd: #f2e4cc;
+  --warn-badge-bg: #f7e7d2;
+  --warn-badge-bd: #e8cfa6;
+  --warn-note-bg: #fbf3e4;
+  --warn-note-bd: #f0dfc0;
+  --bad: #a93f3a;
+  --bad-deep: #8f3b37;
+  --bad-bg: #faebea;
+  --bad-bd: #efd3d1;
+  --veil: rgba(223, 228, 236, 0.78);
+}
+
+[data-theme="dark"] {
+  --canvas: #151a24;
+  --surface: #1b2130;
+  --thead: #202839;
+  --bd: #2c3547;
+  --bd-soft: #333d52;
+  --row: #242c3c;
+  --ac: #8c9ce8;
+  --ac-h: #a2b0f0;
+  --ac-soft: #232b45;
+  --ac-line: #3b4770;
+  --ac-deep: #c2cbf5;
+  --ink: #e4e9f4;
+  --ink2: #aab4c8;
+  --ink3: #7e8798;
+  --ink4: #6b7386;
+  --ink5: #4e566a;
+  --ok: #5fbf92;
+  --ok-bg: #1c2e28;
+  --ok-bd: #2c4a3d;
+  --ok2-bg: #1b2a26;
+  --ok2-bd: #2c4438;
+  --warn: #d9a65b;
+  --warn-bg: #2b2618;
+  --warn-bd: #453b22;
+  --warn-badge-bg: #332b18;
+  --warn-badge-bd: #4e4126;
+  --warn-note-bg: #2c2617;
+  --warn-note-bd: #46391f;
+  --bad: #e0776f;
+  --bad-deep: #f0a9a3;
+  --bad-bg: #2e1e20;
+  --bad-bd: #4a2c2e;
+  --veil: rgba(9, 12, 20, 0.7);
+}
+
+:root {
+  --ff: Inter, "Microsoft YaHei", "PingFang SC", sans-serif;
+  --fm: "JetBrains Mono", Consolas, "Courier New", monospace;
+  --r-card: 10px;
+  --r-ctl: 6px;
+  --r-badge: 4px;
+  --h-row: 44px;
+  --h-form: 56px;
+  --h-ctl: 32px;
+  --h-badge: 22px;
+  --pad-card: 16px;
+  --gap-card: 16px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--ff);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}

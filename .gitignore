@@ -14,8 +14,9 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# 只锚根目录：前端源码里有 web-src/src/lib/，写成 lib/ 会把源文件一起吃掉
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -215,3 +216,11 @@ data/
 avatar_cache/
 design_preview/
 .scratch/
+# 群配置里是真实群号/QQ/服 Token，绝不可能入库（活数据已迁到 data/plugin_data/）
+group_configs/
+
+# 前端工程（Vite + Vue3 + TS）：依赖与缓存不入库；
+# 构建产物 views/config/ 必须入库——AstrBot「更新」下载的是 Release 源码包，不是 CI 产物。
+node_modules/
+.vite/
+npm-debug.log*

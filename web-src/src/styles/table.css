@@ -1,0 +1,151 @@
+/* 表格列宽与响应式档位：基准是 .page 容器宽度（面板 iframe 的可用宽度），不是视口。
+   宽档＝画布全列；中档＝次要列并入主列；窄档＝一行一卡。 */
+
+.page {
+  container-type: inline-size;
+  container-name: page;
+}
+
+.cols {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.c-name {
+  flex: 0 0 150px;
+}
+
+.c-host {
+  flex: 0 0 268px;
+}
+
+.c-port {
+  flex: 0 0 80px;
+}
+
+.c-rmk {
+  flex: 0 0 168px;
+}
+
+.c-tk {
+  flex: 0 0 78px;
+}
+
+.c-mod {
+  flex: 0 0 82px;
+}
+
+.c-op {
+  flex: 1 1 auto;
+  min-width: 174px;
+}
+
+.c-t1 {
+  flex: 0 0 300px;
+}
+
+.c-t2 {
+  flex: 0 0 300px;
+}
+
+.c-t3 {
+  flex: 0 0 200px;
+}
+
+.c-t4 {
+  flex: 1 1 auto;
+  min-width: 200px;
+}
+
+.c-m1 {
+  flex: 0 0 260px;
+}
+
+.c-m2 {
+  flex: 0 0 380px;
+}
+
+.c-m3 {
+  flex: 1 1 auto;
+  min-width: 340px;
+}
+
+.c-h1 {
+  flex: 0 0 300px;
+}
+
+.c-h2 {
+  flex: 0 0 620px;
+}
+
+.c-h3 {
+  flex: 0 0 164px;
+}
+
+/* 中档：合并次要列，取消横向滚动 */
+@container page (max-width: 1160px) {
+  .c-host {
+    flex: 1 1 180px;
+  }
+
+  .c-rmk {
+    flex: 0 0 120px;
+  }
+
+  .c-h2 {
+    flex: 1 1 320px;
+  }
+
+  .c-m3 {
+    flex: 1 1 220px;
+  }
+
+  .c-t4 {
+    flex: 1 1 140px;
+  }
+}
+
+/* 窄档：一行一卡，字段竖排 */
+@container page (max-width: 860px) {
+  .th {
+    display: none;
+  }
+
+  .row {
+    height: auto;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    padding: 10px var(--pad-card);
+  }
+
+  .row > .cols {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+
+  .row [class^="c-"] {
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+
+  .c-op {
+    flex: 1 1 100%;
+  }
+
+  .cell-label {
+    display: inline;
+    margin-right: 6px;
+    color: var(--ink4);
+    font-size: 11px;
+  }
+}
+
+@container page (min-width: 861px) {
+  .cell-label {
+    display: none;
+  }
+}
