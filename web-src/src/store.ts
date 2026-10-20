@@ -1,4 +1,4 @@
-import { computed, reactive } from "vue";
+import { computed, reactive, watch } from "vue";
 import { api, requireBridge } from "./lib/api";
 import { ApiError } from "./lib/bridge";import type {
   ConfigItem,
@@ -111,6 +111,14 @@ export async function loadGroup() {
   }
   S.group = await api.group(S.gid);
 }
+
+/* 换群只改 S.gid，重拉交给这里收口，免得每个入口各自记得刷 */
+watch(
+  () => S.gid,
+  () => {
+    void loadGroup();
+  },
+);
 
 export async function loadConfig(force = false) {
   if (force) S.cfgItems = [];

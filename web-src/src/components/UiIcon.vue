@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import {
+  ArrowDown,
+  ArrowUp,
   ArrowUpDown,
   BookOpen,
   Check,
@@ -24,6 +26,8 @@ import {
 
 /* 画布里的图标全部来自 lucide，这里用同一套字形保证观感一致。 */
 const MAP: Record<string, unknown> = {
+  "arrow-down": ArrowDown,
+  "arrow-up": ArrowUp,
   "arrow-up-down": ArrowUpDown,
   "book-open": BookOpen,
   check: Check,

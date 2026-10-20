@@ -1,5 +1,6 @@
 import json
 import os
+import unicodedata
 from typing import List, Dict, Tuple, Optional
 
 from ..utils.plugin_paths import sub_dir
@@ -10,12 +11,31 @@ MAX_SERVERS_PER_GROUP = 20
 # 服务器名不能含方括号：/执行 用 [服名] 定界，名字里带括号会让解析错位
 INVALID_NAME_CHARS = ("[", "]", "【", "】")
 
+# 长度上限按显示宽度算：汉字与全角标点记 2，所以 20 字符＝10 个汉字
+MAX_NAME_WIDTH = 20
+MAX_REMARK_WIDTH = 50
+
+
+def display_width(text: str) -> int:
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in text)
+
 
 def validate_server_name(name: str) -> str:
     """返回拒绝原因；合法返回空串"""
     bad = [c for c in INVALID_NAME_CHARS if c in name]
     if bad:
         return "名称不能包含方括号（{}），/执行 要用 [服务器名] 定界".format(" ".join(bad))
+    if display_width(name) > MAX_NAME_WIDTH:
+        return "名称最多 {} 字符（约 {} 个汉字），当前 {} 字符".format(
+            MAX_NAME_WIDTH, MAX_NAME_WIDTH // 2, display_width(name))
+    return ""
+
+
+def validate_remark(remark: str) -> str:
+    """备注只进 /在线 卡片，长度上限防把卡片撑爆"""
+    if display_width(remark) > MAX_REMARK_WIDTH:
+        return "备注最多 {} 字符（约 {} 个汉字），当前 {} 字符".format(
+            MAX_REMARK_WIDTH, MAX_REMARK_WIDTH // 2, display_width(remark))
     return ""
 
 

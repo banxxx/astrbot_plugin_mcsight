@@ -6,7 +6,7 @@ import UiBadge from "../components/UiBadge.vue";
 import UiSwitch from "../components/UiSwitch.vue";
 import UiNotice from "../components/UiNotice.vue";
 import GroupPicker from "../components/GroupPicker.vue";
-import { S, api, currentGroup, loadGroup, openDialog, run } from "../store";
+import { S, api, currentGroup, loadGroup, openDialog, run, toast } from "../store";
 import type { ServerEntry } from "../lib/types";
 
 const g = computed(() => currentGroup.value);
@@ -27,14 +27,18 @@ async function toggleFlag(key: "last_online_enabled" | "nickname_check_enabled",
   await run("flag", async () => {
     await api.groupFlag(S.gid, key, value);
     await loadGroup();
+    if (!!g.value?.[key] !== value) toast(`后端未生效：${key} 读回来还是 ${!!g.value?.[key]}`);
   });
 }
 
 async function move(srv: ServerEntry, dir: -1 | 1) {
-  const index = servers.value.findIndex((s) => s.name === srv.name) + dir;
+  const at = servers.value.findIndex((s) => s.name === srv.name);
+  const index = at + dir;
   await run("move", async () => {
     const r = await api.serverMove(S.gid, srv.name, index);
     S.group = r;
+    const to = (r.servers || []).findIndex((s) => s.name === srv.name);
+    if (to !== index) toast(`后端未生效：「${srv.name}」请求移到 ${index}，读回来在 ${to}`);
   });
 }
 </script>
@@ -108,8 +112,8 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
           <span class="c-op ops">
             <button class="lnk" type="button" @click="openDialog('edit-server', { server: s, index: i })">编辑</button>
             <button class="lnk" type="button" @click="openDialog('token', { server: s })">换 Token</button>
-            <button class="arw" type="button" title="上移" :disabled="i === 0" @click="move(s, -1)">↑</button>
-            <button class="arw" type="button" title="下移" :disabled="i === servers.length - 1" @click="move(s, 1)">↓</button>
+            <button class="arw" type="button" title="上移" :disabled="i === 0" @click="move(s, -1)"><UiIcon name="arrow-up" :size="12" /></button>
+            <button class="arw" type="button" title="下移" :disabled="i === servers.length - 1" @click="move(s, 1)"><UiIcon name="arrow-down" :size="12" /></button>
             <button class="lnk bad" type="button" @click="openDialog('del-server', { server: s })">删除</button>
           </span>
         </div>
@@ -232,8 +236,10 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
 
 .st {
   display: flex;
+  flex: 1 1 0;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   white-space: nowrap;
 }
 
@@ -393,11 +399,13 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
 .sl b {
   font-size: 13px;
   font-weight: 500;
+  line-height: 16px;
   color: var(--ink);
 }
 
 .sl span {
   font-size: 11px;
+  line-height: 14px;
   color: var(--ink3);
 }
 
@@ -405,6 +413,7 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
   font-size: 11px;
   font-style: normal;
   font-weight: 500;
+  line-height: 14px;
   color: var(--ac);
 }
 
@@ -434,6 +443,10 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
 
   .sp {
     display: none;
+  }
+
+  .st {
+    flex: 0 0 auto;
   }
 }
 

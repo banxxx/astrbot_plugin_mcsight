@@ -346,7 +346,7 @@ async function removeIgnore(qq: string) {
       >
         <UiInput v-model="f.port" placeholder="留空则视为未装模组" />
       </UiField>
-      <UiField label="备注" help="显示在 /在线 卡片服务器名下方">
+      <UiField label="备注" help="显示在 /在线 卡片服务器名下方；最多50个字符">
         <UiInput v-model="f.remark" placeholder="整合包 A 3.4.0" />
       </UiField>
     </template>

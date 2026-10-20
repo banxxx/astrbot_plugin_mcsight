@@ -23,6 +23,7 @@ from ..config.server_config import (
     ConfigManager,
     MAX_SERVERS_PER_GROUP,
     group_config_path,
+    validate_remark,
     validate_server_name,
 )
 from ..config.whitelist_config import WhitelistManager
@@ -292,6 +293,9 @@ async def view_server_create():
     if port_err:
         return _err(port_err)
     remark = str(body.get("remark", "")).strip()
+    remark_err = validate_remark(remark)
+    if remark_err:
+        return _err(remark_err)
     cm = ConfigManager(group_id=int(gid))
     if len(cm.get_all_servers()) >= MAX_SERVERS_PER_GROUP:
         return _err(f"添加失败：每个群最多绑定 {MAX_SERVERS_PER_GROUP} 个服务器。")
@@ -331,6 +335,9 @@ async def view_server_update():
     if port_err:
         return _err(port_err)
     remark = str(body.get("remark", "")).strip()
+    remark_err = validate_remark(remark)
+    if remark_err:
+        return _err(remark_err)
 
     ok, why = cm.edit_server(name, new_name=new_name, host=host,
                               api_port=api_port, remark=remark)

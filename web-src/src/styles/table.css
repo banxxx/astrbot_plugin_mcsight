@@ -30,6 +30,20 @@
   flex: 0 0 168px;
 }
 
+/* 名称/地址/备注是可变的长文本：列宽锁死后必须自己裁掉，
+   否则 inline 子元素会直接画到下一列上去。 */
+.c-name,
+.c-host,
+.c-rmk {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.row .ell {
+  display: block;
+  min-width: 0;
+}
+
 .c-tk {
   flex: 0 0 78px;
 }

@@ -1,5 +1,5 @@
 from astrbot.api.event import AstrMessageEvent
-from ..config.server_config import ConfigManager, MAX_SERVERS_PER_GROUP, validate_server_name
+from ..config.server_config import ConfigManager, MAX_SERVERS_PER_GROUP, validate_remark, validate_server_name
 from ..config.whitelist_config import WhitelistManager
 from ..utils.host_validator import validate_host
 from ..utils.permission import is_astrbot_super_admin
@@ -87,7 +87,12 @@ async def handle_edit(event: AstrMessageEvent, config: ConfigManager, parts: lis
         yield event.plain_result(f"修改端口{'成功' if success else '失败（名称不存在）'}。")
     elif mode == "remark":
         # 备注可含空格，取 mode 之后的全部片段
-        success = config.edit_server_remark(target, " ".join(parts[3:]).strip())
+        remark = " ".join(parts[3:]).strip()
+        remark_err = validate_remark(remark)
+        if remark_err:
+            yield event.plain_result(f"❌ 修改失败：{remark_err}")
+            return
+        success = config.edit_server_remark(target, remark)
         yield event.plain_result(f"修改备注{'成功' if success else '失败（名称不存在）'}。")
     else:
         yield event.plain_result("第二个参数必须为 name、host、port 或 remark。")

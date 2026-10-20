@@ -8,7 +8,7 @@ import CfgPage from "./pages/CfgPage.vue";
 import ConstPage from "./pages/ConstPage.vue";
 import MapPage from "./pages/MapPage.vue";
 import HelpPage from "./pages/HelpPage.vue";
-import { S, boot, dirtyCount, loadGroup, loadSummary, saveDrafts, toast } from "./store";
+import { S, boot, dirtyCount, loadGroup, loadSummary, loadConfig, loadConstants, loadCommands, saveDrafts, toast } from "./store";
 import type { PageKey } from "./store";
 
 const NAV: { group: string; items: { key: PageKey; label: string; icon: string }[] }[] = [
@@ -41,9 +41,14 @@ const pageComp = computed(() => PAGES[S.page]);
 
 async function reload() {
   try {
-    await loadSummary();
-    await loadGroup();
-    toast("已重新读取");
+    await Promise.all([
+      loadSummary(),
+      loadGroup(),
+      loadConfig(true),
+      loadConstants(),
+      loadCommands(),
+    ]);
+    toast("已重新读取全部数据");
   } catch (err) {
     toast(String(err));
   }
@@ -64,9 +69,9 @@ onMounted(boot);
       </div>
       <div class="tb-r">
         <span class="who">当前身份 超级管理员</span>
-        <UiButton @click="reload"><UiIcon name="refresh" :size="13" />重新读取</UiButton>
-        <UiButton v-if="S.page === 'cfg'" kind="pri" :disabled="!dirtyCount || S.busy" @click="saveDrafts">
-          <UiIcon name="check" :size="14" />保存更改{{ dirtyCount ? `（${dirtyCount}）` : "" }}
+        <UiButton kind="tool" @click="reload"><UiIcon name="refresh" :size="14" />重载插件</UiButton>
+        <UiButton v-if="S.page === 'cfg'" kind="pri" class="save" :disabled="!dirtyCount" @click="saveDrafts">
+          <UiIcon name="check" :size="14" />保存更改<span class="scnt">{{ dirtyCount ? `（${dirtyCount}）` : "" }}</span>
         </UiButton>
       </div>
     </header>
@@ -144,7 +149,7 @@ onMounted(boot);
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--ac);
   color: #fff;
 }
@@ -157,36 +162,46 @@ onMounted(boot);
 
 .sep {
   width: 1px;
-  height: 16px;
+  height: 18px;
   background: var(--bd);
 }
 
 .crumb {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--ink2);
 }
 
 .ver {
   font-size: 11px;
-  color: var(--ink4);
+  color: var(--ink3);
 }
 
 .who {
-  padding: 0 10px;
+  padding: 0 9px;
   border: 1px solid var(--bd);
-  border-radius: var(--r-ctl);
-  background: var(--thead);
+  border-radius: var(--r-badge);
+  background: var(--canvas);
   color: var(--ink2);
   font-size: 11px;
   line-height: 26px;
   white-space: nowrap;
 }
 
+/* 计数出现/消失会改变按钮宽度，把左边那颗「重载插件」顶得跳一下 ⇒ 预留够位 */
+.save {
+  min-width: 132px;
+  justify-content: center;
+}
+
 .side {
   grid-area: side;
+  position: sticky;
+  top: 56px;
+  align-self: start;
   display: flex;
   flex-direction: column;
   gap: 4px;
+  height: calc(100vh - 56px);
   padding: 16px 12px;
   box-shadow: inset -1px 0 0 var(--bd);
   background: var(--surface);
@@ -256,6 +271,8 @@ onMounted(boot);
   }
 
   .side {
+    position: static;
+    height: auto;
     flex-direction: row;
     align-items: center;
     gap: 8px;

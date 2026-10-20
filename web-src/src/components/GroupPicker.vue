@@ -89,6 +89,11 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
   border-color: var(--ac);
 }
 
+/* 图标本身不吃指针：chevron 中间是透明的，落在空隙上时命中判定会漂到别处 */
+.trig svg {
+  pointer-events: none;
+}
+
 .trig b {
   color: var(--ac);
   font-family: var(--ff);
