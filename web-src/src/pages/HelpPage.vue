@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
+import UiIcon from "../components/UiIcon.vue";
 import { S, fail, loadCommands } from "../store";
 
 onMounted(() => {
@@ -14,7 +15,7 @@ onMounted(() => {
         <h1>命令帮助</h1>
         <p>{{ S.cmdTotal }} 条命令 · 与 /帮助 图片同源 · 本页只读</p>
       </div>
-      <span class="tag">只读 · 数据来自 /帮助 卡片结构</span>
+      <span class="tag"><UiIcon name="lock" :size="12" />只读 · 数据来自 /帮助 卡片结构</span>
     </section>
 
     <section class="card">
@@ -75,6 +76,9 @@ onMounted(() => {
 }
 
 .tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 0 10px;
   border: 1px solid var(--bd);
   border-radius: var(--r-ctl);

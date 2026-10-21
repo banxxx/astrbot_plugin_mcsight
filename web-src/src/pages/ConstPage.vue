@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
+import UiIcon from "../components/UiIcon.vue";
 import UiNotice from "../components/UiNotice.vue";
 import { S, fail, loadConstants } from "../store";
 import type { ConstRow } from "../lib/types";
@@ -53,17 +54,18 @@ const groups = computed(() => {
         <h1>代码常量</h1>
         <p>{{ S.constRows.length }} 个运行期参数 · 写死在源码里 · 本页不提供输入框</p>
       </div>
-      <span class="tag">只读 · 改源码 + 重载插件才生效</span>
+      <span class="tag"><UiIcon name="lock" :size="12" />只读 · 改源码 + 重载插件才生效</span>
     </section>
 
     <UiNotice tone="info">
-      全仓唯一配置读入口：whitelist_config 的 _get_config_value / _get_config_list，其余点位只读不算账。
+      唯一配置读入口：whitelist_config 的 _get_config_value / _get_config_list。
     </UiNotice>
 
     <section class="card">
       <div class="th">
         <div class="cols">
-          <span class="c-t1">参数含义</span><span class="c-t2">常量名</span><span class="c-t3">当前值</span><span class="c-t4">源码位置</span>
+          <span class="c-t1">参数含义</span><span class="c-t2">常量名</span><span class="c-t3">当前值</span><span
+            class="c-t4">源码位置</span>
         </div>
       </div>
 
@@ -80,8 +82,7 @@ const groups = computed(() => {
       </template>
 
       <div class="tf">
-        <span>共 {{ S.constRows.length }} 项 · {{ groups.length }} 带</span>
-        <span class="tip">要改成可配，得先在 _conf_schema.json 加键 + 补读取点</span>
+        <span>共 {{ S.constRows.length }} 项</span>
       </div>
     </section>
   </div>
@@ -115,6 +116,9 @@ const groups = computed(() => {
 }
 
 .tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 0 10px;
   border: 1px solid var(--bd);
   border-radius: var(--r-ctl);

@@ -391,12 +391,16 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
   padding: 0;
   border: none;
   background: none;
-  color: var(--ink4);
+  color: var(--ink2);
   font-family: var(--ff);
   font-size: 12px;
   font-weight: 500;
   line-height: 1;
   cursor: pointer;
+}
+
+.arw:hover:not(:disabled) {
+  color: var(--ac);
 }
 
 .arw:disabled {

@@ -54,11 +54,11 @@ const NEW = GROUPS.reduce((n, g) => n + g.rows.filter((r) => r.isNew).length, 0)
         <h1>命令对照</h1>
         <p>页面上每颗控件对应哪条现成命令 · {{ NEW }} 项标为页面新能力</p>
       </div>
-      <span class="badge"><UiIcon name="list" :size="12" />只映射，不新增语义</span>
+      <span class="badge"><UiIcon name="lock" :size="12" />只映射，不新增语义</span>
     </section>
 
     <UiNotice tone="info">
-      除最后两项外，每一项都能回到现有 QQ 命令：页面只是把打字换成点按，结果写同一份 servers_&lt;群号&gt;.json。
+      除最后两项外，每一项都能回到现有 QQ 命令：结果写进同一份 servers_&lt;群号&gt;.json。
     </UiNotice>
 
     <section class="card">
