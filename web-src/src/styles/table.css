@@ -52,9 +52,13 @@
   flex: 0 0 82px;
 }
 
+.c-wl {
+  flex: 0 0 60px;
+}
+
 .c-op {
   flex: 1 1 auto;
-  min-width: 174px;
+  min-width: 120px;
 }
 
 .c-t1 {

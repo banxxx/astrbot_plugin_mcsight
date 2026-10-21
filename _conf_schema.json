@@ -52,7 +52,8 @@
     "default_api_port": {
         "description": "全局默认 API 端口",
         "type": "int",
-        "default": 25566
+        "default": 25566,
+        "hint": "条目未填 api_port 时继承此值"
     },
     "mod_api_token": {
         "description": "模组 API 鉴权 Token",
@@ -86,7 +87,8 @@
     "db_password": {
         "description": "数据库密码",
         "type": "string",
-        "default": ""
+        "default": "",
+        "hint": "仅写入本地 config 文件"
     },
     "db_name": {
         "description": "数据库名称（默认 qqbind_db）",

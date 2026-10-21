@@ -4,7 +4,7 @@
    标题/副标题的字体与颜色按画布逐格分：等价命令行＝等宽+主色，说明行＝正体+灰。 */
 withDefaults(
   defineProps<{
-    cls?: "m-confirm" | "m-single" | "m-form" | "m-list" | "m-json";
+    cls?: "m-confirm" | "m-form" | "m-list" | "m-json";
     title: string;
     titleMono?: boolean;
     sub?: string;
@@ -56,11 +56,6 @@ withDefaults(
 .m-confirm {
   width: 440px;
   height: 260px;
-}
-
-.m-single {
-  width: 520px;
-  height: 410px;
 }
 
 .m-form,

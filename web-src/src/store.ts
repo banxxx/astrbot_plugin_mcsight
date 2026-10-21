@@ -2,10 +2,12 @@ import { computed, reactive, watch } from "vue";
 import { api, requireBridge } from "./lib/api";
 import { ApiError } from "./lib/bridge";import type {
   ConfigItem,
+  ConfigSection,
   ConstRow,
   CommandSection,
   GroupBrief,
   GroupPayload,
+  ModState,
   ServerEntry,
 } from "./lib/types";
 
@@ -32,12 +34,15 @@ interface State {
   maxServers: number;
   defaultApiPort: number;
   cfgItems: ConfigItem[];
-  cfgSections: string[];
+  cfgSections: ConfigSection[];
   cfgExtraKeys: string[];
   cfgDraft: Record<string, unknown>;
   constRows: ConstRow[];
   cmdSections: CommandSection[];
   cmdTotal: number;
+  /** 每台服的「模组登录开关」当前值：只从模组实时读，读不到按 unknown 渲染，不拿默认值猜 */
+  modStates: Record<string, ModState>;
+  modStateLoading: boolean;
   dialog: Dialog | null;
 }
 
@@ -61,6 +66,8 @@ export const S = reactive<State>({
   constRows: [],
   cmdSections: [],
   cmdTotal: 0,
+  modStates: {},
+  modStateLoading: false,
   dialog: null,
 });
 
@@ -117,8 +124,35 @@ watch(
   () => S.gid,
   () => {
     void loadGroup();
+    void loadModState();
   },
 );
+
+/** 读各服登录开关的当前值：整群一次并发，失败的那台由调用侧渲染成 unknown */
+export async function loadModState() {
+  if (!S.gid) {
+    S.modStates = {};
+    return;
+  }
+  S.modStateLoading = true;
+  try {
+    const r = await api.serverModState(S.gid);
+    S.modStates = r.states;
+  } catch (err) {
+    fail(err);
+  } finally {
+    S.modStateLoading = false;
+  }
+}
+
+/** 下发登录开关开关：以模组回显的值覆盖本地状态 */
+export async function setWhitelist(name: string, enabled: boolean) {
+  await run("whitelist", async () => {
+    const r = await api.serverWhitelist(S.gid, name, enabled);
+    S.modStates = { ...S.modStates, [name]: { reachable: true, enabled: r.enabled } };
+    toast(r.message);
+  });
+}
 
 export async function loadConfig(force = false) {
   if (force) S.cfgItems = [];

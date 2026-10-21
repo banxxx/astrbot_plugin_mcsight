@@ -8,7 +8,7 @@ import CfgPage from "./pages/CfgPage.vue";
 import ConstPage from "./pages/ConstPage.vue";
 import MapPage from "./pages/MapPage.vue";
 import HelpPage from "./pages/HelpPage.vue";
-import { S, boot, dirtyCount, loadGroup, loadSummary, loadConfig, loadConstants, loadCommands, saveDrafts, toast } from "./store";
+import { S, boot, dirtyCount, loadGroup, loadSummary, loadModState, loadConfig, loadConstants, loadCommands, saveDrafts, toast } from "./store";
 import type { PageKey } from "./store";
 
 const NAV: { group: string; items: { key: PageKey; label: string; icon: string }[] }[] = [
@@ -44,6 +44,7 @@ async function reload() {
     await Promise.all([
       loadSummary(),
       loadGroup(),
+      loadModState(),
       loadConfig(true),
       loadConstants(),
       loadCommands(),
@@ -70,8 +71,8 @@ onMounted(boot);
       <div class="tb-r">
         <span class="who">当前身份 超级管理员</span>
         <UiButton kind="tool" @click="reload"><UiIcon name="refresh" :size="14" />重载插件</UiButton>
-        <UiButton v-if="S.page === 'cfg'" kind="pri" class="save" :disabled="!dirtyCount" @click="saveDrafts">
-          <UiIcon name="check" :size="14" />保存更改<span class="scnt">{{ dirtyCount ? `（${dirtyCount}）` : "" }}</span>
+        <UiButton v-if="S.page === 'cfg'" kind="pri" :disabled="!dirtyCount" @click="saveDrafts">
+          <UiIcon name="check" :size="14" />保存更改
         </UiButton>
       </div>
     </header>
@@ -185,12 +186,6 @@ onMounted(boot);
   font-size: 11px;
   line-height: 26px;
   white-space: nowrap;
-}
-
-/* 计数出现/消失会改变按钮宽度，把左边那颗「重载插件」顶得跳一下 ⇒ 预留够位 */
-.save {
-  min-width: 132px;
-  justify-content: center;
 }
 
 .side {

@@ -6,7 +6,7 @@ import UiBadge from "../components/UiBadge.vue";
 import UiSwitch from "../components/UiSwitch.vue";
 import UiNotice from "../components/UiNotice.vue";
 import GroupPicker from "../components/GroupPicker.vue";
-import { S, api, currentGroup, loadGroup, openDialog, run, toast } from "../store";
+import { S, api, currentGroup, loadGroup, openDialog, run, setWhitelist, toast } from "../store";
 import type { ServerEntry } from "../lib/types";
 
 const g = computed(() => currentGroup.value);
@@ -29,6 +29,29 @@ async function toggleFlag(key: "last_online_enabled" | "nickname_check_enabled",
     await loadGroup();
     if (!!g.value?.[key] !== value) toast(`后端未生效：${key} 读回来还是 ${!!g.value?.[key]}`);
   });
+}
+
+/* 登录开关是模组侧的配置，只能实时读：读不到就禁用开关，不拿默认值冒充已知 */
+function modEnabled(s: ServerEntry): boolean | null {
+  return S.modStates[s.name]?.enabled ?? null;
+}
+
+function modKnown(s: ServerEntry): boolean {
+  return s.api_port !== null && modEnabled(s) !== null;
+}
+
+function modOn(s: ServerEntry): boolean {
+  return modEnabled(s) === true;
+}
+
+function modTitle(s: ServerEntry): string {
+  if (s.api_port === null) return "未配置模组 API 端口，该服视为未安装模组，开关不可用";
+  const state = S.modStates[s.name];
+  if (!state) return S.modStateLoading ? "正在读取模组状态…" : "尚未读到该服状态，开关暂不可用";
+  if (state.enabled === null) return state.reason || "未连通，登录开关状态未知";
+  return state.enabled
+    ? "已开启：未绑定玩家进服会被限制"
+    : "已关闭：所有玩家不受限制，在线受限玩家已放开";
 }
 
 async function move(srv: ServerEntry, dir: -1 | 1) {
@@ -94,7 +117,7 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
         <div class="cols">
           <span class="c-name">名称</span><span class="c-host">主机地址</span><span class="c-port">API 端口</span>
           <span class="c-rmk">备注</span><span class="c-tk">命令 Token</span><span class="c-mod">模组状态</span>
-          <span class="c-op">操作</span>
+          <span class="c-wl">登录开关</span><span class="c-op">操作</span>
         </div>
       </div>
 
@@ -109,9 +132,17 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
             <UiBadge v-if="s.api_port === null" tone="port">未配端口</UiBadge>
             <UiBadge v-else tone="ok">已装模组</UiBadge>
           </span>
+          <span class="c-wl">
+            <span class="cell-label">登录开关</span>
+            <UiSwitch
+              :on="modOn(s)"
+              :disabled="!modKnown(s)"
+              :title="modTitle(s)"
+              @toggle="setWhitelist(s.name, !modOn(s))"
+            />
+          </span>
           <span class="c-op ops">
             <button class="lnk" type="button" @click="openDialog('edit-server', { server: s, index: i })">编辑</button>
-            <button class="lnk" type="button" @click="openDialog('token', { server: s })">换 Token</button>
             <button class="arw" type="button" title="上移" :disabled="i === 0" @click="move(s, -1)"><UiIcon name="arrow-up" :size="12" /></button>
             <button class="arw" type="button" title="下移" :disabled="i === servers.length - 1" @click="move(s, 1)"><UiIcon name="arrow-down" :size="12" /></button>
             <button class="lnk bad" type="button" @click="openDialog('del-server', { server: s })">删除</button>

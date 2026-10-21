@@ -49,6 +49,23 @@ export interface IgnorePayload {
   nickname_check_ignore_ids: string[];
 }
 
+export interface ModState {
+  reachable: boolean;
+  enabled: boolean | null;
+  reason?: string;
+}
+
+export interface ModStatePayload {
+  states: Record<string, ModState>;
+}
+
+export interface WhitelistPayload {
+  enabled: boolean;
+  released: number;
+  persisted: boolean | null;
+  message: string;
+}
+
 export interface TokenPayload {
   has_token: boolean;
   char_count?: number;
@@ -82,10 +99,15 @@ export interface ConfigItem {
   restart_required: boolean;
 }
 
+export interface ConfigSection {
+  title: string;
+  desc: string;
+}
+
 export interface ConfigPayload {
   items: ConfigItem[];
   extra_keys: string[];
-  sections: string[];
+  sections: ConfigSection[];
 }
 
 export interface ConfigUpdatePayload {

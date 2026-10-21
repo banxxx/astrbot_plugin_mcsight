@@ -11,8 +11,10 @@ import type {
   GroupPayload,
   IgnorePayload,
   JsonPayload,
+  ModStatePayload,
   SecretPayload,
   SummaryPayload,
+  WhitelistPayload,
   TokenPayload,
 } from "./types";
 
@@ -57,6 +59,9 @@ export const api = {
     post<GroupPayload>("server/move", { gid, name, index }),
   serverToken: (gid: string, name: string, token: string) =>
     post<TokenPayload>("server/token", { gid, name, token }),
+  serverWhitelist: (gid: string, name: string, enabled: boolean) =>
+    post<WhitelistPayload>("server/whitelist", { gid, name, enabled }),
+  serverModState: (gid: string) => get<ModStatePayload>("server/mod_state", { gid }),
   serverBatchAdd: (gid: string, text: string) => post<BatchPayload>("server/batch_add", { gid, text }),
   serverBatchRemove: (gid: string, names: string[]) =>
     post<BatchPayload>("server/batch_remove", { gid, names }),

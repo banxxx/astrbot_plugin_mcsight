@@ -22,14 +22,24 @@ const LABELS: Record<string, string> = {
   default_api_port: "全局默认 API 端口",
   mod_api_token: "模组 API 鉴权 Token",
   use_central_db: "启用中心数据库（D1）",
-  db_host: "TiDB 数据库主机地址",
-  db_port: "TiDB 数据库端口",
-  db_user: "TiDB 数据库用户名",
+  db_host: "数据库主机地址",
+  db_port: "数据库端口",
+  db_user: "数据库用户名",
   db_password: "数据库密码",
   db_name: "数据库名称",
   show_server_version: "在卡片上显示服务器版本",
   show_server_latency: "在卡片上显示服务器延迟",
   default_group_id: "默认群号",
+};
+
+/* 画布给每个字段定了不同的输入框宽度，不按内容自适应 */
+const WIDTHS: Record<string, number> = {
+  default_api_port: 120,
+  db_host: 300,
+  db_port: 120,
+  db_user: 240,
+  db_name: 200,
+  default_group_id: 200,
 };
 
 function label(it: ConfigItem) {
@@ -44,13 +54,40 @@ function boolVal(it: ConfigItem): boolean {
   return it.key in S.cfgDraft ? Boolean(S.cfgDraft[it.key]) : Boolean(it.value);
 }
 
+/* 改回原值就不再算待保存，否则按钮会一直亮着 */
 function setDraft(it: ConfigItem, v: unknown) {
-  S.cfgDraft[it.key] = v;
+  const isBool = it.type === "bool";
+  const cur = isBool ? Boolean(it.value) : String(it.value ?? "");
+  const next = isBool ? Boolean(v) : String(v ?? "");
+  if (next === cur) delete S.cfgDraft[it.key];
+  else S.cfgDraft[it.key] = v;
 }
 
 function listCount(it: ConfigItem): number {
   return Array.isArray(it.value) ? it.value.length : 0;
 }
+
+function defaultText(it: ConfigItem): string {
+  const d = it.default;
+  if (d === null || d === undefined || d === "" || (Array.isArray(d) && !d.length)) return "";
+  return typeof d === "boolean" ? (d ? "默认 开" : "默认 关") : `默认 ${d}`;
+}
+
+/* 画布的说明行口径：键名 · 默认值 · 提示。
+   schema 的 description 基本就是上面那行标题的另一种说法，画布每一行都没用它，这里也不再拼。 */
+function meta(it: ConfigItem): string {
+  return [it.key, defaultText(it), it.hint].filter(Boolean).join(" · ");
+}
+
+function cellStyle(it: ConfigItem) {
+  return { width: `${WIDTHS[it.key] ?? 240}px` };
+}
+
+const sectionDesc = computed(() => {
+  const map: Record<string, string> = {};
+  for (const s of S.cfgSections) map[s.title] = s.desc;
+  return map;
+});
 
 const groups = computed(() => {
   const out: { title: string; items: ConfigItem[] }[] = [];
@@ -70,40 +107,47 @@ const groups = computed(() => {
         <h1>全局参数</h1>
         <p>_conf_schema.json · {{ S.cfgItems.length }} 个可配置键 · 本页直接改写该文件，保存后需重载插件</p>
       </div>
-      <UiButton :disabled="!S.cfgItems.length" @click="openDialog('json-config')"><UiIcon name="code" :size="13" />查看 JSON</UiButton>
+      <UiButton kind="tool" :disabled="!S.cfgItems.length" @click="openDialog('json-config')">
+        <UiIcon name="braces" :size="13" />查看 JSON
+      </UiButton>
     </section>
 
-    <UiNotice tone="warn">
-      AstrBot 自带的面板表单与本页面写同一份 config 文件；两边同时打开时，后保存的会覆盖先保存的。
+    <UiNotice tone="warn" class="warnbar">
+      AstrBot 自带的面板表单与本页面写同一份 config 文件：两边同时打开时，后保存的会覆盖先保存的
     </UiNotice>
 
     <section v-for="grp in groups" :key="grp.title" class="card">
-      <div class="ch"><span class="bar" /><h2>{{ grp.title }}</h2><span class="hint">{{ grp.items.length }} 个键</span></div>
+      <div class="ch">
+        <span class="bar" />
+        <h2>{{ grp.title }}</h2>
+        <span class="hint">{{ [sectionDesc[grp.title], grp.items.length + " 个键"].filter(Boolean).join(" · ") }}</span>
+      </div>
 
-      <div v-for="it in grp.items" :key="it.key" class="prow" :class="{ dirty: it.key in S.cfgDraft }">
+      <div v-for="it in grp.items" :key="it.key" class="prow">
         <div class="pl">
           <b>{{ label(it) }}</b>
-          <span class="mono">{{ it.key }} · {{ it.hint || it.desc }}</span>
+          <span>{{ meta(it) }}</span>
         </div>
 
         <div class="pr">
           <UiSwitch v-if="it.type === 'bool'" :on="boolVal(it)" @toggle="setDraft(it, !boolVal(it))" />
           <UiSecretInput
             v-else-if="it.secret"
+            :style="cellStyle(it)"
             :model-value="draft(it)"
             :has-value="it.has_value && !!it.key"
-            :placeholder="it.key === 'mod_api_token' ? '与模组端 consoleToken 完全一致' : '留空＝功能关闭'"
             @update:model-value="(v: string) => setDraft(it, v)"
           />
           <template v-else-if="it.type === 'list'">
             <span class="cnt">名单内 {{ listCount(it) }} 个</span>
-            <UiButton @click="openDialog('list-manage', { item: it, label: label(it) })"><UiIcon name="list" :size="13" />管理名单</UiButton>
+            <UiButton kind="line" @click="openDialog('list-manage', { item: it, label: label(it) })"><UiIcon name="list" :size="13" />管理名单</UiButton>
           </template>
           <UiInput
             v-else
             class="cell"
+            :style="cellStyle(it)"
             :model-value="draft(it)"
-            :placeholder="String(it.default ?? '')"
+            :placeholder="it.default === '' || it.default === null ? '（空）' : String(it.default ?? '')"
             @update:model-value="(v: string) => setDraft(it, v)"
           />
         </div>
@@ -139,21 +183,44 @@ const groups = computed(() => {
   color: var(--ink3);
 }
 
+.warnbar {
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 8px;
+}
+
+.ch {
+  border-bottom: 1px solid var(--row);
+}
+
+.ch h2 {
+  border-bottom: none;
+}
+
+.ch .bar {
+  width: 3px;
+  height: 18px;
+  border-radius: 1.5px;
+  background: var(--ac);
+  flex: none;
+}
+
+/* 画布上分区说明紧跟标题左排，不像卡片头那样推到右端 */
+.ch .hint {
+  margin-left: 0;
+}
+
 .prow {
   display: flex;
   align-items: center;
   gap: 16px;
-  min-height: var(--h-form);
-  padding: 8px var(--pad-card);
+  height: var(--h-form);
+  padding: 0 var(--pad-card);
   border-bottom: 1px solid var(--row);
 }
 
 .prow:last-child {
   border-bottom: none;
-}
-
-.prow.dirty {
-  background: var(--ac-soft);
 }
 
 .pl {
@@ -167,11 +234,16 @@ const groups = computed(() => {
 .pl b {
   font-size: 13px;
   font-weight: 500;
+  line-height: 16px;
   color: var(--ink);
 }
 
 .pl span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
+  line-height: 14px;
   color: var(--ink3);
 }
 
@@ -180,10 +252,6 @@ const groups = computed(() => {
   flex: none;
   align-items: center;
   gap: 8px;
-}
-
-.pr .cell {
-  width: 240px;
 }
 
 .cnt {
@@ -202,7 +270,8 @@ const groups = computed(() => {
     width: 100%;
   }
 
-  .pr .cell {
+  .pr .cell,
+  .pr .sec {
     flex: 1 1 auto;
     width: auto;
   }

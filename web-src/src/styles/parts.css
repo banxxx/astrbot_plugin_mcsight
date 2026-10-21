@@ -310,6 +310,10 @@
   font-family: var(--fm);
 }
 
+.inp::placeholder {
+  color: var(--ink4);
+}
+
 .inp:focus {
   outline: none;
   border-color: var(--ac);

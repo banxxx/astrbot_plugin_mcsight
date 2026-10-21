@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/* 14 个弹窗按画布的 5 个原型实现：确认 / 表单 / 单字段密钥 / 列表管理 / 宽表 JSON。
+/* 弹窗按画布的原型实现：确认 / 表单（含命令 Token）/ 名单管理 / 宽表 JSON。
    规矩：遮罩与 Esc 都不关闭；删除类必须二次确认；弹窗内的「移除」不再叠确认。
    注意：具名插槽必须是组件的直接子节点，所以页脚统一放在一个 #foot 里按弹窗分支。 */
 import { computed, reactive, watch } from "vue";
@@ -9,6 +9,7 @@ import UiIcon from "./UiIcon.vue";
 import UiInput from "./UiInput.vue";
 import UiModal from "./UiModal.vue";
 import UiNotice from "./UiNotice.vue";
+import UiSecretInput from "./UiSecretInput.vue";
 import { S, api, closeDialog, loadGroup, openDialog, run, servers, toast } from "../store";
 import type { ConfigItem, ServerEntry } from "../lib/types";
 
@@ -18,7 +19,6 @@ const srv = computed(() => payload.value.server as ServerEntry | undefined);
 const name = computed(() => d.value?.name || "");
 
 const f = reactive<Record<string, string>>({});
-const err = reactive<Record<string, string>>({});
 const selected = reactive<Record<string, boolean>>({});
 const batchResult = reactive({ message: "", failed: [] as string[] });
 const jsonText = reactive({ file: "", text: "" });
@@ -32,7 +32,6 @@ const NOTE_SUBS = ["add-group", "json-group", "json-config"];
 
 const modalCls = computed(() => {
   if (CONFIRMS.includes(name.value)) return "m-confirm";
-  if (name.value === "token") return "m-single";
   if (JSONS.includes(name.value) || name.value === "batch-add") return "m-json";
   if (name.value === "batch-del" || LISTS.includes(name.value)) return "m-list";
   return "m-form";
@@ -46,8 +45,6 @@ const title = computed(() => {
       return `编辑「${srv.value?.name ?? ""}」`;
     case "add-group":
       return "新增群";
-    case "token":
-      return `命令 Token · ${srv.value?.name ?? ""}`;
     case "clear-token":
       return "清除命令 Token";
     case "del-server":
@@ -77,8 +74,6 @@ const sub = computed(() => {
       return "等价命令 /mc add <名称> <地址> [端口]";
     case "edit-server":
       return "等价命令 /mc edit 名称 name|host|port|remark";
-    case "token":
-      return `等价命令 /mc token ${srv.value?.name ?? ""} <Token>`;
     case "clear-token":
       return `等价命令 /mc token ${srv.value?.name ?? ""} 清除`;
     case "del-server":
@@ -130,8 +125,6 @@ const footAction = computed(() => {
       return submitEditServer;
     case "add-group":
       return submitAddGroup;
-    case "token":
-      return submitToken;
     case "clear-token":
       return submitClearToken;
     case "del-server":
@@ -154,13 +147,12 @@ const footVerb = computed(() => {
   return "保存";
 });
 const footKind = computed(() => (name.value === "del-server" || name.value === "del-group" || name.value === "batch-del" ? "danger" : "pri"));
-const footIcon = computed(() => (CONFIRMS.includes(name.value) || name.value === "batch-del" ? null : name.value === "edit-server" || name.value === "token" ? "check" : "plus"));
+const footIcon = computed(() => (CONFIRMS.includes(name.value) || name.value === "batch-del" ? null : name.value === "edit-server" ? "check" : "plus"));
 
 watch(
   d,
   (cur) => {
     for (const k of Object.keys(f)) delete f[k];
-    for (const k of Object.keys(err)) delete err[k];
     batchResult.message = "";
     batchResult.failed = [];
     if (!cur) return;
@@ -170,7 +162,6 @@ watch(
       f.host = s.host;
       f.port = s.api_port == null ? "" : String(s.api_port);
       f.remark = s.remark;
-    } else if (cur.name === "token") {
       f.token = "";
     } else if (cur.name === "add-server") {
       f.name = "";
@@ -224,8 +215,14 @@ async function submitEditServer() {
     if (!s) return;
     const r = await api.serverUpdate(S.gid, { name: s.name, new_name: f.name, host: f.host, api_port: f.port, remark: f.remark });
     S.group = r;
+    let tokenMsg = "";
+    if (f.token) {
+      const t = await api.serverToken(S.gid, f.name || s.name, f.token);
+      tokenMsg = `；${t.message}`;
+      await loadGroup();
+    }
     closeDialog();
-    toast("已保存");
+    toast(`已保存「${f.name || s.name}」${tokenMsg}`);
   });
 }
 
@@ -236,17 +233,6 @@ async function submitAddGroup() {
     await loadGroup();
     closeDialog();
     toast(`已创建 servers_${r.gid}.json`);
-  });
-}
-
-async function submitToken() {
-  await run("token", async () => {
-    const s = srv.value;
-    if (!s) return;
-    const r = await api.serverToken(S.gid, s.name, f.token);
-    toast(r.message);
-    await loadGroup();
-    closeDialog();
   });
 }
 
@@ -349,23 +335,21 @@ async function removeIgnore(qq: string) {
       <UiField label="备注" help="显示在 /在线 卡片服务器名下方；最多50个字符">
         <UiInput v-model="f.remark" placeholder="整合包 A 3.4.0" />
       </UiField>
+
+      <template v-if="name === 'edit-server'">
+        <UiField label="命令 Token" help="留空＝不改动；需与模组端 qqbind-config.json 的 CONSOLE_TOKEN 一致">
+          <UiSecretInput v-model="f.token" :has-value="!!srv?.has_token" placeholder="留空则保持不变" />
+        </UiField>
+        <UiNotice v-if="srv && srv.api_port === null" tone="bad">
+          该服未配模组 API 端口，Token 写入后 /执行 仍不可用。
+        </UiNotice>
+      </template>
     </template>
 
     <template v-else-if="name === 'add-group'">
       <UiField label="QQ 群号" required help="只接受 5-12 位数字。落点：servers_<群号>.json">
         <UiInput v-model="f.gid" placeholder="例如 100000001" />
       </UiField>
-    </template>
-
-    <template v-else-if="name === 'token'">
-      <UiNotice tone="info" lock>该字段是密钥，只在首次生成时显示，设置后只能重置或者本地文件查看</UiNotice>
-      <UiField label="新 Token" required help="需与模组端 qqbind-config.json 的 CONSOLE_TOKEN 一致">
-        <UiInput v-model="f.token" class="tok" :rows="2" :error="!!err.token" placeholder="16-128 个不含空格的可见字符" mono />
-      </UiField>
-      <div v-if="err.token" class="err">{{ err.token }}</div>
-      <UiNotice v-if="srv && srv.api_port === null" tone="bad">
-        该服未配模组 API 端口，Token 写入后 /执行 仍不可用。
-      </UiNotice>
     </template>
 
     <template v-else-if="CONFIRMS.includes(name)">
@@ -423,7 +407,7 @@ async function removeIgnore(qq: string) {
     <template #foot>
       <UiButton @click="closeDialog">{{ JSONS.includes(name) || LISTS.includes(name) ? "关闭" : "取消" }}</UiButton>
       <UiButton
-        v-if="name === 'token' && srv?.has_token"
+        v-if="name === 'edit-server' && srv?.has_token"
         kind="danger-light"
         @click="openDialog('clear-token', { server: srv })"
       >清除</UiButton>
@@ -450,12 +434,6 @@ async function removeIgnore(qq: string) {
   font-size: 12px;
   font-weight: 600;
   color: var(--bad);
-}
-
-/* 画布上 Token 输入是 60 高的两行文本域，字号 12 */
-.tok {
-  min-height: 60px;
-  font-size: 12px;
 }
 
 /* 批量添加的条目文本域画布定 96 高 */

@@ -43,7 +43,7 @@ const revealed = ref(false);
   align-items: center;
   gap: 8px;
   width: 100%;
-  height: 34px;
+  height: 32px;
   padding: 0 10px;
   border: 1px solid var(--bd);
   border-radius: var(--r-ctl);

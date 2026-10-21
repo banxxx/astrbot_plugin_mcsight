@@ -5,6 +5,7 @@ registered_web_apis，所以这里的路由必须自带插件名前缀，页面�
 写操作一律复用命令侧的校验函数与拒绝文案，页面每颗按钮都对应一条现成的 /mc 命令；
 密钥（命令 Token、模组 Token、数据库密码）按实体单独存、只写不读，任何接口都不回明文。
 """
+import asyncio
 import json
 import os
 import re
@@ -27,11 +28,15 @@ from ..config.server_config import (
     validate_server_name,
 )
 from ..config.whitelist_config import WhitelistManager
+from ..utils import mod_http
 from ..utils.host_validator import validate_host
 from ..utils.plugin_paths import PLUGIN_NAME, sub_dir
 from .constants import ROWS
 
 ROUTE_PREFIX = f"/{PLUGIN_NAME}/view"
+# 面板里点开关要等回执，超时给得比聊天侧短：读一次状态 3s，写一次 5s
+MOD_READ_TIMEOUT = 3.0
+MOD_WRITE_TIMEOUT = 5.0
 PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCHEMA_PATH = os.path.join(PLUGIN_DIR, "_conf_schema.json")
 METADATA_PATH = os.path.join(PLUGIN_DIR, "metadata.yaml")
@@ -55,15 +60,19 @@ SECRET_KEYS = ("mod_api_token", "db_password")
 GROUP_ID_RE = re.compile(r"^\d{5,12}$")
 REDACTED = "«已隐藏»"
 
-# 全局参数的分区展示；键必须与 _conf_schema.json 一致，漏列的自动归「其他」
+# 全局参数的分区展示：(分区名, 分区说明, 键)；键必须与 _conf_schema.json 一致，漏列的自动归「其他」
 SECTIONS = (
-    ("状态与权限", ("enable_group_owner", "enable_group_admin",
-                    "super_admins", "whitelist_admins", "blacklist")),
-    ("模组 API", ("default_api_port", "mod_api_token")),
-    ("中心数据库", ("use_central_db", "db_host", "db_port", "db_user",
-                    "db_password", "db_name")),
-    ("卡片显示", ("show_server_version", "show_server_latency")),
-    ("其他", ("default_group_id",)),
+    ("状态与权限", "决定谁能用功能",
+     ("enable_group_owner", "enable_group_admin",
+      "super_admins", "whitelist_admins", "blacklist")),
+    ("模组 API", "插件调用服务器内模组的地址与鉴权",
+     ("default_api_port", "mod_api_token")),
+    ("中心数据库", "绑定数据的云端落点",
+     ("use_central_db", "db_host", "db_port", "db_user",
+      "db_password", "db_name")),
+    ("卡片显示", "影响 /在线 状态卡片内容",
+     ("show_server_version", "show_server_latency")),
+    ("其他", "兜底参数", ("default_group_id",)),
 )
 
 _plugin_config = None
@@ -470,6 +479,92 @@ async def view_server_batch_remove():
     })
 
 
+def _mod_target(wm, entry: dict):
+    """把服务器条目换成 (host, port)；没配 api_port 就不是装了模组的服，返回 None"""
+    if not wm.has_mod_api(entry):
+        return None
+    return str(entry.get("host") or ""), wm.get_server_port(entry)
+
+
+def _mod_token() -> str:
+    """取调用模组用的全局 Token：直接读内核传进来的那份配置对象。
+    WhitelistManager 会另走一条「读 config 文件 + 缓存」的路径，面板刚改完的值可能读不到。"""
+    return str((_plugin_config or {}).get("mod_api_token", "") or "")
+
+
+async def view_server_whitelist():
+    """下发「登录开关」到单台服务器：改模组的 enableWhitelistCheck，即时生效并写回模组配置"""
+    body, err = await _body()
+    if err:
+        return _err(err)
+    gid = _clean_gid(body.get("gid"))
+    if not gid:
+        return _err("群号必须是 5-12 位数字")
+    if not os.path.exists(group_config_path(gid)):
+        return _err(f"servers_{gid}.json 不存在")
+    name = str(body.get("name", ""))
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        return _err("开关值必须是 true/false")
+    cm = ConfigManager(group_id=int(gid))
+    entry = next((s for s in cm.get_all_servers() if s.get("name") == name), None)
+    if entry is None:
+        return _err(f"未找到名为「{name}」的服务器。")
+    target = _mod_target(WhitelistManager(), entry)
+    if target is None:
+        return _err(f"服务器「{name}」未配置模组 API 端口，无法下发。")
+    token = _mod_token()
+    if not token:
+        return _err("未配置全局 mod_api_token，无法调用模组接口。")
+
+    ok, payload = await mod_http.request(
+        target[0], target[1], "/api/whitelist_check",
+        method="POST", data={"enabled": enabled}, token=token, timeout=MOD_WRITE_TIMEOUT)
+    if not ok:
+        return _err(f"下发失败：{payload}")
+    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    back = bool(data.get("enabled", enabled))
+    released = int(data.get("released") or 0)
+    message = f"「{name}」登录开关已{'开启' if back else '关闭'}"
+    if not back and released:
+        message += f"，放开 {released} 名在线受限玩家"
+    if data.get("persisted") is False:
+        message += "（模组配置文件写入失败，重启后会回到旧值）"
+    return _ok({"enabled": back, "released": released, "persisted": data.get("persisted"), "message": message})
+
+
+async def view_server_mod_state():
+    """并发读每台已配端口的服当前的登录开关值；读不到的标 unreachable，不猜值"""
+    gid = _clean_gid(web_request.query.get("gid", ""))
+    if not gid:
+        return _err("群号必须是 5-12 位数字")
+    if not os.path.exists(group_config_path(gid)):
+        return _err(f"servers_{gid}.json 不存在")
+    wm = WhitelistManager()
+    token = _mod_token()
+    servers = ConfigManager(group_id=int(gid)).get_all_servers()
+
+    async def one(entry: dict):
+        name = str(entry.get("name") or "")
+        target = _mod_target(wm, entry)
+        if target is None:
+            return name, {"reachable": False, "enabled": None, "reason": "未配置模组 API 端口，开关不可用"}
+        if not token:
+            return name, {"reachable": False, "enabled": None, "reason": "未配置全局 mod_api_token"}
+        ok, payload = await mod_http.request(
+            target[0], target[1], "/api/status", method="GET", token=token, timeout=MOD_READ_TIMEOUT)
+        if not ok or not isinstance(payload, dict):
+            return name, {"reachable": False, "enabled": None, "reason": str(payload or "模组未响应")}
+        data = payload.get("data") or {}
+        if "whitelist_check_enabled" not in data:
+            return name, {"reachable": True, "enabled": None,
+                          "reason": "该服模组版本没有登录开关，需更新模组后重启服务器"}
+        return name, {"reachable": True, "enabled": bool(data["whitelist_check_enabled"]), "reason": ""}
+
+    pairs = await asyncio.gather(*(one(s) for s in servers))
+    return _ok({"states": dict(pairs)})
+
+
 async def view_json_group():
     gid = _clean_gid(web_request.query.get("gid", ""))
     if not gid:
@@ -502,7 +597,7 @@ def _load_schema() -> dict:
 
 
 def _section_of(key: str) -> str:
-    for title, keys in SECTIONS:
+    for title, _desc, keys in SECTIONS:
         if key in keys:
             return title
     return "其他"
@@ -565,12 +660,15 @@ async def view_config():
     if _plugin_config is None:
         return _err("内核未向插件传入配置对象，全局参数请改配置文件")
     known = list(_schema.keys())
-    items = [_config_item(key) for key in known]
+    # 按分区顺序出条目：schema 的书写顺序与分区无关，直接沿用它会把同一个分区拆成好几张卡
+    ordered = [k for _, _, keys in SECTIONS for k in keys if k in _schema]
+    ordered += [k for k in known if k not in ordered]
+    items = [_config_item(k) for k in ordered]
     extra = [k for k in _plugin_config.keys() if k not in _schema]
     return _ok({
         "items": items,
         "extra_keys": sorted(extra),
-        "sections": [title for title, _ in SECTIONS],
+        "sections": [{"title": t, "desc": d} for t, d, _ in SECTIONS],
     })
 
 
@@ -691,6 +789,8 @@ ROUTES = (
     ("server/token", view_server_token, ["POST"], "写入或清除命令 Token"),
     ("server/batch_add", view_server_batch_add, ["POST"], "批量添加服务器"),
     ("server/batch_remove", view_server_batch_remove, ["POST"], "批量删除服务器"),
+    ("server/whitelist", view_server_whitelist, ["POST"], "下发模组登录开关"),
+    ("server/mod_state", view_server_mod_state, ["GET"], "读取各服模组状态"),
     ("json/group", view_json_group, ["GET"], "群配置文件预览"),
     ("config", view_config, ["GET"], "全局参数列表"),
     ("config/update", view_config_update, ["POST"], "写入全局参数"),
