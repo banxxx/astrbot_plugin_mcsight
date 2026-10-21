@@ -22,6 +22,7 @@ const GROUPS: { title: string; rows: Row[] }[] = [
       { label: "编辑 · 备注", cmd: "/mc edit 名称 remark 备注", note: "显示在 /在线 卡片服务器名下方", isNew: false },
       { label: "排序 ↑ ↓", cmd: "/mc move 名称 序号 · /mc swap 名1 名2", note: "序号从 0 开始；只改群内列表顺序", isNew: false },
       { label: "写 / 清除 Token", cmd: "/mc token 名称 Token（或 清除）", note: "密钥：页面不回显内值，长度门 16-128 字符", isNew: false },
+      { label: "登录开关", cmd: "— 无对应命令", note: "下发该服模组的白名单校验开关并写回其配置文件；用模组 API Token 鉴权", isNew: true },
       { label: "删除服务器", cmd: "/mc remove 名称", note: "只删条目；绑定记录不受影响", isNew: false },
     ],
   },
@@ -41,6 +42,23 @@ const GROUPS: { title: string; rows: Row[] }[] = [
       { label: "删除群", cmd: "— 无对应命令", note: "删掉 servers_<群号>.json：本群 /在线 /绑定 /查询 全部失效，不会自动恢复", isNew: true },
     ],
   },
+  {
+    title: "全局参数页",
+    rows: [
+      { label: "开关 / 输入框", cmd: "— 无对应命令", note: "写 data/config/<插件目录名>_config.json，与面板「插件设置」同一份文件", isNew: true },
+      { label: "名单类（管理员 / 黑名单）", cmd: "— 无对应命令", note: "整表覆盖：保存时一次写回整个列表", isNew: true },
+      { label: "模组 API 鉴权 Token", cmd: "— 无对应命令", note: "密钥：不回显；需与各服模组的 apiToken 逐字一致", isNew: true },
+      { label: "数据库参数（含密码）", cmd: "— 无对应命令", note: "改 db_* 之后要重载插件才会重建连接池", isNew: true },
+      { label: "保存更改", cmd: "— 无对应命令", note: "只写有改动的键；回执会说明是否需要重载", isNew: true },
+      { label: "查看 JSON（全局参数）", cmd: "只读，不发命令", note: "密钥字段以占位符显示，不回显明文", isNew: false },
+    ],
+  },
+  {
+    title: "顶栏",
+    rows: [
+      { label: "重载插件", cmd: "— 无对应命令", note: "走内核的插件重载，等同面板「插件列表」里那颗；完成后页面数据自动重读", isNew: true },
+    ],
+  },
 ];
 
 const TOTAL = GROUPS.reduce((n, g) => n + g.rows.length, 0);
@@ -58,7 +76,7 @@ const NEW = GROUPS.reduce((n, g) => n + g.rows.filter((r) => r.isNew).length, 0)
     </section>
 
     <UiNotice tone="info">
-      除最后两项外，每一项都能回到现有 QQ 命令：结果写进同一份 servers_&lt;群号&gt;.json。
+      标了「页面新能力」的行没有对应的 QQ 命令；其余每一项都能回到现有 QQ 命令。页面与命令写的是同一份文件，只是入口不同。
     </UiNotice>
 
     <section class="card">

@@ -409,7 +409,7 @@ HELP_CARDS = [
                  pills=["/mc say"],
                  desc=_plain("向游戏内发送广播；省略服务器名则广播至全部服务器")),
             _row(_runs(("/执行 ", ACCENT), ("[服务器名] <命令>", DIM)),
-                 pills=["/mc exec"], tags=[ADMIN_TAG],
+                 pills=["/mc exec"],
                  desc=_plain("在指定服务器执行控制台命令并回显输出（需先为该服配置命令 Token）")),
         ], hint="所有人可用"),
     ],
@@ -424,7 +424,7 @@ HELP_CARDS = [
             _row(_runs(("/查绑定 ", ACCENT), ("[游戏ID|QQ号]", DIM)),
                  pills=["/绑定状态", "/checkbind", "/mc check"],
                  desc=_plain("查询绑定关系，缺省自动读取您的群昵称")),
-            _row(_c("/绑定检测"), pills=["/mc bindcheck"], tags=[ADMIN_TAG],
+            _row(_c("/绑定检测"), pills=["/mc bindcheck"],
                  desc=_plain("生成本群未绑定游戏账号成员的名单图")),
         ], hint="详细用法见 /绑定帮助"),
     ],
@@ -455,7 +455,6 @@ HELP_CARDS = [
             _row(_runs(("/mc swap ", ACCENT), ("名1 名2", DIM)),
                  desc=_plain("交换两台服务器位置")),
             _row(_runs(("/mc token ", ACCENT), ("名称 Token|清除", DIM)),
-                 tags=[SUPER_TAG],
                  desc=_plain("单独设置该服的命令 Token")),
         ], hint_tag=ADMIN_TAG, hint="需要群管或插件管理员权限", grid=True),
         _sec(AMBER, "昵称检测与显示", [
@@ -471,11 +470,75 @@ HELP_CARDS = [
                  pills=["/mc lastonline"], desc=_plain("状态卡片“上次在线”显示开关")),
         ], grid=True),
         _sec(ROSE, "高级", [
-            _row(_c("/mc whitelist list"), tags=[SUPER_TAG],
+            _row(_c("/mc whitelist list"),
                  desc=_plain("查看白名单配置（修改请前往 AstrBot WebUI）")),
         ]),
     ],
 ]
+
+# ========== 权限标识：从真实权限表反推，不手写 ==========
+# 权限表改了，/帮助 图、/绑定帮助 图和配置页的标识会一起变；手写的牌会和 utils/permission 对不上。
+# 中文命令 → /mc 子命令的对应关系抄自 main.py 里各命令对 message_str 的重写。
+_SUB_OF_CN = {
+    "在线": "status", "查询": "stats", "广播": "say", "执行": "exec", "tps": "tps",
+    "绑定": "bind", "解绑": "unbind", "查绑定": "check", "绑定检测": "bindcheck",
+    "检测昵称": "checknick", "上次在线": "lastonline", "帮助": "help", "绑定帮助": "bindhelp",
+}
+
+
+def _row_head(row) -> str:
+    cmd = row.get("cmd")
+    if isinstance(cmd, list):
+        return "".join(str(t) for t, _ in cmd).strip()
+    return str(cmd or "").strip()
+
+
+def _sub_of(text: str) -> str:
+    """取这条文案真正对应的 /mc 子命令；认不出来返回空串"""
+    text = (text or "").strip()
+    hit = re.match(r"^/mc\s+([a-zA-Z]+)", text)
+    if hit:
+        return hit.group(1).lower()
+    hit = re.match(r"^/([^\s<\[]+)", text)
+    return _SUB_OF_CN.get(hit.group(1), "") if hit else ""
+
+
+def _perm_tag(row):
+    from ...utils.permission import (GATED_CMDS, LEVEL_GROUP_ADMIN,
+                                     LEVEL_SUPER_ADMIN, PERMISSION_REQUIRED)
+
+    subs = [_sub_of(_row_head(row))]
+    for pill in row.get("pills") or []:
+        sub = _sub_of(str(pill))
+        if sub:
+            subs.append(sub)
+    subs = [s for s in subs if s]
+    if not subs:
+        return None  # 认不出命令就不动它原有的标识
+    if not any(s in GATED_CMDS for s in subs):
+        return ()    # 入口不拦闸的命令，标「管理员」就是假的
+    # 与 check_permission 同一条默认：表里没有的子命令按群管理员算
+    level = max((PERMISSION_REQUIRED.get(s, LEVEL_GROUP_ADMIN)
+                 for s in subs if s in GATED_CMDS))
+    if level >= LEVEL_SUPER_ADMIN:
+        return SUPER_TAG
+    if level >= LEVEL_GROUP_ADMIN:
+        return ADMIN_TAG
+    return ()
+
+
+# 变量名不能复用 _sec/_row：那两个是本模块的构造函数，bind_help_generator 会 import 它们
+for _hcard in HELP_CARDS:
+    for _hsec in _hcard:
+        for _hrow in _hsec.get("rows", []):
+            if not isinstance(_hrow, dict):
+                continue
+            _tag = _perm_tag(_hrow)
+            if _tag is not None:
+                if _tag:
+                    _hrow["tags"] = [_tag]
+                else:
+                    _hrow.pop("tags", None)
 
 BRAND_RUNS = _runs(("QQ 群 × ", FAINT), ("Minecraft", ACCENT), (" 服务器助手", FAINT))
 FOOT_RUNS = _runs(

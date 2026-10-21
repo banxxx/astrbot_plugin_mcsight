@@ -32,9 +32,9 @@ onMounted(() => {
             <span class="c-h1 cmd ell">{{ r.cmd }}</span>
             <span class="c-h2 t-sub ell">{{ r.desc }}</span>
             <span class="c-h3 alias-wrap">
-              <span v-if="r.aliases" class="al ell">{{ r.aliases }}</span>
+              <span v-if="r.aliases" class="al">{{ r.aliases }}</span>
               <span v-else class="al dash">—</span>
-              <span v-if="r.tags" class="tg">{{ r.tags }}</span>
+              <span v-if="r.tags" class="tg" :class="{ super: r.tags.indexOf('超管') >= 0 }">{{ r.tags }}</span>
             </span>
           </div>
         </div>
@@ -99,6 +99,15 @@ onMounted(() => {
   font-size: 11px;
   font-family: var(--fm);
   color: var(--ink3);
+  line-height: 15px;
+}
+
+/* 别名多的命令（/查绑定 三个别名）折行显示，不裁字 ⇒ 行高让给它长 */
+.row.dense {
+  height: auto;
+  min-height: 40px;
+  padding-top: 5px;
+  padding-bottom: 5px;
 }
 
 .al.dash {
@@ -123,5 +132,10 @@ onMounted(() => {
   font-size: 10px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.tg.super {
+  background: var(--bad-bg);
+  color: var(--bad);
 }
 </style>

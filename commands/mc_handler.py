@@ -8,7 +8,7 @@ from astrbot.api.message_components import Image as AstrImage
 from astrbot.api import logger
 from ..config.server_config import ConfigManager
 from ..config.whitelist_config import WhitelistManager
-from ..utils.permission import (check_permission, is_astrbot_super_admin,
+from ..utils.permission import (ADMIN_CMDS, check_permission, is_astrbot_super_admin,
                                 PERMISSION_REQUIRED, LEVEL_SUPER_ADMIN)
 from ..utils import debounce
 
@@ -67,9 +67,8 @@ async def handle_mc_command(event: AstrMessageEvent):
                                          f"使用一次，请 {remaining} 秒后再试。")
             return
 
-    # 权限检查（管理命令）
-    admin_cmds = {"add", "remove", "edit", "batchadd", "batchremove", "move", "swap", "lastonline", "checknick", "nicknamecheck", "bindcheck", "say", "exec", "token"}
-    if sub_cmd in admin_cmds:
+    # 权限检查（管理命令）：集合与等级都在 utils/permission.py，帮助页共用同一份
+    if sub_cmd in ADMIN_CMDS:
         if not await check_permission(event, sub_cmd):
             # 按要求的等级说话：超管项若说成「群管理员即可」会把人引到错的权限上
             if PERMISSION_REQUIRED.get(sub_cmd) == LEVEL_SUPER_ADMIN:

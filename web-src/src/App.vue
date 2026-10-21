@@ -46,7 +46,7 @@ onMounted(boot);
   <div class="shell">
     <header class="tb">
       <div class="tb-l">
-        <span class="logo"><UiIcon name="server" :size="15" /></span>
+        <img class="logo" src="./assets/logo.png" alt="MCSight" />
         <b>MCSight</b>
         <span class="sep" />
         <span class="crumb">配置中心</span>
@@ -129,14 +129,10 @@ onMounted(boot);
 }
 
 .logo {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  flex: none;
   width: 28px;
   height: 28px;
-  border-radius: 8px;
-  background: var(--ac);
-  color: #fff;
+  display: block;
 }
 
 .tb-l b {

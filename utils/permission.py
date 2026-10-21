@@ -38,6 +38,17 @@ PERMISSION_REQUIRED = {
     "bindcheck": LEVEL_GROUP_ADMIN,  # 群内未绑定成员检测：会列出他人 QQ，仅管理员
 }
 
+# 分发入口统一拦闸的子命令（commands/mc_handler.py 用这个集合决定要不要查权限）
+ADMIN_CMDS = {"add", "remove", "edit", "batchadd", "batchremove", "move", "swap",
+              "lastonline", "checknick", "nicknamecheck", "bindcheck",
+              "say", "exec", "token"}
+
+# 不在入口拦、但在各自 handler 里自查的：/mc whitelist 只有一条列表命令，超管专用
+SELF_CHECKED_CMDS = {"whitelist"}
+
+# 帮助页与 /帮助 图据此打权限标识：入口没拦闸的（如 /查询 /解绑自己）不该出现「管理员」
+GATED_CMDS = ADMIN_CMDS | SELF_CHECKED_CMDS
+
 
 async def get_user_permission_level(event: AstrMessageEvent) -> int:
     wm = WhitelistManager()
