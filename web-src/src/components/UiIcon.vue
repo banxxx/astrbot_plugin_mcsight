@@ -21,6 +21,7 @@ import {
   Search,
   Server,
   SlidersHorizontal,
+  Trash2,
   TriangleAlert,
   X,
 } from "@lucide/vue";
@@ -47,6 +48,7 @@ const MAP: Record<string, unknown> = {
   search: Search,
   server: Server,
   sliders: SlidersHorizontal,
+  trash: Trash2,
   alert: TriangleAlert,
   x: X,
 };

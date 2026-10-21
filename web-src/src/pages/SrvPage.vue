@@ -54,6 +54,13 @@ function modTitle(s: ServerEntry): string {
     : "已关闭：所有玩家不受限制，在线受限玩家已放开";
 }
 
+/* 标签只答「机器人这一侧存没存口令」，模组侧认不认要靠 /执行 才能验，这里把边界写在悬停里 */
+function tokTitle(s: ServerEntry): string {
+  if (!s.has_token) return "未设置：/执行 对该服未启用";
+  if (s.api_port === null) return "口令已存，但该服未配模组 API 端口，/执行 发不出去";
+  return "口令已存：需与该服模组的 consoleToken 逐字一致";
+}
+
 async function move(srv: ServerEntry, dir: -1 | 1) {
   const at = servers.value.findIndex((s) => s.name === srv.name);
   const index = at + dir;
@@ -127,7 +134,7 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
           <span class="c-host"><span class="cell-label">地址</span><span class="ell">{{ s.host }}</span></span>
           <span class="c-port"><span class="cell-label">端口</span><span :class="{ dash: s.api_port === null }">{{ s.api_port ?? "—" }}</span></span>
           <span class="c-rmk"><span class="cell-label">备注</span><span class="ell" :class="{ dash: !s.remark }">{{ s.remark || "—" }}</span></span>
-          <span class="c-tk"><UiBadge :tone="s.has_token ? 'neutral' : 'off'">{{ s.has_token ? "已配置" : "未设置" }}</UiBadge></span>
+          <span class="c-tk"><UiBadge :tone="s.has_token ? 'neutral' : 'off'" :title="tokTitle(s)">{{ s.has_token ? "已配置" : "未设置" }}</UiBadge></span>
           <span class="c-mod">
             <UiBadge v-if="s.api_port === null" tone="port">未配端口</UiBadge>
             <UiBadge v-else tone="ok">已装模组</UiBadge>

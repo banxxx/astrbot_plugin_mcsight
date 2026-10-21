@@ -44,6 +44,18 @@ def group_config_path(group_id) -> str:
     return os.path.join(sub_dir('group_configs'), f'servers_{group_id}.json')
 
 
+def console_token_of(entry: dict) -> str:
+    """取该服真正能用的命令 Token：空白、含空格或不可见字符的一律按「未配置」处理。
+
+    这个判据同时供 /执行 与面板的「已配置/未设置」标签使用，避免机器人里存了个发不出去的
+    字符串、面板却显示已配置。
+    """
+    raw = str(entry.get("console_token") or "").strip()
+    if any(ord(c) < 0x21 or ord(c) > 0x7E for c in raw):
+        return ""
+    return raw
+
+
 # edit_server 的「这个字段本次不动」哨兵，和显式传入的 None/"" 区分开
 _UNSET = object()
 

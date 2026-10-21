@@ -154,3 +154,8 @@ export interface CommandsPayload {
 export interface DeleteGroupPayload {
   gid: string;
 }
+
+export interface ReloadPayload {
+  reloading: boolean;
+  message: string;
+}

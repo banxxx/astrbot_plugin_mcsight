@@ -23,6 +23,7 @@ from ..commands.management import _validate_console_token
 from ..config.server_config import (
     ConfigManager,
     MAX_SERVERS_PER_GROUP,
+    console_token_of,
     group_config_path,
     validate_remark,
     validate_server_name,
@@ -121,8 +122,13 @@ def _server_view(entry: dict) -> dict:
         "host": entry.get("host", ""),
         "api_port": port,
         "remark": entry.get("remark", ""),
-        "has_token": bool(entry.get("console_token")),
+        "has_token": bool(console_token_of(entry)),
     }
+
+
+def _token_count(servers: list) -> int:
+    """与「命令 Token」列同判据：存的值要真能当 Bearer 头发出去才计数"""
+    return sum(1 for s in servers if console_token_of(s))
 
 
 def _group_payload(gid: str) -> dict:
@@ -134,7 +140,7 @@ def _group_payload(gid: str) -> dict:
         "file": f"servers_{gid}.json",
         "servers": [_server_view(s) for s in servers],
         "mod_count": sum(1 for s in servers if s.get("api_port") is not None),
-        "token_count": sum(1 for s in servers if s.get("console_token")),
+        "token_count": _token_count(servers),
         "last_online_enabled": cm.is_last_online_enabled(),
         "nickname_check_enabled": cm.is_nickname_check_enabled(),
         "nickname_check_ignore_ids": cm.get_nickname_check_ignore_ids(),
@@ -305,6 +311,11 @@ async def view_server_create():
     remark_err = validate_remark(remark)
     if remark_err:
         return _err(remark_err)
+    token = str(body.get("token", "")).strip()
+    if token:
+        token_err = _validate_console_token(token)
+        if token_err:
+            return _err(token_err)
     cm = ConfigManager(group_id=int(gid))
     if len(cm.get_all_servers()) >= MAX_SERVERS_PER_GROUP:
         return _err(f"添加失败：每个群最多绑定 {MAX_SERVERS_PER_GROUP} 个服务器。")
@@ -312,6 +323,8 @@ async def view_server_create():
         return _err(f"失败（名称已存在）：{name}")
     if remark:
         cm.edit_server(name, remark=remark)
+    if token:
+        cm.edit_server_console_token(name, token)
     return _ok(_group_payload(gid))
 
 
@@ -578,7 +591,7 @@ async def view_json_group():
     except (json.JSONDecodeError, OSError) as e:
         return _err(f"读取 servers_{gid}.json 失败：{e}")
     for entry in data.get("servers", []):
-        if isinstance(entry, dict) and entry.get("console_token"):
+        if isinstance(entry, dict) and "console_token" in entry:
             entry["console_token"] = REDACTED
     return _ok({"file": f"servers_{gid}.json",
                 "text": json.dumps(data, ensure_ascii=False, indent=2)})
@@ -774,6 +787,43 @@ async def view_commands():
     })
 
 
+# ---------- 插件自身 ----------
+
+def _plugin_manager():
+    """取内核的 PluginManager：面板「插件列表 → 重载」那颗按钮走的就是它。
+
+    内核没给插件侧公开入口，只能顺着本次请求摸到 app.state.core_lifecycle；
+    摸不到就返回 None，由调用侧退回「只重读数据」。
+    """
+    raw = getattr(web_request, "_request", None)
+    state = getattr(getattr(raw, "app", None), "state", None)
+    return getattr(getattr(state, "core_lifecycle", None), "plugin_manager", None)
+
+
+async def view_plugin_reload():
+    """真重载本插件：拆掉模块再按当前配置文件重建，与面板插件列表等效。
+
+    响应必须先发出去——reload() 会把正在处理本次请求的这个模块实例终止并替换。
+    """
+    pm = _plugin_manager()
+    if pm is None or not hasattr(pm, "reload"):
+        return _err("当前内核没给插件开放重载入口，请到面板的插件列表里手动重载。")
+
+    async def do_reload() -> None:
+        await asyncio.sleep(0.4)  # 让本次响应先回到浏览器
+        try:
+            success, err = await pm.reload(PLUGIN_NAME)
+            if success:
+                logger.info(f"[MCSight] {PLUGIN_NAME} 已从配置页触发重载")
+            else:
+                logger.error(f"[MCSight] 配置页触发重载失败：{err}")
+        except Exception as e:  # 重载失败不能让后台任务静默吞掉
+            logger.error(f"[MCSight] 配置页触发重载异常：{e}")
+
+    asyncio.create_task(do_reload())
+    return _ok({"reloading": True, "message": f"正在重载 {PLUGIN_NAME}…"})
+
+
 ROUTES = (
     ("summary", view_summary, ["GET"], "群与服务器总览"),
     ("group", view_group, ["GET"], "读取单个群的配置"),
@@ -798,6 +848,7 @@ ROUTES = (
     ("config/json", view_config_json, ["GET"], "全局参数预览"),
     ("constants", view_constants, ["GET"], "代码常量清单"),
     ("commands", view_commands, ["GET"], "命令帮助清单"),
+    ("plugin/reload", view_plugin_reload, ["POST"], "重载插件本体"),
 )
 
 

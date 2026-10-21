@@ -154,14 +154,13 @@ export async function setWhitelist(name: string, enabled: boolean) {
   });
 }
 
+/** 拉全局参数：先取到再整体替换。中途清空数组会让整页卡片闪一下空白（保存后尤其明显）。 */
 export async function loadConfig(force = false) {
-  if (force) S.cfgItems = [];
-  if (!S.cfgItems.length) {
-    const r = await api.config();
-    S.cfgItems = r.items;
-    S.cfgSections = r.sections;
-    S.cfgExtraKeys = r.extra_keys;
-  }
+  if (!force && S.cfgItems.length) return;
+  const r = await api.config();
+  S.cfgItems = r.items;
+  S.cfgSections = r.sections;
+  S.cfgExtraKeys = r.extra_keys;
 }
 
 /** 全局参数：草稿逐条写回，密钥走 config/secret，其余走 config/update；写完强制刷新读值。 */
@@ -209,6 +208,67 @@ export async function loadCommands() {
     const r = await api.commands();
     S.cmdSections = r.sections;
     S.cmdTotal = r.total;
+  }
+}
+
+/** 六路数据一起重读 */
+export async function reloadData() {
+  await Promise.all([
+    loadSummary(),
+    loadGroup(),
+    loadModState(),
+    loadConfig(true),
+    loadConstants(),
+    loadCommands(),
+  ]);
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** 重载期间本插件的路由会短暂取不到，轮询到能应答为止 */
+async function waitPluginAlive(timeoutMs: number): Promise<boolean> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    await sleep(500);
+    try {
+      await api.summary();
+      return true;
+    } catch {
+      /* 还没起来，继续等 */
+    }
+  }
+  return false;
+}
+
+/** 顶栏「重载插件」：让内核把本插件拆掉重装（连接、缓存、命令注册都会重建）；
+    内核没给入口时退回只重读数据，并在回执里说清走的是哪条路。 */
+let reloading = false;
+
+export async function reloadPlugin() {
+  if (reloading) return;
+  reloading = true;
+  S.busy = true;
+  S.error = "";
+  try {
+    const r = await api.pluginReload();
+    toast(r.message);
+    if (!(await waitPluginAlive(20000))) {
+      toast("发出重载后 20 秒没应答，请到面板的插件列表确认状态");
+      return;
+    }
+    await reloadData();
+    toast("插件已重载，数据已刷新");
+  } catch (err) {
+    const why = err instanceof ApiError ? err.message : String(err);
+    try {
+      await reloadData();
+    } catch {
+      /* 重读也失败时保留原页面 */
+    }
+    toast(`${why}（已改为重新读取数据）`);
+  } finally {
+    S.busy = false;
+    reloading = false;
   }
 }
 

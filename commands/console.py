@@ -8,7 +8,7 @@ mod_api_token 相互独立；条目没配 Token 即视为该服务器不启用�
 import re
 
 from astrbot.api import logger
-from ..config.server_config import ConfigManager
+from ..config.server_config import ConfigManager, console_token_of
 from ..config.whitelist_config import WhitelistManager
 from ..utils import mod_http
 
@@ -61,7 +61,7 @@ async def handle_exec(event, config: ConfigManager, rest: str):
         yield event.plain_result(f"服务器「{server_name}」未启用模组 API（未配置 api_port），无法执行命令。")
         return
 
-    token = str(target.get("console_token") or "")
+    token = console_token_of(target)
     if not token:
         yield event.plain_result(
             f"服务器「{server_name}」未配置命令 Token，/执行 对它未启用。\n"

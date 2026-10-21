@@ -12,6 +12,7 @@ import type {
   IgnorePayload,
   JsonPayload,
   ModStatePayload,
+  ReloadPayload,
   SecretPayload,
   SummaryPayload,
   WhitelistPayload,
@@ -48,7 +49,7 @@ export const api = {
   ignoreAdd: (gid: string, qq: string) => post<IgnorePayload>("group/ignore_add", { gid, qq }),
   ignoreRemove: (gid: string, qq: string) => post<IgnorePayload>("group/ignore_remove", { gid, qq }),
 
-  serverCreate: (gid: string, f: { name: string; host: string; api_port: string; remark: string }) =>
+  serverCreate: (gid: string, f: { name: string; host: string; api_port: string; remark: string; token: string }) =>
     post<GroupPayload>("server/create", { gid, ...f }),
   serverUpdate: (
     gid: string,
@@ -73,4 +74,5 @@ export const api = {
   configJson: () => get<JsonPayload>("config/json"),
   constants: () => get<ConstantsPayload>("constants"),
   commands: () => get<CommandsPayload>("commands"),
+  pluginReload: () => post<ReloadPayload>("plugin/reload", {}),
 };

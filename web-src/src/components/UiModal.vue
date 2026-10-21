@@ -58,7 +58,12 @@ withDefaults(
   height: 260px;
 }
 
-.m-form,
+.m-form {
+  width: 520px;
+  /* 该档位最重状态 = 编辑服务器：5 个字段 + 未配端口的红条，按实测自然高定高 */
+  height: 620px;
+}
+
 .m-list {
   width: 520px;
   height: 500px;

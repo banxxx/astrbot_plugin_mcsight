@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /* 弹窗按画布的原型实现：确认 / 表单（含命令 Token）/ 名单管理 / 宽表 JSON。
-   规矩：遮罩与 Esc 都不关闭；删除类必须二次确认；弹窗内的「移除」不再叠确认。
+   规矩：遮罩与 Esc 都不关闭；删除类必须二次确认；弹窗内的「移除」不再叠确认；密钥的清除即时生效。
    注意：具名插槽必须是组件的直接子节点，所以页脚统一放在一个 #foot 里按弹窗分支。 */
-import { computed, reactive, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import UiButton from "./UiButton.vue";
 import UiField from "./UiField.vue";
 import UiIcon from "./UiIcon.vue";
@@ -10,12 +10,18 @@ import UiInput from "./UiInput.vue";
 import UiModal from "./UiModal.vue";
 import UiNotice from "./UiNotice.vue";
 import UiSecretInput from "./UiSecretInput.vue";
-import { S, api, closeDialog, loadGroup, openDialog, run, servers, toast } from "../store";
+import { S, api, closeDialog, loadGroup, run, servers, toast } from "../store";
 import type { ConfigItem, ServerEntry } from "../lib/types";
 
 const d = computed(() => S.dialog);
 const payload = computed(() => (d.value?.payload || {}) as Record<string, unknown>);
-const srv = computed(() => payload.value.server as ServerEntry | undefined);
+/* 弹窗打开时锁定服名，之后一律从列表里取当前行：清除 Token / 改名 / 移动刷新后标签才跟得上真值 */
+const srvKey = ref("");
+const srv = computed(() => {
+  const snap = payload.value.server as ServerEntry | undefined;
+  if (!snap) return undefined;
+  return servers.value.find((s) => s.name === srvKey.value) ?? snap;
+});
 const name = computed(() => d.value?.name || "");
 
 const f = reactive<Record<string, string>>({});
@@ -24,7 +30,7 @@ const batchResult = reactive({ message: "", failed: [] as string[] });
 const jsonText = reactive({ file: "", text: "" });
 
 const FORMS = ["add-server", "edit-server"];
-const CONFIRMS = ["clear-token", "del-server", "del-group"];
+const CONFIRMS = ["del-server", "del-group"];
 const LISTS = ["ignore-list", "list-manage"];
 const JSONS = ["json-group", "json-config"];
 /* 画布上「等价命令 / 文件操作」副标题是等宽主色，说明行是正体灰；只有 JSON 弹窗标题用等宽 */
@@ -45,8 +51,6 @@ const title = computed(() => {
       return `编辑「${srv.value?.name ?? ""}」`;
     case "add-group":
       return "新增群";
-    case "clear-token":
-      return "清除命令 Token";
     case "del-server":
       return "删除服务器";
     case "del-group":
@@ -71,11 +75,9 @@ const title = computed(() => {
 const sub = computed(() => {
   switch (name.value) {
     case "add-server":
-      return "等价命令 /mc add <名称> <地址> [端口]";
+      return "等价命令 /mc add <名称> <地址> [端口] · /mc token 名称 <口令>";
     case "edit-server":
-      return "等价命令 /mc edit 名称 name|host|port|remark";
-    case "clear-token":
-      return `等价命令 /mc token ${srv.value?.name ?? ""} 清除`;
+      return "等价命令 /mc edit 名称 name|host|port|remark · /mc token 名称 <口令>|清除";
     case "del-server":
       return `等价命令 /mc remove ${srv.value?.name ?? ""}`;
     case "del-group":
@@ -105,18 +107,14 @@ const listNote = computed(() =>
     : `名单内 ${listItems.value.length} 个 · 保存时整表写回 _conf_schema.json`,
 );
 const confirmWarn = computed(() => {
-  if (name.value === "clear-token") return "清除后该服的 /执行 立即不可用，需重新设置才能恢复。";
   if (name.value === "del-server") return `将从 servers_${S.gid}.json 移除「${srv.value?.name ?? ""}」，其命令 Token 一并删除。`;
   return `该群还有 ${servers.value.length} 台服务器条目，删除后 /在线 /绑定 /查询 在这个群全部失效，且不会自动恢复。`;
 });
 const confirmNote = computed(() => {
-  if (name.value === "clear-token") return "现值不会被显示，也无法找回；密钥字段按「留空＝功能关闭」处理。";
   if (name.value === "del-server") return "绑定记录不受影响。";
   return "本群开关与忽略名单一并随文件删除。绑定记录不在此文件内，不受影响。";
 });
-const confirmVerb = computed(() =>
-  name.value === "clear-token" ? "确认清除" : name.value === "del-server" ? "确认删除" : "确认删除文件",
-);
+const confirmVerb = computed(() => (name.value === "del-server" ? "确认删除" : "确认删除文件"));
 const footAction = computed(() => {
   switch (name.value) {
     case "add-server":
@@ -125,8 +123,6 @@ const footAction = computed(() => {
       return submitEditServer;
     case "add-group":
       return submitAddGroup;
-    case "clear-token":
-      return submitClearToken;
     case "del-server":
       return submitDelServer;
     case "del-group":
@@ -156,6 +152,7 @@ watch(
     batchResult.message = "";
     batchResult.failed = [];
     if (!cur) return;
+    srvKey.value = (cur.payload?.server as ServerEntry | undefined)?.name ?? "";
     if (cur.name === "edit-server") {
       const s = cur.payload?.server as ServerEntry;
       f.name = s.name;
@@ -168,6 +165,7 @@ watch(
       f.host = "";
       f.port = "";
       f.remark = "";
+      f.token = "";
     } else if (cur.name === "add-group") {
       f.gid = "";
     } else if (cur.name === "batch-add") {
@@ -202,10 +200,16 @@ const selectedNames = computed(() => servers.value.filter((s) => selected[s.name
 
 async function submitAddServer() {
   await run("add", async () => {
-    const r = await api.serverCreate(S.gid, { name: f.name, host: f.host, api_port: f.port, remark: f.remark });
+    const r = await api.serverCreate(S.gid, {
+      name: f.name,
+      host: f.host,
+      api_port: f.port,
+      remark: f.remark,
+      token: f.token,
+    });
     S.group = r;
     closeDialog();
-    toast(`已添加「${f.name}」`);
+    toast(`已添加「${f.name}」${f.token ? "，命令 Token 已写入" : ""}`);
   });
 }
 
@@ -213,16 +217,29 @@ async function submitEditServer() {
   await run("edit", async () => {
     const s = srv.value;
     if (!s) return;
-    const r = await api.serverUpdate(S.gid, { name: s.name, new_name: f.name, host: f.host, api_port: f.port, remark: f.remark });
+    const finalName = f.name || s.name;
+    const r = await api.serverUpdate(S.gid, { name: s.name, new_name: finalName, host: f.host, api_port: f.port, remark: f.remark });
     S.group = r;
+    srvKey.value = finalName;
     let tokenMsg = "";
     if (f.token) {
-      const t = await api.serverToken(S.gid, f.name || s.name, f.token);
+      const t = await api.serverToken(S.gid, finalName, f.token);
       tokenMsg = `；${t.message}`;
       await loadGroup();
     }
     closeDialog();
-    toast(`已保存「${f.name || s.name}」${tokenMsg}`);
+    toast(`已保存「${finalName}」${tokenMsg}`);
+  });
+}
+
+/* 行内垃圾桶：即时清掉该服存量口令，不叠二次确认；弹窗留在原地，口令行自己退回「未设置」 */
+async function clearToken() {
+  const s = srv.value;
+  if (!s) return;
+  await run("clear", async () => {
+    const r = await api.serverToken(S.gid, s.name, "");
+    await loadGroup();
+    toast(r.message);
   });
 }
 
@@ -233,17 +250,6 @@ async function submitAddGroup() {
     await loadGroup();
     closeDialog();
     toast(`已创建 servers_${r.gid}.json`);
-  });
-}
-
-async function submitClearToken() {
-  await run("clear", async () => {
-    const s = srv.value;
-    if (!s) return;
-    const r = await api.serverToken(S.gid, s.name, "");
-    toast(r.message);
-    await loadGroup();
-    closeDialog();
   });
 }
 
@@ -336,14 +342,27 @@ async function removeIgnore(qq: string) {
         <UiInput v-model="f.remark" placeholder="整合包 A 3.4.0" />
       </UiField>
 
-      <template v-if="name === 'edit-server'">
-        <UiField label="命令 Token" help="留空＝不改动；需与模组端 qqbind-config.json 的 CONSOLE_TOKEN 一致">
-          <UiSecretInput v-model="f.token" :has-value="!!srv?.has_token" placeholder="留空则保持不变" />
-        </UiField>
-        <UiNotice v-if="srv && srv.api_port === null" tone="bad">
-          该服未配模组 API 端口，Token 写入后 /执行 仍不可用。
-        </UiNotice>
-      </template>
+      <UiField
+        label="命令 Token"
+        :help="
+          name === 'add-server'
+            ? '该服 /执行 的口令，与模组端 consoleToken 逐字一致；留空＝不启用'
+            : '该服 /执行 的口令，与模组端 consoleToken 逐字一致；留空＝不改动'
+        "
+      >
+        <UiSecretInput
+          v-model="f.token"
+          :has-value="name === 'edit-server' && !!srv?.has_token"
+          :placeholder="name === 'edit-server' && srv?.has_token ? '留空则保持不变' : undefined"
+          :clearable="name === 'edit-server'"
+          clear-title="清除该服命令 Token"
+          @clear="clearToken"
+        />
+      </UiField>
+
+      <UiNotice v-if="name === 'edit-server' && srv && srv.api_port === null" tone="bad">
+        该服未配模组 API 端口，Token 写入后 /执行 仍不可用。
+      </UiNotice>
     </template>
 
     <template v-else-if="name === 'add-group'">
@@ -406,11 +425,6 @@ async function removeIgnore(qq: string) {
 
     <template #foot>
       <UiButton @click="closeDialog">{{ JSONS.includes(name) || LISTS.includes(name) ? "关闭" : "取消" }}</UiButton>
-      <UiButton
-        v-if="name === 'edit-server' && srv?.has_token"
-        kind="danger-light"
-        @click="openDialog('clear-token', { server: srv })"
-      >清除</UiButton>
       <UiButton
         v-if="footAction"
         :kind="footKind"

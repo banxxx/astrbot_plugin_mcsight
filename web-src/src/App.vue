@@ -8,7 +8,7 @@ import CfgPage from "./pages/CfgPage.vue";
 import ConstPage from "./pages/ConstPage.vue";
 import MapPage from "./pages/MapPage.vue";
 import HelpPage from "./pages/HelpPage.vue";
-import { S, boot, dirtyCount, loadGroup, loadSummary, loadModState, loadConfig, loadConstants, loadCommands, saveDrafts, toast } from "./store";
+import { S, boot, dirtyCount, reloadPlugin, saveDrafts } from "./store";
 import type { PageKey } from "./store";
 
 const NAV: { group: string; items: { key: PageKey; label: string; icon: string }[] }[] = [
@@ -39,22 +39,6 @@ const PAGES: Record<PageKey, unknown> = {
 
 const pageComp = computed(() => PAGES[S.page]);
 
-async function reload() {
-  try {
-    await Promise.all([
-      loadSummary(),
-      loadGroup(),
-      loadModState(),
-      loadConfig(true),
-      loadConstants(),
-      loadCommands(),
-    ]);
-    toast("已重新读取全部数据");
-  } catch (err) {
-    toast(String(err));
-  }
-}
-
 onMounted(boot);
 </script>
 
@@ -70,7 +54,7 @@ onMounted(boot);
       </div>
       <div class="tb-r">
         <span class="who">当前身份 超级管理员</span>
-        <UiButton kind="tool" @click="reload"><UiIcon name="refresh" :size="14" />重载插件</UiButton>
+        <UiButton kind="tool" title="等同面板「插件列表」里的重载：本插件会拆掉重装，配置与连接随之重建" @click="reloadPlugin"><UiIcon name="refresh" :size="14" />重载插件</UiButton>
         <UiButton v-if="S.page === 'cfg'" kind="pri" :disabled="!dirtyCount" @click="saveDrafts">
           <UiIcon name="check" :size="14" />保存更改
         </UiButton>

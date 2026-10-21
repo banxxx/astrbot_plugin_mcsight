@@ -68,13 +68,13 @@
         "default": false
     },
     "db_host": {
-        "description": "TiDB 数据库主机地址",
+        "description": "数据库主机地址",
         "hint": "格式：gateway01.ap-southeast-1.prod.aws.tidbcloud.com",
         "type": "string",
         "default": ""
     },
     "db_port": {
-        "description": "TiDB 数据库端口（默认4000）",
+        "description": "数据库端口（默认4000）",
         "type": "int",
         "default": 4000
     },

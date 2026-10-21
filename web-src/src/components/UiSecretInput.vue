@@ -1,20 +1,31 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import UiIcon from "./UiIcon.vue";
 
 /* 密钥行：已存的值内核从不下发（view/config 只给 has_value），
-   所以眼睛只影响"本次输入的内容"是否明文，不会回显历史密钥。 */
+   所以眼睛只影响"本次输入的内容"是否明文，不会回显历史密钥；垃圾桶只负责清掉已存的那份。 */
 const props = withDefaults(
-  defineProps<{ modelValue: string; hasValue?: boolean; placeholder?: string; error?: boolean; id?: string }>(),
-  { hasValue: false, placeholder: "" },
+  defineProps<{
+    modelValue: string;
+    hasValue?: boolean;
+    placeholder?: string;
+    error?: boolean;
+    id?: string;
+    /** 清除按钮默认不出：只有调用方给了 @clear 处理才亮，免得共享件擅自改别的页面 */
+    clearable?: boolean;
+    clearTitle?: string;
+  }>(),
+  { hasValue: false, placeholder: "", clearable: false, clearTitle: "清除已存的值" },
 );
 
-const emit = defineEmits<{ (e: "update:modelValue", v: string): void }>();
+const emit = defineEmits<{ (e: "update:modelValue", v: string): void; (e: "clear"): void }>();
 const revealed = ref(false);
+/* 垃圾桶只在「有已存值 + 本次没输入」时出现：清的是那份存量，不是刚打了一半的字 */
+const showClear = computed(() => props.clearable && props.hasValue && !props.modelValue);
 </script>
 
 <template>
-  <div class="sec" :class="{ err: props.error, set: props.hasValue && !props.modelValue }">
+  <div class="sec" :class="{ err: props.error }">
     <UiIcon name="key" :size="12" class="k" />
     <input
       class="v"
@@ -26,6 +37,15 @@ const revealed = ref(false);
       spellcheck="false"
       @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
     />
+    <button
+      v-if="showClear"
+      class="del"
+      type="button"
+      :title="props.clearTitle"
+      @click="emit('update:modelValue', ''); emit('clear')"
+    >
+      <UiIcon name="trash" :size="13" />
+    </button>
     <button
       class="eye"
       type="button"
@@ -80,7 +100,8 @@ const revealed = ref(false);
   color: var(--ink4);
 }
 
-.eye {
+.eye,
+.del {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -97,5 +118,9 @@ const revealed = ref(false);
 
 .eye:hover {
   color: var(--ac);
+}
+
+.del:hover {
+  color: var(--bad);
 }
 </style>
