@@ -220,7 +220,7 @@ AstrBot/data/plugins/astrbot_plugin_mcsight/
 | 字段 | 说明 |
 |------|------|
 | `name` | 服务器名，命令里用它定位（`/执行` 写成 `[服务器名]`，`/mc say`、`/mc stats` 用 `-s 服务器名`），重名会添加失败；名称不能含 `[ ] 【 】` |
-| `host` | 主机地址。**命令层只接受 IPv4 或域名**（不支持 IPv6，不接受 `IP:端口`）；直接编辑 JSON 时可写 `host:游戏端口`，只影响 mcstatus 回落与延迟测量 |
+| `host` | 主机地址：IPv4 或域名（不支持 IPv6），**可带游戏端口**写成 `域名:游戏端口`；这段端口只被 mcstatus 回落与延迟测量使用，模组 API 端口另有 `api_port` |
 | `api_port` | 模组 HTTP API 端口。**有这一个字段即视为装了模组**；缺省继承全局 `default_api_port` |
 | `remark` | 备注，显示在 `/在线` 卡片名字下方 |
 | `console_token` | 该服的命令 Token，用 `/mc token` 写入；**没有这个字段就是 `/执行` 对该服未启用**，与模组配置里的 `consoleToken` 逐字一致 |

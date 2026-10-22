@@ -4,7 +4,7 @@ desc: |-
   群内 Minecraft 服务器监控与成员绑定插件，结果以图片卡片呈现：
   在线名单、玩家操作统计、TPS、服务器状态；QQ 昵称与游戏 ID 的绑定管理；
   管理员可广播、可执行服务器控制台命令。
-version: 1.2.1
+version: 1.2.2
 author: poso
 repo: https://github.com/banxxx/astrbot_plugin_mcsight
 support_platforms:

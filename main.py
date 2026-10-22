@@ -8,7 +8,7 @@ from .config.whitelist_config import WhitelistManager
 from .utils import mod_http, stats_sampler
 from .web.api import register_view_api
 
-@register("astrbot_plugin_mcsight", "poso", "Minecraft 多服务器状态监控插件", "v1.0.0")
+@register("astrbot_plugin_mcsight", "poso", "Minecraft 多服务器状态监控插件", "v1.2.2")
 class MCWatcher(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)

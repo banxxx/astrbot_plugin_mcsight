@@ -5,8 +5,8 @@ http://{host}:{port} 发起请求，而 mod_http 的错误文案能区分「连�
 无法解析的响应」——恶意群管理员可借此对机器人所在内网做端口扫描与存活探测。
 
 规则：
-- 语法：仅允许合法域名或 IPv4 字面量（IPv6 会让 f"http://{ip}:{port}" 生成
-  非法 URL，直接不支持；拒绝空白、/ \\ ? # @ % 等一切特殊字符）；
+- 语法：允许合法域名或 IPv4 字面量，末尾可带「:游戏端口」（这是插件里唯一的游戏端口写法）；
+  IPv6 字面量不支持；拒绝空白、/ \\ ? # @ % 等一切特殊字符；
 - 一律拒绝（除非 allow_private=True）：回环地址、链路本地地址（含云厂商
   元数据 169.254.169.254）、未指定地址、保留地址，以及 RFC1918/ULA 内网段、
   localhost/.local/.internal/.home.arpa 等内网主机名；
@@ -48,13 +48,23 @@ def validate_host(host: str, allow_private: bool = False) -> Optional[str]:
     if any(ch.isspace() for ch in host) or any(ch in host for ch in "/\\?#@%"):
         return "host 含有非法字符"
 
-    # IPv6 字面量：本插件拼接 URL 的方式不支持，直接拒绝（也顺带拦掉含冒号的输入）
-    if ":" in host:
-        return "暂不支持 IPv6 地址（请使用 IPv4 或域名）"
+    # host 可以带游戏端口（如「域名:25565」）：mcstatus 回落与裸 TCP 测延迟都从这一个字段取端口，
+    # 模组 API 端口另有 api_port。剥掉端口后缀，地址部分照常按下面的规则校验。
+    bare = host
+    addr, sep, port_txt = host.partition(":")
+    if sep:
+        if ":" in port_txt:
+            # 多处冒号＝IPv6 字面量（含 [::1]:25565 这种带方括号的写法）
+            return "暂不支持 IPv6 地址（请使用 IPv4 或域名）"
+        if not port_txt.isdigit():
+            return "冒号后面要写 1-65535 的游戏端口"
+        if not 1 <= int(port_txt) <= 65535:
+            return "游戏端口必须在 1-65535 之间"
+        bare = addr
 
     # IPv4 字面量判断
     try:
-        ip = ipaddress.ip_address(host)
+        ip = ipaddress.ip_address(bare)
     except ValueError:
         ip = None
 
@@ -77,10 +87,10 @@ def validate_host(host: str, allow_private: bool = False) -> Optional[str]:
         return None
 
     # 域名/主机名
-    lowered = host.lower()
+    lowered = bare.lower()
     is_private_name = lowered == "localhost" or lowered.endswith(_PRIVATE_SUFFIXES)
     if is_private_name and not allow_private:
         return f"{host} 指向本机或内网，普通成员不允许添加"
-    if not _DOMAIN_RE.match(host):
+    if not _DOMAIN_RE.match(bare):
         return "不是合法的域名或 IPv4 地址"
     return None
