@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 import json
 
 from ...utils import mod_http
+from ...config.server_config import clean_motd, effective_remark
 
 # 状态卡片「延迟」胶囊的测速上界（裸 TCP 建连，见 ping_server）。健康服实测 26~45ms，
 # 1.2 秒留了几十倍余量；这条命令的总时长等于最慢那台的测速，一台不应答就能拖满。
@@ -101,11 +102,20 @@ async def fetch_player_stats(api_base_url: str, player_name: str, timeout: float
     except Exception as e:
         return {"error": f"获取统计异常: {e}"}
 
+def motd_from_status(status) -> str:
+    """从 mcstatus 的 status 里取 MOTD 纯文本；老版本没有 to_plain() 就直接 str()"""
+    motd = getattr(status, "motd", None)
+    if motd is None:
+        return ""
+    to_plain = getattr(motd, "to_plain", None)
+    return clean_motd(to_plain() if callable(to_plain) else str(motd))
+
+
 async def query_one(server_info: dict) -> Dict[str, Any]:
     """查询单个 Minecraft 服务器的状态（使用 mcstatus）"""
     host = server_info["host"]
     name = server_info["name"]
-    remark = server_info.get("remark", "")
+    remark = effective_remark(server_info)
     try:
         server = await asyncio.to_thread(JavaServer.lookup, host)
         status = await asyncio.wait_for(
@@ -119,6 +129,7 @@ async def query_one(server_info: dict) -> Dict[str, Any]:
         latency = status.latency if status.latency else 0.0
         online = status.players.online
         max_players = status.players.max
+        motd = motd_from_status(status)
 
         need_query = False
         if online > 0:
@@ -146,6 +157,7 @@ async def query_one(server_info: dict) -> Dict[str, Any]:
             "name": name,
             "host": host,
             "remark": remark,
+            "motd": motd,
             "online": online,
             "max": max_players,
             "players": players,
@@ -156,7 +168,7 @@ async def query_one(server_info: dict) -> Dict[str, Any]:
     except asyncio.TimeoutError:
         logger.warning(f"查询服务器 {host} 超时")
         return {
-            "name": name, "host": host, "remark": remark,
+            "name": name, "host": host, "remark": remark, "motd": "",
             "online": 0, "max": 0, "players": [],
             "version": "未知", "latency": 0.0,
             "error": "查询超时"
@@ -164,7 +176,7 @@ async def query_one(server_info: dict) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"查询服务器 {host} 失败: {e}")
         return {
-            "name": name, "host": host, "remark": remark,
+            "name": name, "host": host, "remark": remark, "motd": "",
             "online": 0, "max": 0, "players": [],
             "version": "未知", "latency": 0.0,
             "error": str(e)

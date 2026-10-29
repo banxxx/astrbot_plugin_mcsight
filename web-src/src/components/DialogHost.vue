@@ -10,6 +10,7 @@ import UiInput from "./UiInput.vue";
 import UiModal from "./UiModal.vue";
 import UiNotice from "./UiNotice.vue";
 import UiSecretInput from "./UiSecretInput.vue";
+import UiSwitch from "./UiSwitch.vue";
 import { S, api, closeDialog, loadGroup, run, servers, toast } from "../store";
 import type { ConfigItem, ServerEntry } from "../lib/types";
 
@@ -159,12 +160,14 @@ watch(
       f.host = s.host;
       f.port = s.api_port == null ? "" : String(s.api_port);
       f.remark = s.remark;
+      f.remark_src = s.remark_src;
       f.token = "";
     } else if (cur.name === "add-server") {
       f.name = "";
       f.host = "";
       f.port = "";
       f.remark = "";
+      f.remark_src = "manual";
       f.token = "";
     } else if (cur.name === "add-group") {
       f.gid = "";
@@ -218,7 +221,14 @@ async function submitEditServer() {
     const s = srv.value;
     if (!s) return;
     const finalName = f.name || s.name;
-    const r = await api.serverUpdate(S.gid, { name: s.name, new_name: finalName, host: f.host, api_port: f.port, remark: f.remark });
+    const r = await api.serverUpdate(S.gid, {
+      name: s.name,
+      new_name: finalName,
+      host: f.host,
+      api_port: f.port,
+      remark: f.remark,
+      remark_src: f.remark_src,
+    });
     S.group = r;
     srvKey.value = finalName;
     let tokenMsg = "";
@@ -241,6 +251,44 @@ async function clearToken() {
     await loadGroup();
     toast(r.message);
   });
+}
+
+/* 备注的 MOTD 值只走「立即同步」这条显式动作：它只写 remark_motd 缓存、不动手填值，
+   所以用户随后点取消，多出来的也只是那份缓存，不会改到他的意图。 */
+const syncing = ref(false);
+
+async function syncRemarkMotd() {
+  const s = srv.value;
+  if (!s || syncing.value) return;
+  syncing.value = true;
+  try {
+    await run("sync", async () => {
+      const r = await api.serverRemarkSync(S.gid, s.name);
+      S.group = r.group;
+      toast(r.message);
+    });
+  } finally {
+    syncing.value = false;
+  }
+}
+
+function setRemarkSrc(value: boolean) {
+  f.remark_src = value ? "motd" : "manual";
+  // 刚选上 MOTD 但还没采到过值：当场替他取一次，省得对着空备注猜下一步
+  if (value && !srv.value?.remark_motd) void syncRemarkMotd();
+}
+
+function motdTimeText(): string {
+  const at = Number(srv.value?.remark_motd_at || 0);
+  if (!at) return "还没采到过值";
+  const d = new Date(at * 1000);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `采集于 ${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+
+/* 采到的值要在弹窗里当场看得见：只显示时间等于让用户信不过那次同步的结果 */
+function motdValueText(): string {
+  return srv.value?.remark_motd || "还没有值：点「立即同步」或在群里跑一次 /在线";
 }
 
 async function submitAddGroup() {
@@ -338,8 +386,16 @@ async function removeIgnore(qq: string) {
       >
         <UiInput v-model="f.port" placeholder="留空则视为未装模组" />
       </UiField>
-      <UiField label="备注" help="显示在 /在线 卡片服务器名下方；最多50个字符">
+      <UiField label="备注" help="手填的值；显示在 /在线 卡片服务器名下方；最多50个字符">
         <UiInput v-model="f.remark" placeholder="整合包 A 3.4.0" />
+      </UiField>
+      <UiField v-if="name === 'edit-server'" label="备注用 MOTD" help="卡片改显示服务端 motd，手填的值仍留着">
+        <div class="rk">
+          <UiSwitch :on="f.remark_src === 'motd'" @toggle="setRemarkSrc(f.remark_src !== 'motd')" />
+          <UiButton kind="ghost" :disabled="syncing" @click="syncRemarkMotd">立即同步</UiButton>
+          <span class="rk-t">{{ motdTimeText() }}</span>
+        </div>
+        <div class="rk-v" :class="{ off: f.remark_src !== 'motd' }">{{ motdValueText() }}</div>
       </UiField>
 
       <UiField
@@ -442,6 +498,33 @@ async function removeIgnore(qq: string) {
   font-size: 11px;
   line-height: 1.5;
   color: var(--ink3);
+}
+
+/* 备注来源这一行：开关 + 同步 + 采集时间共用一行，别把它拆成两个字段撑破弹窗定高 */
+.rk {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rk-t {
+  font-size: 11px;
+  color: var(--ink3);
+}
+
+/* 采到的值单独一行；开关关着＝这份值当前不上卡片，用灰阶和生效态区分 */
+.rk-v {
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.rk-v.off {
+  color: var(--ink4);
 }
 
 .err {

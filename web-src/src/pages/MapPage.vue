@@ -20,6 +20,7 @@ const GROUPS: { title: string; rows: Row[] }[] = [
       { label: "编辑 · 主机地址", cmd: "/mc edit 名称 host 新地址", note: "一条地址字段；含 : 会被现行校验拒绝（utils/host_validator.py:52）", isNew: false },
       { label: "编辑 · 模组端口", cmd: "/mc edit 名称 port 端口", note: "清空并保存＝删掉 api_port，该服退回「未装模组」", isNew: false },
       { label: "编辑 · 备注", cmd: "/mc edit 名称 remark 备注", note: "显示在 /在线 卡片服务器名下方", isNew: false },
+      { label: "编辑 · 备注用 MOTD", cmd: "— 无对应命令", note: "卡片改显示服务端 motd；值由 /在线 采集或「立即同步」写入缓存，不覆盖手填的备注", isNew: true },
       { label: "排序 ↑ ↓", cmd: "/mc move 名称 序号 · /mc swap 名1 名2", note: "序号从 0 开始；只改群内列表顺序", isNew: false },
       { label: "写 / 清除 Token", cmd: "/mc token 名称 Token（或 清除）", note: "密钥：页面不回显内值，长度门 16-128 字符", isNew: false },
       { label: "登录开关", cmd: "— 无对应命令", note: "下发该服模组的白名单校验开关并写回其配置文件；用模组 API Token 鉴权", isNew: true },

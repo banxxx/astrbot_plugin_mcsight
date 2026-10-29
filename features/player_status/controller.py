@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import time
 import aiohttp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain
@@ -12,6 +13,9 @@ from .checker import (
     send_broadcast_via_mod, fetch_tps_via_mod
 )
 from ...config.whitelist_config import WhitelistManager
+from ...config.server_config import (
+    REMARK_SRC_MOTD, clean_motd, effective_remark, remark_src_of
+)
 from .player_stats_generator import draw_player_stats_image
 from ...utils.avatar_cache import download_avatar
 from ...utils import stats_snapshot
@@ -94,7 +98,9 @@ async def _collect_server_status(srv: dict, wm: WhitelistManager, token: str) ->
         return {
             "name": name,
             "host": host,
-            "remark": srv.get("remark", ""),
+            "remark": effective_remark(srv),
+            # 模组本来就把 server.getMotd() 回传了，以前拿回来直接扔掉；现在顺手给备注当值
+            "motd": clean_motd(mod_data.get("motd", "")),
             "online": mod_data.get("online_players", 0),
             "max": mod_data.get("max_players", 0),
             "version": mod_data.get("version", "未知"),
@@ -122,6 +128,26 @@ async def _ping_latency(hosts: list) -> list:
                                 return_exceptions=True)
 
 
+def store_remark_motd(config_manager, entries: list, cards: list) -> None:
+    """把本轮采到的 MOTD 落盘，并让「备注用 MOTD」的那几台当场用上新值，不必等下一次 /在线。
+
+    motd 只是这次采集的运输字段，落盘后要从卡片里摘掉，别混进绘图数据。
+    """
+    captured_at = int(time.time())
+    by_name = {str(e.get("name") or ""): e for e in entries}
+    for card in cards:
+        motd = (card.pop("motd", "") or "").strip()
+        entry = by_name.get(str(card.get("name") or ""))
+        if entry is None:
+            continue
+        if motd:
+            config_manager.set_remark_motd(entry["name"], motd, captured_at)
+            entry["remark_motd"] = motd
+            entry["remark_motd_at"] = captured_at
+            if remark_src_of(entry) == REMARK_SRC_MOTD:
+                card["remark"] = motd
+
+
 async def run_player_status(event: AstrMessageEvent, config_manager):
     """获取在线玩家状态，统一使用模组 API，若失败则回退到 mcstatus"""
     servers = config_manager.get_all_servers()
@@ -144,6 +170,8 @@ async def run_player_status(event: AstrMessageEvent, config_manager):
     for i, r in zip(ping_idx, ping_results):
         if not isinstance(r, Exception) and r:
             standardized[i]["latency"] = float(r)
+
+    store_remark_motd(config_manager, servers, standardized)
 
     # 生成图片（按高度预算自动分页，绝大多数情况只有一页）
     try:

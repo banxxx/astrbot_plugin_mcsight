@@ -15,6 +15,7 @@ import type {
   ReloadPayload,
   SecretPayload,
   SummaryPayload,
+  RemarkSyncPayload,
   WhitelistPayload,
   TokenPayload,
 } from "./types";
@@ -53,8 +54,10 @@ export const api = {
     post<GroupPayload>("server/create", { gid, ...f }),
   serverUpdate: (
     gid: string,
-    f: { name: string; new_name: string; host: string; api_port: string; remark: string },
+    f: { name: string; new_name: string; host: string; api_port: string; remark: string; remark_src?: string },
   ) => post<GroupPayload>("server/update", { gid, ...f }),
+  serverRemarkSync: (gid: string, name?: string) =>
+    post<RemarkSyncPayload>("server/remark_sync", { gid, name: name ?? "" }),
   serverDelete: (gid: string, name: string) => post<GroupPayload>("server/delete", { gid, name }),
   serverMove: (gid: string, name: string, index: number) =>
     post<GroupPayload>("server/move", { gid, name, index }),

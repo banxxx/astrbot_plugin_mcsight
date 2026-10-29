@@ -1,7 +1,8 @@
 import json
 import os
+import re
 import unicodedata
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Optional, Tuple
 
 from ..utils.plugin_paths import sub_dir
 
@@ -15,9 +16,32 @@ INVALID_NAME_CHARS = ("[", "]", "【", "】")
 MAX_NAME_WIDTH = 20
 MAX_REMARK_WIDTH = 50
 
+# 备注取值来源：手填（默认）/ 服务端 MOTD
+REMARK_SRC_MANUAL = "manual"
+REMARK_SRC_MOTD = "motd"
+REMARK_SOURCES = (REMARK_SRC_MANUAL, REMARK_SRC_MOTD)
+
+# §色码：卡片字体不渲染它，留在备注里是一串乱码
+MOTD_COLOR_CODE = re.compile(r"\u00a7[0-9a-zA-Z]")
+
 
 def display_width(text: str) -> int:
     return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in text)
+
+
+def truncate_by_width(text: str, max_width: int) -> str:
+    """按显示宽度截断，放不下以省略号收尾（上限与卡片折行规则配套，别放开）"""
+    if display_width(text) <= max_width:
+        return text
+    kept = []
+    used = 0
+    for ch in text:
+        width = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        if used + width > max_width - 1:
+            break
+        kept.append(ch)
+        used += width
+    return "".join(kept).rstrip() + "…"
 
 
 def validate_server_name(name: str) -> str:
@@ -54,6 +78,66 @@ def console_token_of(entry: dict) -> str:
     if any(ord(c) < 0x21 or ord(c) > 0x7E for c in raw):
         return ""
     return raw
+
+
+def remark_src_of(entry: dict) -> str:
+    """该服备注当前用哪个来源；认不了的写法一律回落到手填（默认值）"""
+    src = str(entry.get("remark_src") or "").strip().lower()
+    return src if src in REMARK_SOURCES else REMARK_SRC_MANUAL
+
+
+def cached_remark_motd(entry: dict) -> str:
+    return str(entry.get("remark_motd") or "").strip()
+
+
+def effective_remark(entry: dict) -> str:
+    """备注的最终显示值，全插件只有这一个口径。
+
+    开关选了 MOTD 但还没采到过值时用空串会让卡片名字下面凭空缺一行，所以退回手填值
+    （手填默认也是空，那就等于没有备注）——面板要靠 remark_motd 是否为空提示用户去同步。
+    """
+    if remark_src_of(entry) == REMARK_SRC_MOTD:
+        cached = cached_remark_motd(entry)
+        if cached:
+            return cached
+    return str(entry.get("remark") or "")
+
+
+def _flatten_json_text(raw: str) -> Optional[str]:
+    """MOTD 写成 JSON 文本组件时（部分模组/插件会这样）把所有 text/extra 拼成一行；解析不了返回 None"""
+    try:
+        node = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    parts: List[str] = []
+
+    def walk(item):
+        if isinstance(item, dict):
+            for key in ("text", "extra", "contents", "content"):
+                if key in item:
+                    walk(item[key])
+        elif isinstance(item, list):
+            for sub in item:
+                walk(sub)
+        elif isinstance(item, str):
+            parts.append(item)
+
+    walk(node)
+    return " ".join(" ".join(part.split()) for part in parts if part.strip())
+
+
+def clean_motd(raw) -> str:
+    """把服务端 MOTD 收成能进备注的一行：展平 JSON、剥 §色码、换行折成空格、按备注宽度上限截断。"""
+    if raw is None:
+        return ""
+    text = raw if isinstance(raw, str) else str(raw)
+    text = text.strip()
+    if text.startswith("{") or text.startswith("["):
+        flattened = _flatten_json_text(text)
+        if flattened is not None:
+            text = flattened
+    text = MOTD_COLOR_CODE.sub("", text).replace("\\n", " ")
+    return truncate_by_width(" ".join(text.split()), MAX_REMARK_WIDTH)
 
 
 # edit_server 的「这个字段本次不动」哨兵，和显式传入的 None/"" 区分开
@@ -138,6 +222,43 @@ class ConfigManager:
                 return True
         return False
 
+    # ---------- 备注来源开关：只改取值口径，手填值与 MOTD 缓存各自留着 ----------
+    def set_remark_src(self, name: str, src: str) -> bool:
+        """src 传 manual|motd；回 manual 时不删 MOTD 缓存，来回切不丢数据。"""
+        if src not in REMARK_SOURCES:
+            return False
+        data = self._load()
+        for s in data["servers"]:
+            if s["name"] == name:
+                if src == REMARK_SRC_MANUAL:
+                    s.pop("remark_src", None)
+                else:
+                    s["remark_src"] = src
+                self._save(data)
+                return True
+        return False
+
+    def set_remark_motd(self, name: str, text: str, captured_at: int) -> bool:
+        """写回采集到的 MOTD。/在线 每次都会走到这里，值没变就不落盘，免得配置文件白挨写。
+
+        时间戳跟着值一起更新，所以面板上那个时间是「这份备注什么时候采到的」，
+        不是「最近一次查询的时间」——MOTD 不变时它就该停在那一刻。
+        """
+        text = (text or "").strip()
+        if not text:
+            return False
+        data = self._load()
+        for s in data["servers"]:
+            if s["name"] != name:
+                continue
+            if s.get("remark_motd") == text:
+                return False
+            s["remark_motd"] = text
+            s["remark_motd_at"] = captured_at
+            self._save(data)
+            return True
+        return False
+
     # ---------- 新增：按服设置命令 Token；token 传空表示清除 ----------
     def edit_server_console_token(self, name: str, token: str) -> bool:
         data = self._load()
@@ -164,8 +285,8 @@ class ConfigManager:
         return False
 
     def edit_server(self, name: str, new_name=_UNSET, host=_UNSET,
-                    api_port=_UNSET, remark=_UNSET) -> Tuple[bool, str]:
-        """一次写回一条服务器的名称/地址/模组端口/备注（WebUI 编辑弹窗用）。
+                    api_port=_UNSET, remark=_UNSET, remark_src=_UNSET) -> Tuple[bool, str]:
+        """一次写回一条服务器的名称/地址/模组端口/备注/备注来源（WebUI 编辑弹窗用）。
 
         api_port=None 表示删除该字段（该服退回「未装模组」），remark="" 表示清除备注；
         未传的字段保持原样。返回 (是否成功, 面向用户的失败原因)。
@@ -191,6 +312,11 @@ class ConfigManager:
                 target["remark"] = remark
             else:
                 target.pop("remark", None)
+        if remark_src is not _UNSET:
+            if remark_src == REMARK_SRC_MANUAL:
+                target.pop("remark_src", None)
+            elif remark_src in REMARK_SOURCES:
+                target["remark_src"] = remark_src
         self._save(data)
         return True, ""
 

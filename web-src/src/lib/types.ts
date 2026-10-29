@@ -6,8 +6,26 @@ export interface ServerEntry {
   name: string;
   host: string;
   api_port: number | null;
+  /** 用户手填的备注值，切到 MOTD 也不会被覆盖 */
   remark: string;
+  /** 备注取值来源：manual＝用手填的值（默认），motd＝用采集到的 MOTD */
+  remark_src: RemarkSrc;
+  /** 采集到的 MOTD（已清洗）；空串＝还没采到过 */
+  remark_motd: string;
+  /** 这份 MOTD 的采集时间（epoch 秒），0＝从没采到 */
+  remark_motd_at: number;
+  /** 后端算好的最终显示值——/在线 卡片名字下方用的就是它 */
+  remark_display: string;
   has_token: boolean;
+}
+
+export type RemarkSrc = "manual" | "motd";
+
+export interface RemarkSyncPayload {
+  synced: string[];
+  failed: { name: string; reason: string }[];
+  message: string;
+  group: GroupPayload;
 }
 
 export interface GroupPayload {

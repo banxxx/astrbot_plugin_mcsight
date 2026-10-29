@@ -1,14 +1,32 @@
+# 插件元数据。内核只读下面这些键（astrbot/core/star/star_manager.py::_load_plugin_metadata）：
+#   必需：name / desc / version / author（四者必须是非空字符串，缺一个就"元数据校验失败"）
+#   可选：display_name / short_desc / repo / support_platforms / astrbot_version / views(或 pages)
+# 分类(category)、tags、logo 这些不在这里生效——它们属于插件市场源 JSON 的 PluginRecord，见
+# https://docs.astrbot.app/dev/plugin-market/2026-06-27.html
 name: astrbot_plugin_mcsight
 display_name: MCSight
+short_desc: Minecraft 服务器监控与群成员绑定：/在线 /查询 /tps /绑定 /执行，结果以图片卡片呈现
 desc: |-
   群内 Minecraft 服务器监控与成员绑定插件，结果以图片卡片呈现：
   在线名单、玩家操作统计、TPS、服务器状态；QQ 昵称与游戏 ID 的绑定管理；
   管理员可广播、可执行服务器控制台命令。
-version: 1.2.2
+  需要配套模组 QQBindMod（Fabric / Forge / NeoForge）提供 HTTP API；
+  未装模组的服务器会自动回落 mcstatus。
+  WebUI 配置页需要 AstrBot 4.24 及以上，更早内核只注册聊天命令、功能不受影响。
+version: 1.2.3
 author: poso
 repo: https://github.com/banxxx/astrbot_plugin_mcsight
+# 平台标识用内核平台配置里的 type 值：aiocqhttp(OneBot v11 / NapCat 等)、qq_official(官方机器人
+# WebSocket)、qq_official_webhook(官方机器人 Webhook)。本插件的绑定/名单/群管逻辑都围绕 QQ 群号
+# 与群成员接口写，其它平台（Telegram/Discord 等）没有对应概念，所以不声明。
 support_platforms:
   - aiocqhttp
+  - qq_official
+  - qq_official_webhook
+# PEP 440 版本范围。取 >=4.23.0 的依据：4.23.5 内核实测聊天侧全部功能可用，只是没有
+# astrbot.api.web ⇒ 配置页不注册（代码里已用 try/except 兜住）。4.23 以下未实测，所以不承诺。
+# 想让插件市场只推给"能用配置页"的用户，就把下界改成 >=4.24.0。
+astrbot_version: ">=4.23.0"
 tags:
   - Minecraft
   - 我的世界

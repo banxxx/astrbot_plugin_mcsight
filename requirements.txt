@@ -1,8 +1,5 @@
 mcstatus
 Pillow
 aiohttp
-pilmoji
-asyncmy
-aiomysql
 pymysql
 DBUtils

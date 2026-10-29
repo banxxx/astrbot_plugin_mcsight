@@ -32,6 +32,8 @@
 
 ## 📦 安装
 
+**前置要求**：AstrBot **4.23 及以上**（WebUI 配置页需要 **4.24 及以上**——更早内核没有 `astrbot.api.web`，接口不注册，聊天侧命令不受影响）；平台支持 QQ 群侧三种适配器：`aiocqhttp`（OneBot v11 / NapCat 等）、`qq_official`、`qq_official_webhook`，其它平台未做适配。同样的口径写在 `metadata.yaml` 的 `astrbot_version` 与 `support_platforms` 两个字段里。
+
 ### 1. 放置插件
 
 ```
@@ -222,7 +224,10 @@ AstrBot/data/plugins/astrbot_plugin_mcsight/
 | `name` | 服务器名，命令里用它定位（`/执行` 写成 `[服务器名]`，`/mc say`、`/mc stats` 用 `-s 服务器名`），重名会添加失败；名称不能含 `[ ] 【 】` |
 | `host` | 主机地址：IPv4 或域名（不支持 IPv6），**可带游戏端口**写成 `域名:游戏端口`；这段端口只被 mcstatus 回落与延迟测量使用，模组 API 端口另有 `api_port` |
 | `api_port` | 模组 HTTP API 端口。**有这一个字段即视为装了模组**；缺省继承全局 `default_api_port` |
-| `remark` | 备注，显示在 `/在线` 卡片名字下方 |
+| `remark` | 手填的备注，显示在 `/在线` 卡片名字下方；最多 50 个字符（汉字按 2 计） |
+| `remark_src` | 备注取值来源：`"motd"`＝卡片显示服务端 motd；**没有这个字段就是用手填的值**（默认）。只能在配置页的「编辑服务器」里切换，无对应命令 |
+| `remark_motd` | 采集到的服务端 motd（已剥色码、折成一行、按 50 字符截断）。由 `/在线` 顺手写入，或在配置页点「立即同步」写入；**切回手填也不会删掉它** |
+| `remark_motd_at` | 上面那份 motd 的采集时间（Unix 秒）。motd 没变时它停在那一刻，不代表最近查过 |
 | `console_token` | 该服的命令 Token，用 `/mc token` 写入；**没有这个字段就是 `/执行` 对该服未启用**，与模组配置里的 `consoleToken` 逐字一致 |
 
 - 每个群最多 20 台服务器。

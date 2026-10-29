@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import re
+import time
 
 from astrbot.api import logger
 
@@ -23,12 +24,18 @@ from ..commands.management import _validate_console_token
 from ..config.server_config import (
     ConfigManager,
     MAX_SERVERS_PER_GROUP,
+    REMARK_SOURCES,
+    REMARK_SRC_MOTD,
+    clean_motd,
     console_token_of,
+    effective_remark,
     group_config_path,
+    remark_src_of,
     validate_remark,
     validate_server_name,
 )
 from ..config.whitelist_config import WhitelistManager
+from ..features.player_status.checker import query_one
 from ..utils import mod_http
 from ..utils.host_validator import validate_host
 from ..utils.plugin_paths import PLUGIN_NAME, sub_dir
@@ -122,6 +129,11 @@ def _server_view(entry: dict) -> dict:
         "host": entry.get("host", ""),
         "api_port": port,
         "remark": entry.get("remark", ""),
+        # 备注双仓：手填值和 MOTD 缓存各存各的，开关只决定卡片上显示哪一个
+        "remark_src": remark_src_of(entry),
+        "remark_motd": entry.get("remark_motd", ""),
+        "remark_motd_at": entry.get("remark_motd_at", 0),
+        "remark_display": effective_remark(entry),
         "has_token": bool(console_token_of(entry)),
     }
 
@@ -360,9 +372,13 @@ async def view_server_update():
     remark_err = validate_remark(remark)
     if remark_err:
         return _err(remark_err)
+    remark_src = str(body.get("remark_src") or "").strip().lower()
+    if remark_src and remark_src not in REMARK_SOURCES:
+        return _err("备注来源只能是 manual 或 motd")
 
     ok, why = cm.edit_server(name, new_name=new_name, host=host,
-                              api_port=api_port, remark=remark)
+                              api_port=api_port, remark=remark,
+                              remark_src=remark_src or None)
     if not ok:
         return _err(why)
     return _ok(_group_payload(gid))
@@ -544,6 +560,84 @@ async def view_server_whitelist():
     if data.get("persisted") is False:
         message += "（模组配置文件写入失败，重启后会回到旧值）"
     return _ok({"enabled": back, "released": released, "persisted": data.get("persisted"), "message": message})
+
+
+async def _read_motd(entry: dict, wm, token: str):
+    """取一台的 MOTD（清洗后）：先问模组 /api/status，拿不到再回落 mcstatus 的 SLP。
+
+    返回 (文本, 失败原因)。回落是有意的：没装模组的服 SLP 也带 motd，那份就是
+    server.properties 里的原值；而装了旧版模组的服虽然没这个字段，SLP 照样能补上。
+    """
+    reasons = []
+    target = _mod_target(wm, entry)
+    if target is not None and token:
+        ok, payload = await mod_http.request(
+            target[0], target[1], "/api/status", method="GET", token=token, timeout=MOD_READ_TIMEOUT)
+        if ok and isinstance(payload, dict):
+            data = payload.get("data") or {}
+            if "motd" in data:
+                text = clean_motd(data.get("motd"))
+                if text:
+                    return text, ""
+                reasons.append("模组回的 motd 是空串")
+            else:
+                reasons.append("该服模组版本没有 motd 字段")
+        else:
+            reasons.append(str(payload or "模组未响应"))
+    raw = await query_one(entry)
+    text = str(raw.get("motd") or "").strip()
+    if text:
+        return text, ""
+    reasons.append(str(raw.get("error") or "SLP 没返回 motd（服务器没开着？）"))
+    return "", "；".join(reasons)
+
+
+async def view_remark_sync():
+    """「立即同步」备注用的 MOTD：只写 remark_motd 缓存，绝不动用户手填的 remark。"""
+    body, err = await _body()
+    if err:
+        return _err(err)
+    gid = _clean_gid(body.get("gid"))
+    if not gid:
+        return _err("群号必须是 5-12 位数字")
+    if not os.path.exists(group_config_path(gid)):
+        return _err(f"servers_{gid}.json 不存在")
+    cm = ConfigManager(group_id=int(gid))
+    wm = WhitelistManager()
+    token = _mod_token()
+    servers = cm.get_all_servers()
+    wanted = str(body.get("name") or "").strip()
+    targets = [s for s in servers if not wanted or s.get("name") == wanted]
+    if not targets:
+        return _err(f"未找到名为「{wanted}」的服务器。")
+
+    captured_at = int(time.time())
+    pairs = await asyncio.gather(*(_read_motd(s, wm, token) for s in targets))
+    synced = []
+    failed = []
+    for entry, (text, why) in zip(targets, pairs):
+        name = str(entry.get("name") or "")
+        if not text:
+            failed.append({"name": name, "reason": why})
+            continue
+        cm.set_remark_motd(name, text, captured_at)
+        synced.append(name)
+
+    still_empty = [
+        str(s.get("name") or "") for s in targets
+        if remark_src_of(s) == REMARK_SRC_MOTD and str(s.get("name") or "") not in synced
+    ]
+    message = f"已同步 {len(synced)} 台的 MOTD"
+    if failed:
+        message += f"，{len(failed)} 台没拿到"
+    if still_empty:
+        message += f"；{'、'.join(still_empty)} 选了「用 MOTD」但仍没有值，卡片会退回显示手填备注"
+    return _ok({
+        "synced": synced,
+        "failed": failed,
+        "message": message,
+        "group": _group_payload(gid),
+    })
 
 
 async def view_server_mod_state():
@@ -840,6 +934,7 @@ ROUTES = (
     ("server/batch_add", view_server_batch_add, ["POST"], "批量添加服务器"),
     ("server/batch_remove", view_server_batch_remove, ["POST"], "批量删除服务器"),
     ("server/whitelist", view_server_whitelist, ["POST"], "下发模组登录开关"),
+    ("server/remark_sync", view_remark_sync, ["POST"], "同步各服 MOTD 到备注缓存"),
     ("server/mod_state", view_server_mod_state, ["GET"], "读取各服模组状态"),
     ("json/group", view_json_group, ["GET"], "群配置文件预览"),
     ("config", view_config, ["GET"], "全局参数列表"),

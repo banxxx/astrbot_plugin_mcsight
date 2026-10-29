@@ -61,6 +61,20 @@ function tokTitle(s: ServerEntry): string {
   return "口令已存：需与该服模组的 consoleToken 逐字一致";
 }
 
+/* 备注有两个仓（手填值 / MOTD 缓存），列表只画后端算好的最终值，来源与采集时间进悬停 */
+function motdTime(epoch: number): string {
+  const d = new Date(epoch * 1000);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+
+function remarkTitle(s: ServerEntry): string {
+  if (s.remark_src === "motd") {
+    return s.remark_motd ? `来自服务端 motd · 采集于 ${motdTime(s.remark_motd_at)}` : "已选「用 MOTD」但还没采到值，当前显示手填的值";
+  }
+  return s.remark_motd ? `手填的值 · 另存着上次采到的 motd：${s.remark_motd}` : "手填的值";
+}
+
 async function move(srv: ServerEntry, dir: -1 | 1) {
   const at = servers.value.findIndex((s) => s.name === srv.name);
   const index = at + dir;
@@ -133,7 +147,7 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
           <span class="c-name"><span class="cell-label">名称</span><b class="nm ell">{{ s.name }}</b></span>
           <span class="c-host"><span class="cell-label">地址</span><span class="ell">{{ s.host }}</span></span>
           <span class="c-port"><span class="cell-label">端口</span><span :class="{ dash: s.api_port === null }">{{ s.api_port ?? "—" }}</span></span>
-          <span class="c-rmk"><span class="cell-label">备注</span><span class="ell" :class="{ dash: !s.remark }">{{ s.remark || "—" }}</span></span>
+          <span class="c-rmk"><span class="cell-label">备注</span><UiBadge v-if="s.remark_src === 'motd' && s.remark_motd" tone="neutral" title="该值来自服务端 motd">MOTD</UiBadge><span class="ell" :class="{ dash: !s.remark_display }" :title="remarkTitle(s)">{{ s.remark_display || "—" }}</span></span>
           <span class="c-tk"><UiBadge :tone="s.has_token ? 'neutral' : 'off'" :title="tokTitle(s)">{{ s.has_token ? "已配置" : "未设置" }}</UiBadge></span>
           <span class="c-mod">
             <UiBadge v-if="s.api_port === null" tone="port">未配端口</UiBadge>

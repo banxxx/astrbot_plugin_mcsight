@@ -27,6 +27,11 @@
 }
 
 .c-rmk {
+  /* 来源牌在前、文本紧跟其后同行：.row .ell 是 display:block，
+     不在这里开 flex 的话牌子会被顶到文本上一行。 */
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex: 0 0 168px;
 }
 
@@ -41,6 +46,20 @@
 
 .row .ell {
   display: block;
+  min-width: 0;
+}
+
+/* 备注列内各子项的伸缩：牌不缩、文本吃掉剩余宽度并自己截断 */
+.c-rmk .bdg {
+  flex: none;
+}
+
+.c-rmk .cell-label {
+  flex: none;
+}
+
+.c-rmk .ell {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
