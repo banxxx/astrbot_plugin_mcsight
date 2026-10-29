@@ -6,7 +6,7 @@ import UiInput from "../components/UiInput.vue";
 import UiNotice from "../components/UiNotice.vue";
 import UiSecretInput from "../components/UiSecretInput.vue";
 import UiSwitch from "../components/UiSwitch.vue";
-import { S, fail, loadConfig, openDialog } from "../store";
+import { S, fail, loadConfig, loading, openDialog } from "../store";
 import type { ConfigItem } from "../lib/types";
 
 onMounted(() => {
@@ -105,7 +105,7 @@ const groups = computed(() => {
     <section class="ph">
       <div class="ph-t">
         <h1>全局参数</h1>
-        <p>_conf_schema.json · {{ S.cfgItems.length }} 个可配置键 · 本页直接改写该文件，保存后需重载插件</p>
+        <p>_conf_schema.json · <template v-if="loading && !S.cfgItems.length">读取中…</template><template v-else>{{ S.cfgItems.length }} 个可配置键</template> · 本页直接改写该文件，保存后需重载插件</p>
       </div>
       <UiButton kind="tool" :disabled="!S.cfgItems.length" @click="openDialog('json-config')">
         <UiIcon name="braces" :size="13" />查看 JSON
@@ -153,6 +153,8 @@ const groups = computed(() => {
         </div>
       </div>
     </section>
+
+    <UiNotice v-if="S.error" tone="bad" class="errline">{{ S.error }}</UiNotice>
   </div>
 </template>
 

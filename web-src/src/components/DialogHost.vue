@@ -12,6 +12,7 @@ import UiNotice from "./UiNotice.vue";
 import UiSecretInput from "./UiSecretInput.vue";
 import UiSwitch from "./UiSwitch.vue";
 import { S, api, closeDialog, loadGroup, run, servers, toast } from "../store";
+import { ApiError } from "../lib/bridge";
 import type { ConfigItem, ServerEntry } from "../lib/types";
 
 const d = computed(() => S.dialog);
@@ -28,7 +29,7 @@ const name = computed(() => d.value?.name || "");
 const f = reactive<Record<string, string>>({});
 const selected = reactive<Record<string, boolean>>({});
 const batchResult = reactive({ message: "", failed: [] as string[] });
-const jsonText = reactive({ file: "", text: "" });
+const jsonText = reactive({ file: "", text: "", error: "" });
 
 const FORMS = ["add-server", "edit-server"];
 const CONFIRMS = ["del-server", "del-group"];
@@ -184,13 +185,20 @@ watch(
 
 watch(d, async (cur) => {
   if (!cur) return;
-  if (cur.name === "json-group") {
-    const r = await run("json", () => api.jsonGroup(S.gid));
-    if (r) Object.assign(jsonText, r);
-  } else if (cur.name === "json-config") {
-    const r = await run("json", () => api.configJson());
-    if (r) Object.assign(jsonText, r);
-  }
+  if (cur.name !== "json-group" && cur.name !== "json-config") return;
+  /* 打开即清空：读失败时绝不留着上一份文件的内容，那会让群 A 的文件被当成群 B 的看 */
+  Object.assign(jsonText, { file: "", text: "", error: "" });
+  let why = "";
+  const r = await run("json", async () => {
+    try {
+      return cur.name === "json-group" ? await api.jsonGroup(S.gid) : await api.configJson();
+    } catch (err) {
+      why = err instanceof ApiError ? err.message : String(err);
+      throw err;
+    }
+  });
+  if (r) Object.assign(jsonText, r);
+  else jsonText.error = why || "读取失败";
 });
 
 const listItems = computed<string[]>(() => {
@@ -462,7 +470,10 @@ async function removeIgnore(qq: string) {
       </UiNotice>
     </template>
 
-    <pre v-else-if="JSONS.includes(name)" class="json mono">{{ jsonText.text || "读取中…" }}</pre>
+    <template v-else-if="JSONS.includes(name)">
+      <UiNotice v-if="jsonText.error" tone="bad">读取失败：{{ jsonText.error }}</UiNotice>
+      <pre v-else class="json mono">{{ jsonText.text || "读取中…" }}</pre>
+    </template>
 
     <template v-else-if="LISTS.includes(name)">
       <div class="addrow">

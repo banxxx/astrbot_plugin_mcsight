@@ -2,7 +2,7 @@
 import { computed, onMounted } from "vue";
 import UiIcon from "../components/UiIcon.vue";
 import UiNotice from "../components/UiNotice.vue";
-import { S, fail, loadConstants } from "../store";
+import { S, fail, loadConstants, loading } from "../store";
 import type { ConstRow } from "../lib/types";
 
 onMounted(() => {
@@ -82,9 +82,12 @@ const groups = computed(() => {
       </template>
 
       <div class="tf">
-        <span>共 {{ S.constRows.length }} 项</span>
+        <span v-if="loading && !S.constRows.length">读取中…</span>
+        <span v-else>共 {{ S.constRows.length }} 项</span>
       </div>
     </section>
+
+    <UiNotice v-if="S.error" tone="bad" class="errline">{{ S.error }}</UiNotice>
   </div>
 </template>
 

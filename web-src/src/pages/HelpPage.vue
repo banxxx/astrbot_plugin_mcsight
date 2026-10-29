@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
 import UiIcon from "../components/UiIcon.vue";
-import { S, fail, loadCommands } from "../store";
+import UiNotice from "../components/UiNotice.vue";
+import { S, fail, loadCommands, loading } from "../store";
 
 onMounted(() => {
   loadCommands().catch(fail);
@@ -41,10 +42,13 @@ onMounted(() => {
       </template>
 
       <div class="tf">
-        <span>共 {{ S.cmdTotal }} 条 · {{ S.cmdSections.length }} 组</span>
+        <span v-if="loading && !S.cmdSections.length">读取中…</span>
+        <span v-else>共 {{ S.cmdTotal }} 条 · {{ S.cmdSections.length }} 组</span>
         <span class="tip">群里发 /帮助 拿到的是同一批文案的图片版</span>
       </div>
     </section>
+
+    <UiNotice v-if="S.error" tone="bad" class="errline">{{ S.error }}</UiNotice>
   </div>
 </template>
 

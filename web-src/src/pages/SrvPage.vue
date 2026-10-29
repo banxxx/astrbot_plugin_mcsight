@@ -6,8 +6,8 @@ import UiBadge from "../components/UiBadge.vue";
 import UiSwitch from "../components/UiSwitch.vue";
 import UiNotice from "../components/UiNotice.vue";
 import GroupPicker from "../components/GroupPicker.vue";
-import { S, api, currentGroup, loadGroup, openDialog, run, setWhitelist, toast } from "../store";
-import type { ServerEntry } from "../lib/types";
+import { S, api, currentGroup, loadGroup, loading, openDialog, run, setWhitelist, toast } from "../store";
+import type { ModState, ServerEntry } from "../lib/types";
 
 const g = computed(() => currentGroup.value);
 const servers = computed(() => g.value?.servers ?? []);
@@ -17,11 +17,27 @@ const groupCount = computed(() => S.groups.length);
 const ignoreCount = computed(() => g.value?.nickname_check_ignore_ids.length ?? 0);
 const noPortCount = computed(() => servers.value.filter((s) => s.api_port === null).length);
 
-const sub = computed(() =>
-  g.value
+const sub = computed(() => {
+  /* 读还没回来时别说「还没有群配置文件」——那会把「不知道」说成「没有」 */
+  if (loading.value && !g.value) return "读取中…";
+  return g.value
     ? `${g.value.gid} · ${servers.value.length} 台 · 已装模组 ${modCount.value} · 未配端口 ${noPortCount.value}`
-    : "还没有群配置文件",
-);
+    : "还没有群配置文件";
+});
+
+/** 该服的模组状态读数：undefined＝这一台还没回；reachable=false＝连不上；enabled=null＝旧版模组没这字段 */
+function modState(s: ServerEntry): ModState | undefined {
+  return S.modStates[s.name];
+}
+
+function modBadge(s: ServerEntry): { tone: "port" | "off" | "ok" | "warn"; text: string; title: string } {
+  if (s.api_port === null) return { tone: "port", text: "未配端口", title: "没写 api_port：该服按未安装模组处理" };
+  const st = modState(s);
+  if (!st) return { tone: "off", text: S.modStateLoading ? "读取中…" : "未读取", title: modTitle(s) };
+  if (!st.reachable) return { tone: "warn", text: "不可达", title: st.reason || "连不上该服的模组 API" };
+  if (st.enabled === null) return { tone: "warn", text: "已装·旧版", title: st.reason || "模组版本没有登录开关字段" };
+  return { tone: "ok", text: "已装模组", title: "模组 API 已连通" };
+}
 
 async function toggleFlag(key: "last_online_enabled" | "nickname_check_enabled", value: boolean) {
   await run("flag", async () => {
@@ -150,8 +166,7 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
           <span class="c-rmk"><span class="cell-label">备注</span><UiBadge v-if="s.remark_src === 'motd' && s.remark_motd" tone="neutral" title="该值来自服务端 motd">MOTD</UiBadge><span class="ell" :class="{ dash: !s.remark_display }" :title="remarkTitle(s)">{{ s.remark_display || "—" }}</span></span>
           <span class="c-tk"><UiBadge :tone="s.has_token ? 'neutral' : 'off'" :title="tokTitle(s)">{{ s.has_token ? "已配置" : "未设置" }}</UiBadge></span>
           <span class="c-mod">
-            <UiBadge v-if="s.api_port === null" tone="port">未配端口</UiBadge>
-            <UiBadge v-else tone="ok">已装模组</UiBadge>
+            <UiBadge :tone="modBadge(s).tone" :title="modBadge(s).title">{{ modBadge(s).text }}</UiBadge>
           </span>
           <span class="c-wl">
             <span class="cell-label">登录开关</span>
@@ -174,7 +189,8 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
       <div v-if="g && !servers.length" class="empty">本群还没有服务器条目，点右上「添加服务器」建第一条。</div>
 
       <div class="tf">
-        <span>共 {{ servers.length }} 条 · 每群上限 {{ S.maxServers }} 台（代码常量 MAX_SERVERS_PER_GROUP）</span>
+        <span v-if="loading && !servers.length">读取中…</span>
+        <span v-else>共 {{ servers.length }} 条 · 每群上限 {{ S.maxServers }} 台（代码常量 MAX_SERVERS_PER_GROUP）</span>
         <span class="tip"><UiIcon name="arrow-up-down" :size="12" />↑↓ 对应 /mc move（位置序号从 0 开始）</span>
       </div>
     </section>
@@ -483,10 +499,6 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
 .cnt {
   font-size: 11px;
   color: var(--ink4);
-}
-
-.errline {
-  margin-top: 4px;
 }
 
 @container page (max-width: 1040px) {

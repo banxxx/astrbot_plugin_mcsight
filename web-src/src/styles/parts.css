@@ -46,6 +46,11 @@
   white-space: nowrap;
 }
 
+/* 页面级错误条：五个页共用同一条间距规则，别各页抄一份 */
+.errline {
+  margin-top: 4px;
+}
+
 /* ---------- 表 ---------- */
 .scroll {
   overflow-x: auto;

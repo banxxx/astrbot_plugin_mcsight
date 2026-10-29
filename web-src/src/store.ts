@@ -23,7 +23,8 @@ export interface Dialog {
 interface State {
   ready: boolean;
   noBridge: boolean;
-  busy: boolean;
+  /** 在飞的请求数，读与写都算。页面用它把「还没读到」和「真的没有数据」分开 */
+  pending: number;
   page: PageKey;
   error: string;
   toast: string;
@@ -49,7 +50,7 @@ interface State {
 export const S = reactive<State>({
   ready: false,
   noBridge: false,
-  busy: false,
+  pending: 0,
   page: "srv",
   error: "",
   toast: "",
@@ -77,6 +78,19 @@ export const dirtyCount = computed(() => Object.keys(S.cfgDraft).length);
 
 let toastTimer: number | undefined;
 
+/** 所有网络读写都过这一层：页面据此把「还没读到」和「真的没有」分开 */
+export async function inflight<T>(job: () => Promise<T>): Promise<T> {
+  S.pending++;
+  try {
+    return await job();
+  } finally {
+    S.pending--;
+  }
+}
+
+/** 桥还没发上下文、或有任何请求在飞时，不许把空数组当结论画出来 */
+export const loading = computed(() => !S.ready || S.pending > 0);
+
 export function toast(text: string) {
   S.toast = text;
   window.clearTimeout(toastTimer);
@@ -101,7 +115,7 @@ export function closeDialog() {
 }
 
 export async function loadSummary() {
-  const r = await api.summary();
+  const r = await inflight(() => api.summary());
   S.groups = r.groups;
   S.maxServers = r.max_servers_per_group;
   S.defaultApiPort = r.default_api_port;
@@ -116,7 +130,7 @@ export async function loadGroup() {
     S.group = null;
     return;
   }
-  S.group = await api.group(S.gid);
+  S.group = await inflight(() => api.group(S.gid));
 }
 
 /* 换群只改 S.gid，重拉交给这里收口，免得每个入口各自记得刷 */
@@ -136,9 +150,8 @@ export async function loadModState() {
   }
   S.modStateLoading = true;
   try {
-    const r = await api.serverModState(S.gid);
-    S.modStates = r.states;
-  } catch (err) {
+    const r = await inflight(() => api.serverModState(S.gid));
+    S.modStates = r.states;  } catch (err) {
     fail(err);
   } finally {
     S.modStateLoading = false;
@@ -157,7 +170,7 @@ export async function setWhitelist(name: string, enabled: boolean) {
 /** 拉全局参数：先取到再整体替换。中途清空数组会让整页卡片闪一下空白（保存后尤其明显）。 */
 export async function loadConfig(force = false) {
   if (!force && S.cfgItems.length) return;
-  const r = await api.config();
+  const r = await inflight(() => api.config());
   S.cfgItems = r.items;
   S.cfgSections = r.sections;
   S.cfgExtraKeys = r.extra_keys;
@@ -170,7 +183,7 @@ export async function saveDrafts() {
     toast("没有待保存的改动");
     return;
   }
-  S.busy = true;
+  S.pending++;
   const written: string[] = [];
   let restart = false;
   try {
@@ -193,19 +206,19 @@ export async function saveDrafts() {
   } catch (err) {
     fail(err);
   } finally {
-    S.busy = false;
+    S.pending--;
   }
 }
 
 export async function loadConstants() {
   if (!S.constRows.length) {
-    S.constRows = (await api.constants()).rows;
+    S.constRows = (await inflight(() => api.constants())).rows;
   }
 }
 
 export async function loadCommands() {
   if (!S.cmdSections.length) {
-    const r = await api.commands();
+    const r = await inflight(() => api.commands());
     S.cmdSections = r.sections;
     S.cmdTotal = r.total;
   }
@@ -247,7 +260,7 @@ let reloading = false;
 export async function reloadPlugin() {
   if (reloading) return;
   reloading = true;
-  S.busy = true;
+  S.pending++;
   S.error = "";
   try {
     const r = await api.pluginReload();
@@ -267,14 +280,14 @@ export async function reloadPlugin() {
     }
     toast(`${why}（已改为重新读取数据）`);
   } finally {
-    S.busy = false;
+    S.pending--;
     reloading = false;
   }
 }
 
 /** 统一入口：写操作回来后刷新群数据，避免各弹窗各自维护副本。 */
 export async function run<T>(label: string, job: () => Promise<T>, after?: (v: T) => void) {
-  S.busy = true;
+  S.pending++;
   S.error = "";
   try {
     const value = await job();
@@ -284,7 +297,7 @@ export async function run<T>(label: string, job: () => Promise<T>, after?: (v: T
     fail(err);
     return null;
   } finally {
-    S.busy = false;
+    S.pending--;
     void label;
   }
 }
