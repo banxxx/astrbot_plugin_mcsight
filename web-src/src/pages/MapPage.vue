@@ -24,6 +24,7 @@ const GROUPS: { title: string; rows: Row[] }[] = [
       { label: "排序 ↑ ↓", cmd: "/mc move 名称 序号 · /mc swap 名1 名2", note: "序号从 0 开始；只改群内列表顺序", isNew: false },
       { label: "写 / 清除 Token", cmd: "/mc token 名称 Token（或 清除）", note: "密钥：页面不回显内值，长度门 16-128 字符", isNew: false },
       { label: "登录开关", cmd: "— 无对应命令", note: "下发该服模组的白名单校验开关并写回其配置文件；用模组 API Token 鉴权", isNew: true },
+      { label: "隐藏 / 显示条目", cmd: "— 无对应命令", note: "隐藏后 /在线 不再采集也不再出该卡；条目、绑定、Token 都原样保留", isNew: true },
       { label: "删除服务器", cmd: "/mc remove 名称", note: "只删条目；绑定记录不受影响", isNew: false },
     ],
   },

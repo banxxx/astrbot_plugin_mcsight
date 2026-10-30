@@ -7,6 +7,8 @@
   --bd: #e2e6ee;
   --bd-soft: #dde3ef;
   --row: #edf0f5;
+  /* 隐藏行的斜线纹颜色：只用来描线，不当底色用 */
+  --hatch: rgba(30, 37, 50, 0.055);
   --ac: #3d4e9b;
   --ac-h: #34438a;
   --ac-soft: #edf0fa;
@@ -43,6 +45,7 @@
   --bd: #2c3547;
   --bd-soft: #333d52;
   --row: #242c3c;
+  --hatch: rgba(228, 233, 244, 0.05);
   --ac: #8c9ce8;
   --ac-h: #a2b0f0;
   --ac-soft: #232b45;

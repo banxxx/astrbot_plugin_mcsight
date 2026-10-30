@@ -16,10 +16,18 @@ export interface ServerEntry {
   remark_motd_at: number;
   /** 后端算好的最终显示值——/在线 卡片名字下方用的就是它 */
   remark_display: string;
+  /** 隐藏＝只从 /在线 撤下去（连查询都不发），条目、绑定、Token 都不动 */
+  hidden: boolean;
   has_token: boolean;
 }
 
 export type RemarkSrc = "manual" | "motd";
+
+export interface HidePayload {
+  hidden: boolean;
+  message: string;
+  group: GroupPayload;
+}
 
 export interface RemarkSyncPayload {
   synced: string[];

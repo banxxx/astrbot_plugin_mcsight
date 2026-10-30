@@ -6,7 +6,7 @@ import UiBadge from "../components/UiBadge.vue";
 import UiSwitch from "../components/UiSwitch.vue";
 import UiNotice from "../components/UiNotice.vue";
 import GroupPicker from "../components/GroupPicker.vue";
-import { S, api, currentGroup, loadGroup, loading, openDialog, run, setWhitelist, toast } from "../store";
+import { S, api, currentGroup, loadGroup, loading, openDialog, run, setWhitelist, setHidden, toast } from "../store";
 import type { ModState, ServerEntry } from "../lib/types";
 
 const g = computed(() => currentGroup.value);
@@ -158,9 +158,9 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
         </div>
       </div>
 
-      <div v-for="(s, i) in servers" :key="s.name" class="row">
+      <div v-for="(s, i) in servers" :key="s.name" class="row" :class="{ hid: s.hidden }">
         <div class="cols">
-          <span class="c-name"><span class="cell-label">名称</span><b class="nm ell">{{ s.name }}</b></span>
+          <span class="c-name"><span class="cell-label">名称</span><b class="nm ell">{{ s.name }}</b><UiBadge v-if="s.hidden" tone="off">已隐藏</UiBadge></span>
           <span class="c-host"><span class="cell-label">地址</span><span class="ell">{{ s.host }}</span></span>
           <span class="c-port"><span class="cell-label">端口</span><span :class="{ dash: s.api_port === null }">{{ s.api_port ?? "—" }}</span></span>
           <span class="c-rmk"><span class="cell-label">备注</span><UiBadge v-if="s.remark_src === 'motd' && s.remark_motd" tone="neutral" title="该值来自服务端 motd">MOTD</UiBadge><span class="ell" :class="{ dash: !s.remark_display }" :title="remarkTitle(s)">{{ s.remark_display || "—" }}</span></span>
@@ -179,6 +179,7 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
           </span>
           <span class="c-op ops">
             <button class="lnk" type="button" @click="openDialog('edit-server', { server: s, index: i })">编辑</button>
+            <button class="lnk" type="button" :title="s.hidden ? '取消隐藏：/在线 会重新采集并出这张卡' : '隐藏：/在线 不再采集这台，也不出卡片'" @click="setHidden(s.name, !s.hidden)">{{ s.hidden ? "显示" : "隐藏" }}</button>
             <button class="arw" type="button" title="上移" :disabled="i === 0" @click="move(s, -1)"><UiIcon name="arrow-up" :size="12" /></button>
             <button class="arw" type="button" title="下移" :disabled="i === servers.length - 1" @click="move(s, 1)"><UiIcon name="arrow-down" :size="12" /></button>
             <button class="lnk bad" type="button" @click="openDialog('del-server', { server: s })">删除</button>
@@ -373,6 +374,18 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
 .nm {
   font-weight: 600;
   color: var(--ink);
+}
+
+/* 隐藏中的条目：铺一层 1px 斜线纹，不铺纯色——整块底色会把「暂时不上 /在线」
+   说成「这条废了」；名字转灰＋名字后挂「已隐藏」牌（牌给竖排卡片档兜底）。
+   线的深浅只由 --hatch 一个令牌控制。 */
+.row.hid {
+  background-image: repeating-linear-gradient(135deg, var(--hatch) 0 1px, transparent 1px 7px);
+}
+
+.row.hid .nm {
+  color: var(--ink3);
+  font-weight: 500;
 }
 
 .c-host,

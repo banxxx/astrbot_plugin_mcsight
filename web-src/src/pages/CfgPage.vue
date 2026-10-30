@@ -266,6 +266,12 @@ const groups = computed(() => {
     align-items: flex-start;
     flex-direction: column;
     gap: 8px;
+    /* 竖排之后行内容（标签在上、控件在下）比 56 高，锁死高度会让控件被
+       .card 的 overflow:hidden 裁掉下沿（实测开关+4、眼睛+11、管理名单+16） */
+    height: auto;
+    min-height: var(--h-form);
+    padding-top: 8px;
+    padding-bottom: 8px;
   }
 
   .pr {

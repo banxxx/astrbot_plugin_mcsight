@@ -30,9 +30,11 @@ from ..config.server_config import (
     console_token_of,
     effective_remark,
     group_config_path,
+    is_hidden,
     remark_src_of,
     validate_remark,
     validate_server_name,
+    visible_servers,
 )
 from ..config.whitelist_config import WhitelistManager
 from ..features.player_status.checker import query_one
@@ -134,6 +136,7 @@ def _server_view(entry: dict) -> dict:
         "remark_motd": entry.get("remark_motd", ""),
         "remark_motd_at": entry.get("remark_motd_at", 0),
         "remark_display": effective_remark(entry),
+        "hidden": is_hidden(entry),
         "has_token": bool(console_token_of(entry)),
     }
 
@@ -418,6 +421,32 @@ async def view_server_move():
     if not cm.move_server(name, index):
         return _err("移动失败（名称不存在或序号无效）")
     return _ok(_group_payload(gid))
+
+
+async def view_server_hide():
+    """隐藏/显示某条服务器：只把它从 /在线 撤下去，条目与绑定都不动。"""
+    body, err = await _body()
+    if err:
+        return _err(err)
+    gid = _clean_gid(body.get("gid"))
+    if not gid:
+        return _err("群号必须是 5-12 位数字")
+    if not os.path.exists(group_config_path(gid)):
+        return _err(f"servers_{gid}.json 不存在")
+    name = str(body.get("name", ""))
+    hidden = body.get("hidden")
+    if not isinstance(hidden, bool):
+        return _err("隐藏值必须是 true/false")
+    cm = ConfigManager(group_id=int(gid))
+    if not cm.set_server_hidden(name, hidden):
+        return _err(f"未找到名为「{name}」的服务器。")
+    left = len(visible_servers(cm.get_all_servers()))
+    total = len(cm.get_all_servers())
+    verb = "隐藏" if hidden else "显示"
+    message = f"已{verb}「{name}」· /在线 现在会出 {left} 台（共 {total} 条）"
+    if hidden and left == 0:
+        message += "；全部隐藏后 /在线 只会回一句提示，不出图"
+    return _ok({"hidden": hidden, "message": message, "group": _group_payload(gid)})
 
 
 async def view_server_token():
@@ -930,6 +959,7 @@ ROUTES = (
     ("server/update", view_server_update, ["POST"], "编辑服务器"),
     ("server/delete", view_server_delete, ["POST"], "删除服务器"),
     ("server/move", view_server_move, ["POST"], "调整服务器顺序"),
+    ("server/hide", view_server_hide, ["POST"], "隐藏或显示服务器条目"),
     ("server/token", view_server_token, ["POST"], "写入或清除命令 Token"),
     ("server/batch_add", view_server_batch_add, ["POST"], "批量添加服务器"),
     ("server/batch_remove", view_server_batch_remove, ["POST"], "批量删除服务器"),

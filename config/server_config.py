@@ -140,6 +140,16 @@ def clean_motd(raw) -> str:
     return truncate_by_width(" ".join(text.split()), MAX_REMARK_WIDTH)
 
 
+def is_hidden(entry: dict) -> bool:
+    """隐藏＝只从 /在线 里撤下去，条目本身照旧存在（绑定、Token、备注都不动）"""
+    return bool(entry.get("hidden"))
+
+
+def visible_servers(entries: list) -> list:
+    """参与 /在线 采集与出图的服务器：隐藏的那些连查询都不发，省得白等一轮超时。"""
+    return [e for e in entries if not is_hidden(e)]
+
+
 # edit_server 的「这个字段本次不动」哨兵，和显式传入的 None/"" 区分开
 _UNSET = object()
 
@@ -220,6 +230,21 @@ class ConfigManager:
                 s["remark"] = remark
                 self._save(data)
                 return True
+        return False
+
+    # ---------- 隐藏条目：只影响 /在线 是否采集与出图，不删任何东西 ----------
+    def set_server_hidden(self, name: str, hidden: bool) -> bool:
+        """hidden=False 时直接删键：老文件里没有 hidden 就是显示，别留一堆 false。"""
+        data = self._load()
+        for s in data["servers"]:
+            if s["name"] != name:
+                continue
+            if hidden:
+                s["hidden"] = True
+            else:
+                s.pop("hidden", None)
+            self._save(data)
+            return True
         return False
 
     # ---------- 备注来源开关：只改取值口径，手填值与 MOTD 缓存各自留着 ----------

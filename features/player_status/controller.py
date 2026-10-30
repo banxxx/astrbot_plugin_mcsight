@@ -14,7 +14,7 @@ from .checker import (
 )
 from ...config.whitelist_config import WhitelistManager
 from ...config.server_config import (
-    REMARK_SRC_MOTD, clean_motd, effective_remark, remark_src_of
+    REMARK_SRC_MOTD, clean_motd, effective_remark, remark_src_of, visible_servers,
 )
 from .player_stats_generator import draw_player_stats_image
 from ...utils.avatar_cache import download_avatar
@@ -150,9 +150,13 @@ def store_remark_motd(config_manager, entries: list, cards: list) -> None:
 
 async def run_player_status(event: AstrMessageEvent, config_manager):
     """获取在线玩家状态，统一使用模组 API，若失败则回退到 mcstatus"""
-    servers = config_manager.get_all_servers()
+    all_entries = config_manager.get_all_servers()
+    # 隐藏的条目连查询都不发（不是查完再跳过画图）：一台关着的服能白吃一轮超时
+    servers = visible_servers(all_entries)
     if not servers:
-        yield event.plain_result("还没有添加任何服务器。")
+        yield event.plain_result(
+            "还没有添加任何服务器。" if not all_entries
+            else f"本群 {len(all_entries)} 条服务器都被隐藏了，/在线 不出图；先取消隐藏再试。")
         return
 
     wm = WhitelistManager()

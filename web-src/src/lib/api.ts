@@ -9,6 +9,7 @@ import type {
   FlagPayload,
   GroupFlagKey,
   GroupPayload,
+  HidePayload,
   IgnorePayload,
   JsonPayload,
   ModStatePayload,
@@ -61,6 +62,8 @@ export const api = {
   serverDelete: (gid: string, name: string) => post<GroupPayload>("server/delete", { gid, name }),
   serverMove: (gid: string, name: string, index: number) =>
     post<GroupPayload>("server/move", { gid, name, index }),
+  serverHide: (gid: string, name: string, hidden: boolean) =>
+    post<HidePayload>("server/hide", { gid, name, hidden }),
   serverToken: (gid: string, name: string, token: string) =>
     post<TokenPayload>("server/token", { gid, name, token }),
   serverWhitelist: (gid: string, name: string, enabled: boolean) =>

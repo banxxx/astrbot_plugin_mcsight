@@ -158,6 +158,15 @@ export async function loadModState() {
   }
 }
 
+/** 隐藏/显示条目：只影响 /在线，后端会回一份新的群数据，直接整体覆盖本地 */
+export async function setHidden(name: string, hidden: boolean) {
+  await run("hide", async () => {
+    const r = await api.serverHide(S.gid, name, hidden);
+    S.group = r.group;
+    toast(r.message);
+  });
+}
+
 /** 下发登录开关开关：以模组回显的值覆盖本地状态 */
 export async function setWhitelist(name: string, enabled: boolean) {
   await run("whitelist", async () => {
