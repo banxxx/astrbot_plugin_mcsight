@@ -3,6 +3,9 @@ import { onMounted } from "vue";
 import UiIcon from "../components/UiIcon.vue";
 import UiNotice from "../components/UiNotice.vue";
 import { S, fail, loadCommands, loading } from "../store";
+import { useIsMobile } from "../lib/useMediaQuery";
+
+const isMobile = useIsMobile();
 
 onMounted(() => {
   loadCommands().catch(fail);
@@ -19,7 +22,28 @@ onMounted(() => {
       <span class="tag"><UiIcon name="lock" :size="12" />只读 · 数据来自 /帮助 卡片结构</span>
     </section>
 
-    <section class="card">
+    <template v-if="isMobile">
+      <section v-for="sec in S.cmdSections" :key="sec.title" class="m-card">
+        <div class="m-card-h">
+          <span class="bar" />
+          <h2>{{ sec.title }}</h2>
+          <span class="m-count">{{ sec.rows.length }} 项</span>
+        </div>
+        <div v-if="sec.hint" class="m-card-hint">{{ sec.hint }}</div>
+        <div v-for="(r, i) in sec.rows" :key="`${sec.title}-${i}`" class="m-cmd">
+          <div class="m-cmd-h">
+            <b class="mono">{{ r.cmd }}</b>
+            <span v-if="r.tags" class="tg" :class="{ super: r.tags.indexOf('超管') >= 0 }">{{ r.tags }}</span>
+          </div>
+          <div class="m-cmd-note">{{ r.desc }}</div>
+          <div v-if="r.aliases" class="m-cmd-alias">别名：{{ r.aliases }}</div>
+        </div>
+      </section>
+      <div v-if="loading && !S.cmdSections.length" class="m-empty">读取中…</div>
+      <div v-else class="m-foot">共 {{ S.cmdTotal }} 条 · {{ S.cmdSections.length }} 组</div>
+    </template>
+
+    <section v-else class="card">
       <div class="th">
         <div class="cols">
           <span class="c-h1">命令</span><span class="c-h2">说明</span><span class="c-h3">别名 / 权限</span>

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import UiIcon from "../components/UiIcon.vue";
 import UiNotice from "../components/UiNotice.vue";
+import { useIsMobile } from "../lib/useMediaQuery";
+
+const isMobile = useIsMobile();
 
 interface Row {
   label: string;
@@ -81,7 +84,26 @@ const NEW = GROUPS.reduce((n, g) => n + g.rows.filter((r) => r.isNew).length, 0)
       标了「页面新能力」的行没有对应的 QQ 命令；其余每一项都能回到现有 QQ 命令。页面与命令写的是同一份文件，只是入口不同。
     </UiNotice>
 
-    <section class="card">
+    <template v-if="isMobile">
+      <section v-for="grp in GROUPS" :key="grp.title" class="m-card">
+        <div class="m-card-h">
+          <span class="bar" />
+          <h2>{{ grp.title }}</h2>
+          <span class="m-count">{{ grp.rows.length }} 项</span>
+        </div>
+        <div v-for="r in grp.rows" :key="r.label" class="m-cmd" :class="{ isNew: r.isNew }">
+          <div class="m-cmd-h">
+            <b>{{ r.label }}</b>
+            <span v-if="r.isNew" class="tag-new">页面新能力</span>
+          </div>
+          <div class="m-cmd-cmd mono">{{ r.cmd }}</div>
+          <div class="m-cmd-note">{{ r.note }}</div>
+        </div>
+      </section>
+      <div class="m-foot">共 {{ TOTAL }} 行 · 其中 {{ NEW }} 行标为页面新能力</div>
+    </template>
+
+    <section v-else class="card">
       <div class="th">
         <div class="cols">
           <span class="c-m1">页面控件</span><span class="c-m2 mono-th">等价命令</span><span class="c-m3">落点与约束</span>

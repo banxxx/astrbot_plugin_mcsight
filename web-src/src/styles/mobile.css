@@ -1,0 +1,1199 @@
+/* 移动端展示层。只在 .shell.mobile 下生效；桌面规则保持原样。
+   页面内容统一用 .m-* 前缀，壳与共享组件用 .shell.mobile 前缀，避免和桌面 scoped 样式抢。 */
+
+.shell.mobile {
+  display: block;
+  min-height: 100vh;
+  min-height: 100dvh;
+  --pad-card: 14px;
+  --gap-card: 12px;
+  --h-ctl: 42px;
+  font-size: 14px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* 手机上没有 hover，去掉点击高亮和 300ms 延迟；长按按钮也不选中文字 */
+.shell.mobile button {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ---------- 移动壳：顶栏 + 两行导航 ---------- */
+.shell.mobile .mtop {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  padding-top: env(safe-area-inset-top);
+  background: var(--surface);
+  border-bottom: 1px solid var(--bd);
+}
+
+.mtb {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 52px;
+  padding: 0 calc(10px + env(safe-area-inset-right)) 0 calc(14px + env(safe-area-inset-left));
+  background: var(--surface);
+}
+
+.mtb .logo {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: block;
+}
+
+.mtb-t {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.mtb-t b {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.mtb-t span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--ink3);
+}
+
+.mtb-menu {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid var(--bd);
+  border-radius: var(--r-ctl);
+  background: var(--surface);
+  color: var(--ink2);
+  cursor: pointer;
+}
+
+.mtb-menu:active {
+  background: var(--thead);
+}
+
+.mmenu-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+}
+
+.mmenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 10px;
+  z-index: 2;
+  width: 220px;
+  overflow: hidden;
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px rgba(20, 27, 40, 0.18);
+}
+
+.mmenu-h {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--row);
+  font-size: 12px;
+  color: var(--ink3);
+}
+
+.mmenu-it {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border: none;
+  background: none;
+  color: var(--ink);
+  font-family: var(--ff);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mmenu-it:active {
+  background: var(--thead);
+}
+
+.mnav {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px calc(12px + env(safe-area-inset-right)) 10px calc(12px + env(safe-area-inset-left));
+  background: var(--surface);
+}
+
+.mnav-it {
+  grid-column: span 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 44px;
+  min-width: 0;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--r-ctl);
+  background: none;
+  color: var(--ink2);
+  font-family: var(--ff);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.mnav-it:nth-child(4),
+.mnav-it:nth-child(5) {
+  grid-column: span 3;
+}
+
+.mnav-it.on {
+  border-color: var(--ac-line);
+  background: var(--ac-soft);
+  color: var(--ac);
+  font-weight: 600;
+}
+
+.mnav-it svg {
+  flex: none;
+}
+
+.mnav-it span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 320px 窄屏：3 列导航每格只有 ~90px，缩一点字号保住「群与服务器」 */
+@media (max-width: 360px) {
+  .mnav-it {
+    gap: 4px;
+    padding: 0 4px;
+    font-size: 11px;
+  }
+
+  .mnav-it svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.shell.mobile .content {
+  padding: 14px calc(14px + env(safe-area-inset-right)) calc(32px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left));
+}
+
+/* 配置页有未保存项时，底部保存条会占位，内容多留一段 */
+.shell.mobile.has-savebar .content {
+  padding-bottom: calc(96px + env(safe-area-inset-bottom));
+}
+
+/* 配置页底部保存条：手机上保存不再挤顶栏 */
+.msavebar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px calc(14px + env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left));
+  border-top: 1px solid var(--bd);
+  background: var(--surface);
+  box-shadow: 0 -8px 24px rgba(20, 27, 40, 0.08);
+}
+
+.msavebar span {
+  font-size: 12px;
+  color: var(--ink3);
+}
+
+.msavebar .btn {
+  min-height: 44px;
+}
+
+/* ---------- 页面头 / 卡片头 ---------- */
+.shell.mobile .ph {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.shell.mobile .ph-t h1 {
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.shell.mobile .ph-t p {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.shell.mobile .ph > .btn {
+  width: 100%;
+}
+
+.shell.mobile .ph > .tag,
+.shell.mobile .ph > .badge {
+  align-self: flex-start;
+  font-size: 12px;
+}
+
+.shell.mobile .ch {
+  height: auto;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 14px;
+}
+
+.shell.mobile .ch h2 {
+  font-size: 14px;
+}
+
+.shell.mobile .ch .hint {
+  flex: 1 1 100%;
+  margin-left: 0;
+  text-align: left;
+  white-space: normal;
+}
+
+.shell.mobile .ch .acts {
+  flex-wrap: wrap;
+  margin-left: 0;
+}
+
+.shell.mobile .ch .acts .btn {
+  flex: 1 1 auto;
+}
+
+.shell.mobile .errline {
+  margin-top: 0;
+}
+
+.shell.mobile .warnbar {
+  min-height: auto;
+  padding: 10px 12px;
+}
+
+/* ---------- 共享控件在手机上的尺寸 ---------- */
+.shell.mobile .btn {
+  font-size: 13px;
+}
+
+.shell.mobile .bdg {
+  height: 24px;
+  font-size: 12px;
+}
+
+.shell.mobile .inp {
+  height: 42px;
+  font-size: 16px;
+}
+
+.shell.mobile textarea.inp {
+  height: auto;
+}
+
+.shell.mobile .sec {
+  height: 42px;
+}
+
+.shell.mobile .sec .v {
+  font-size: 16px;
+}
+
+.shell.mobile .sec .eye,
+.shell.mobile .sec .del {
+  width: 36px;
+  height: 36px;
+}
+
+/* 开关视觉只有 44×24，用伪元素把可点区补到 44×44 */
+.shell.mobile .sw::before {
+  content: "";
+  position: absolute;
+  inset: -10px -2px;
+}
+
+.shell.mobile .sw {
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+}
+
+.shell.mobile .sw i {
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 10px;
+}
+
+.shell.mobile .sw.on i {
+  left: 22px;
+}
+
+.shell.mobile .toast {
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  max-width: calc(100% - 28px);
+}
+
+.shell.mobile .toast.above-savebar {
+  bottom: calc(88px + env(safe-area-inset-bottom));
+}
+
+/* ---------- 通用移动卡片 ---------- */
+.m-card {
+  overflow: hidden;
+  border: 1px solid var(--bd);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.m-card-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--row);
+}
+
+.m-card-h .bar,
+.m-sec-h .bar {
+  width: 3px;
+  height: 18px;
+  border-radius: 1.5px;
+  background: var(--ac);
+  flex: none;
+}
+
+.m-card-h h2,
+.m-sec-h h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.m-card-h .m-count,
+.m-sec-h .m-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--ink3);
+  white-space: nowrap;
+}
+
+.m-card-hint {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--row);
+  background: var(--thead);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink3);
+}
+
+.m-count {
+  font-size: 12px;
+  color: var(--ink3);
+  font-variant-numeric: tabular-nums;
+}
+
+.m-foot {
+  padding: 2px 2px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink3);
+}
+
+.m-empty {
+  padding: 16px 14px;
+  border: 1px dashed var(--bd);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--ink3);
+}
+
+.m-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.m-sec-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.m-tools {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.m-tools .btn {
+  grid-column: span 2;
+  width: 100%;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.m-tools .is-pri {
+  grid-column: 1 / -1;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.m-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ---------- 群与服务器 ---------- */
+.m-groupbar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--bd);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.m-groupbar-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.m-groupbar-top > label {
+  flex: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink2);
+}
+
+.m-groupbar-top .pick {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.m-groupbar-top .trig {
+  width: 100%;
+  height: 40px;
+  justify-content: space-between;
+}
+
+.m-groupbar-acts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.m-groupbar-acts .btn {
+  width: 100%;
+}
+
+.m-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.m-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.m-stat label {
+  font-size: 12px;
+  color: var(--ink3);
+}
+
+.m-stat b {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.m-stat em {
+  font-size: 11px;
+  font-style: normal;
+  color: var(--ink4);
+  overflow-wrap: anywhere;
+}
+
+.m-stat .cap {
+  width: 100%;
+  height: 4px;
+  margin-top: 3px;
+  border-radius: 2px;
+  background: var(--row);
+  overflow: hidden;
+}
+
+.m-stat .cap i {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ac);
+}
+
+.m-stat .cap.warn i {
+  background: var(--warn);
+}
+
+.srv-card {
+  overflow: hidden;
+  border: 1px solid var(--bd);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.srv-card.hid {
+  background-image: repeating-linear-gradient(135deg, var(--hatch) 0 1px, transparent 1px 7px);
+}
+
+.srv-h {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--row);
+}
+
+.srv-name {
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.srv-card.hid .srv-name {
+  color: var(--ink3);
+  font-weight: 500;
+}
+
+.srv-kv {
+  margin: 0;
+  padding: 2px 14px 6px;
+}
+
+.srv-kv > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px dashed var(--row);
+}
+
+.srv-kv > div:first-child {
+  border-top: none;
+}
+
+.srv-kv dt {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink3);
+}
+
+.srv-kv dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.srv-kv dd .bdg {
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
+.srv-kv .dash {
+  color: var(--ink5);
+}
+
+.srv-sw dd {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.srv-sw .mnote {
+  margin-top: 0;
+}
+
+.mnote {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink3);
+  overflow-wrap: anywhere;
+}
+
+.srv-acts {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--row);
+}
+
+.mact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 42px;
+  min-width: 0;
+  padding: 0 4px;
+  border: 1px solid var(--bd);
+  border-radius: var(--r-ctl);
+  background: var(--thead);
+  color: var(--ink2);
+  font-family: var(--ff);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.mact:active:not(:disabled) {
+  background: var(--row);
+}
+
+.mact:disabled {
+  color: var(--ink5);
+  cursor: not-allowed;
+}
+
+.mact.danger {
+  border-color: var(--bad-bd);
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+
+/* ---------- 本群开关 ---------- */
+.m-swrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--row);
+}
+
+.m-swrow:last-child {
+  border-bottom: none;
+}
+
+.m-swrow-t {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.m-swrow-t b {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.m-swrow-t span {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink3);
+}
+
+.m-swrow-t em {
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--ac);
+}
+
+.m-swrow .sw {
+  flex: none;
+  margin-top: 2px;
+}
+
+.m-swrow-r {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+/* ---------- 全局参数 ---------- */
+.m-cfgrow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--row);
+}
+
+.m-cfgrow:last-child {
+  border-bottom: none;
+}
+
+.m-cfgrow.bool {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.m-cfgrow.bool .m-cfgrow-t {
+  flex: 1 1 auto;
+}
+
+.m-cfgrow.bool .m-cfgrow-c {
+  flex: none;
+  width: auto;
+  padding-top: 1px;
+}
+
+.m-cfgrow-t {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.m-cfgrow-t b {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+.m-cfgrow-t span {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink3);
+  overflow-wrap: anywhere;
+}
+
+.m-cfgrow-c {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.m-cfgrow-c .inp,
+.m-cfgrow-c .sec {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
+.m-cfgrow-c .m-count + .btn {
+  margin-left: auto;
+}
+
+/* ---------- 只读页：命令对照 / 绑定帮助 / 代码常量 ---------- */
+.m-cmd {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--row);
+}
+
+.m-cmd:last-child {
+  border-bottom: none;
+}
+
+.m-cmd.isNew {
+  background: var(--warn-bg);
+}
+
+.m-cmd-h {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.m-cmd-h b {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* 10px 在手机上太小，权限/新能力标签统一抬到 11px */
+.shell.mobile .m-cmd-h .tag-new,
+.shell.mobile .m-cmd-h .tg {
+  height: 20px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.m-cmd-cmd {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ac-deep);
+  overflow-wrap: anywhere;
+}
+
+.m-cmd-note {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink3);
+  overflow-wrap: anywhere;
+}
+
+.m-cmd-alias {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink3);
+  overflow-wrap: anywhere;
+}
+
+.m-const {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--row);
+}
+
+.m-const:last-child {
+  border-bottom: none;
+}
+
+.m-const-h {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.m-const-h b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.m-const-h span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ac-deep);
+  overflow-wrap: anywhere;
+}
+
+.m-const-kv {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.m-const-kv span {
+  color: var(--ink3);
+}
+
+.m-const-kv code {
+  color: var(--ink2);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* ---------- 移动端弹窗：表单/JSON/名单走全屏 sheet ---------- */
+.shell.mobile .veil.is-mobile {
+  align-items: stretch;
+  justify-content: center;
+  padding: 0;
+}
+
+.shell.mobile .modal.is-mobile {
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+  border: none;
+  border-radius: 0;
+}
+
+.shell.mobile .modal.is-mobile .mh {
+  position: relative;
+  flex: none;
+  padding: calc(14px + env(safe-area-inset-top)) 56px 12px 16px;
+}
+
+.shell.mobile .modal.is-mobile .mh h3 {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.shell.mobile .modal.is-mobile .ms {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.shell.mobile .modal.is-mobile .mb {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.shell.mobile .modal.is-mobile .mf {
+  flex: none;
+  height: auto;
+  min-height: 56px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+}
+
+.shell.mobile .modal.is-mobile .mf .info {
+  flex: 1 1 100%;
+  margin-right: 0;
+  font-size: 12px;
+}
+
+.shell.mobile .modal.is-mobile .mf .spacer {
+  display: none;
+}
+
+/* 底部操作等宽排开，单手更容易点中 */
+.shell.mobile .modal.is-mobile .mf > .btn {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+}
+
+/* JSON 在手机上折行，避免每条长配置都要横向拖 */
+.shell.mobile .modal.is-mobile .json {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.shell.mobile .modal.is-mobile .mx {
+  position: absolute;
+  top: calc(8px + env(safe-area-inset-top));
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--ink2);
+  cursor: pointer;
+}
+
+.shell.mobile .modal.is-mobile .mx:active {
+  background: var(--thead);
+}
+
+.shell.mobile .modal.is-mobile.m-confirm {
+  align-self: center;
+  width: calc(100% - 32px);
+  height: auto;
+  max-height: calc(100dvh - 32px);
+  border: 1px solid var(--bd);
+  border-radius: 12px;
+}
+
+.shell.mobile .modal.is-mobile.m-confirm .mb {
+  flex: 0 1 auto;
+  overflow-y: auto;
+}
+
+.shell.mobile .modal.is-mobile.m-confirm .mf {
+  padding-bottom: 10px;
+}
+
+/* 群选择面板：手机上和群栏同宽，不再贴着触发器往左溢出 */
+.shell.mobile .m-groupbar-top .pick {
+  position: static;
+}
+
+.shell.mobile .trig {
+  font-size: 12px;
+}
+
+.shell.mobile .trig b {
+  font-size: 14px;
+}
+
+.shell.mobile .trig i {
+  font-size: 12px;
+}
+
+.shell.mobile .panel {
+  top: 60px;
+  left: 14px;
+  right: 14px;
+  width: auto;
+  max-width: 420px;
+  max-height: min(336px, 50dvh);
+  padding: 10px;
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(20, 27, 40, 0.18);
+}
+
+.shell.mobile .panel .filter {
+  height: 42px;
+}
+
+/* 原生 input 在 iOS 上小于 16px 会触发自动放大 */
+.shell.mobile .panel .filter input {
+  font-size: 16px;
+}
+
+.shell.mobile .panel .it {
+  height: 44px;
+  font-size: 14px;
+}
+
+.shell.mobile .panel .it em {
+  font-size: 12px;
+}
+
+.shell.mobile .panel .list {
+  overscroll-behavior: contain;
+}
+
+/* ---------- 横屏/矮屏：手机横过来时纵向空间最贵 ---------- */
+@media (max-height: 520px) and (min-width: 480px) {
+  .mtb {
+    height: 46px;
+  }
+
+  /* 5 个页面平铺一行，顶栏从 165px 收到 ~100px */
+  .mnav {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 4px;
+    padding-top: 6px;
+    padding-bottom: 8px;
+  }
+
+  .mnav-it,
+  .mnav-it:nth-child(4),
+  .mnav-it:nth-child(5) {
+    grid-column: auto;
+    height: 40px;
+  }
+
+  .shell.mobile .content {
+    padding-top: 10px;
+  }
+
+  .shell.mobile .ph {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .shell.mobile .ph-t {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .shell.mobile .ph > .btn {
+    width: auto;
+  }
+
+  .shell.mobile .ph > .tag,
+  .shell.mobile .ph > .badge {
+    align-self: center;
+  }
+
+  .m-groupbar {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .m-groupbar-top {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .m-groupbar-acts {
+    grid-template-columns: repeat(2, auto);
+    flex: none;
+  }
+
+  .m-groupbar-acts .btn {
+    width: auto;
+  }
+}
+
+@media (max-height: 520px) and (min-width: 700px) {
+  .m-stats {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .m-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* 480–600px 的横屏：5 列导航每格更窄，字号跟着收一档 */
+@media (max-height: 520px) and (min-width: 480px) and (max-width: 600px) {
+  .mnav-it {
+    gap: 4px;
+    padding: 0 4px;
+    font-size: 11px;
+  }
+
+  .mnav-it svg {
+    width: 16px;
+    height: 16px;
+  }
+}

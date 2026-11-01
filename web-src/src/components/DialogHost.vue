@@ -30,6 +30,9 @@ const f = reactive<Record<string, string>>({});
 const selected = reactive<Record<string, boolean>>({});
 const batchResult = reactive({ message: "", failed: [] as string[] });
 const jsonText = reactive({ file: "", text: "", error: "" });
+/* 添加服务器时的 MOTD 预取：只回显，不落盘；提交时随创建请求一起写入缓存 */
+const motdPreview = reactive({ text: "", error: "", loading: false });
+let previewSeq = 0;
 
 const FORMS = ["add-server", "edit-server"];
 const CONFIRMS = ["del-server", "del-group"];
@@ -153,6 +156,10 @@ watch(
     for (const k of Object.keys(f)) delete f[k];
     batchResult.message = "";
     batchResult.failed = [];
+    previewSeq += 1;
+    motdPreview.text = "";
+    motdPreview.error = "";
+    motdPreview.loading = false;
     if (!cur) return;
     srvKey.value = (cur.payload?.server as ServerEntry | undefined)?.name ?? "";
     if (cur.name === "edit-server") {
@@ -201,6 +208,18 @@ watch(d, async (cur) => {
   else jsonText.error = why || "读取失败";
 });
 
+/* 地址/端口一改，之前取到的 MOTD 就作废：别让提交时把旧地址的值写进新服务器 */
+watch(
+  () => [f.host, f.port],
+  () => {
+    if (name.value !== "add-server") return;
+    previewSeq += 1;
+    motdPreview.text = "";
+    motdPreview.error = "";
+    motdPreview.loading = false;
+  },
+);
+
 const listItems = computed<string[]>(() => {
   if (name.value === "ignore-list") return S.group?.nickname_check_ignore_ids ?? [];
   const it = payload.value.item as ConfigItem | undefined;
@@ -211,16 +230,36 @@ const selectedNames = computed(() => servers.value.filter((s) => selected[s.name
 
 async function submitAddServer() {
   await run("add", async () => {
+    const previewMotd = f.remark_src === "motd" ? motdPreview.text : "";
     const r = await api.serverCreate(S.gid, {
       name: f.name,
       host: f.host,
       api_port: f.port,
       remark: f.remark,
+      remark_src: f.remark_src,
+      remark_motd: previewMotd,
       token: f.token,
     });
     S.group = r;
+    /* 添加时选了「用 MOTD」：
+       - 弹窗里已经「获取」过：创建请求已把值写进缓存，不再重复查一次；
+       - 没获取过：提交成功后补采一次，失败不回滚服务器，只把原因带进提示。 */
+    let motdMsg = "";
+    if (f.remark_src === "motd") {
+      if (previewMotd) {
+        motdMsg = "；已写入获取到的 MOTD";
+      } else {
+        try {
+          const sync = await api.serverRemarkSync(S.gid, f.name.trim());
+          S.group = sync.group;
+          motdMsg = `；${sync.message}`;
+        } catch (err) {
+          motdMsg = `；MOTD 同步失败：${err instanceof ApiError ? err.message : String(err)}`;
+        }
+      }
+    }
     closeDialog();
-    toast(`已添加「${f.name}」${f.token ? "，命令 Token 已写入" : ""}`);
+    toast(`已添加「${f.name}」${f.token ? "，命令 Token 已写入" : ""}${motdMsg}`);
   });
 }
 
@@ -280,13 +319,62 @@ async function syncRemarkMotd() {
   }
 }
 
-function setRemarkSrc(value: boolean) {
-  f.remark_src = value ? "motd" : "manual";
-  // 刚选上 MOTD 但还没采到过值：当场替他取一次，省得对着空备注猜下一步
-  if (value && !srv.value?.remark_motd) void syncRemarkMotd();
+/* 添加弹窗里的预取：按当前表单的 host/模组端口先查一次 MOTD。
+   只要地址填对就能拿到值（没配 api_port 走 SLP，配了先问模组再回落 SLP）。 */
+async function fetchMotdPreview() {
+  const host = f.host.trim();
+  if (!host) {
+    motdPreview.text = "";
+    motdPreview.error = "先填主机地址";
+    return;
+  }
+  const seq = ++previewSeq;
+  motdPreview.loading = true;
+  motdPreview.error = "";
+  try {
+    const r = await api.serverMotdPreview(host, f.port);
+    if (seq !== previewSeq) return;
+    motdPreview.text = r.motd;
+  } catch (err) {
+    if (seq !== previewSeq) return;
+    motdPreview.text = "";
+    motdPreview.error = err instanceof ApiError ? err.message : String(err);
+  } finally {
+    if (seq === previewSeq) motdPreview.loading = false;
+  }
 }
 
+/* 开关已经打开、地址也填完了：失焦就自动取一次，不用再特意点按钮。
+   只在这种明确意图下自动请求，避免用户只是路过地址框就发网络查询。 */
+function maybeFetchMotdOnBlur() {
+  if (name.value !== "add-server" || f.remark_src !== "motd") return;
+  if (!f.host.trim() || motdPreview.text || motdPreview.loading) return;
+  void fetchMotdPreview();
+}
+
+function setRemarkSrc(value: boolean) {
+  f.remark_src = value ? "motd" : "manual";
+  // 编辑时刚选上 MOTD 但还没采到过值：当场替他取一次，省得对着空备注猜下一步。
+  if (value && name.value === "edit-server" && !srv.value?.remark_motd) void syncRemarkMotd();
+  // 添加时地址已经填好：打开开关就顺手取一次，让用户提交前能看到真实 MOTD。
+  if (value && name.value === "add-server" && f.host.trim() && !motdPreview.text && !motdPreview.loading) {
+    void fetchMotdPreview();
+  }
+}
+
+/* 真正取到 MOTD 时才用主题色突出；提示语、获取中、失败原因仍走灰阶 */
+const hasMotdValue = computed(() => {
+  if (name.value === "add-server") return !motdPreview.loading && !motdPreview.error && !!motdPreview.text;
+  return !!srv.value?.remark_motd;
+});
+
 function motdTimeText(): string {
+  if (name.value === "add-server") {
+    if (motdPreview.loading) return "正在获取…";
+    if (motdPreview.error) return "获取失败";
+    if (motdPreview.text) return "已获取，添加时写入缓存";
+    return "填好地址后可先获取";
+  }
   const at = Number(srv.value?.remark_motd_at || 0);
   if (!at) return "还没采到过值";
   const d = new Date(at * 1000);
@@ -296,6 +384,11 @@ function motdTimeText(): string {
 
 /* 采到的值要在弹窗里当场看得见：只显示时间等于让用户信不过那次同步的结果 */
 function motdValueText(): string {
+  if (name.value === "add-server") {
+    if (motdPreview.loading) return "正在向服务器查询 MOTD…";
+    if (motdPreview.error) return `获取失败：${motdPreview.error}`;
+    return motdPreview.text || "填好主机地址后点「获取 MOTD」，或提交后自动采集";
+  }
   return srv.value?.remark_motd || "还没有值：点「立即同步」或在群里跑一次 /在线";
 }
 
@@ -373,6 +466,7 @@ async function removeIgnore(qq: string) {
     :sub-mono="!NOTE_SUBS.includes(name)"
     :sub-note="NOTE_SUBS.includes(name)"
     :info="footInfo"
+    @close="closeDialog"
   >
     <template v-if="isForm">
       <UiField label="名称" required help="不能含方括号：/执行 用 [服务器名] 定界；最多20个字符">
@@ -386,24 +480,36 @@ async function removeIgnore(qq: string) {
         <UiInput
           v-model="f.host"
           :placeholder="name === 'add-server' ? 'mc-a1.example.net 或 …net:25565' : undefined"
+          @blur="maybeFetchMotdOnBlur"
         />
       </UiField>
       <UiField
         label="模组 API 端口"
         :help="name === 'add-server' ? '填了才会走模组 HTTP；留空时 /执行 与 /广播 不可用' : '清空并保存＝删掉 api_port，退回「未装模组」'"
       >
-        <UiInput v-model="f.port" placeholder="留空则视为未装模组" />
+        <UiInput v-model="f.port" placeholder="留空则视为未装模组" @blur="maybeFetchMotdOnBlur" />
       </UiField>
       <UiField label="备注" help="手填的值；显示在 /在线 卡片服务器名下方；最多50个字符">
         <UiInput v-model="f.remark" placeholder="整合包 A 3.4.0" />
       </UiField>
-      <UiField v-if="name === 'edit-server'" label="备注用 MOTD" help="卡片改显示服务端 motd，手填的值仍留着">
+      <UiField label="备注用 MOTD" help="卡片改显示服务端 motd，手填的值仍留着">
         <div class="rk">
           <UiSwitch :on="f.remark_src === 'motd'" @toggle="setRemarkSrc(f.remark_src !== 'motd')" />
-          <UiButton kind="ghost" :disabled="syncing" @click="syncRemarkMotd">立即同步</UiButton>
+          <UiButton v-if="name === 'edit-server'" kind="ghost" :disabled="syncing" @click="syncRemarkMotd">立即同步</UiButton>
+          <UiButton
+            v-else
+            kind="ghost"
+            :disabled="motdPreview.loading || !f.host.trim()"
+            @click="fetchMotdPreview"
+          >
+            <UiIcon v-if="!motdPreview.loading" name="refresh" :size="13" />{{ motdPreview.loading ? "获取中…" : "获取 MOTD" }}
+          </UiButton>
           <span class="rk-t">{{ motdTimeText() }}</span>
         </div>
-        <div class="rk-v" :class="{ off: f.remark_src !== 'motd' }">{{ motdValueText() }}</div>
+        <div
+          class="rk-v"
+          :class="{ off: f.remark_src !== 'motd', wrap: name === 'add-server', motd: hasMotdValue }"
+        >{{ motdValueText() }}</div>
       </UiField>
 
       <UiField
@@ -534,8 +640,26 @@ async function removeIgnore(qq: string) {
   white-space: nowrap;
 }
 
+/* 添加弹窗里的预取值/失败原因可能比一行长，允许换行；编辑弹窗保持单行省略 */
+.rk-v.wrap {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .rk-v.off {
   color: var(--ink4);
+}
+
+/* 真正取到的 MOTD 用主题蓝突出；提示语、获取中、失败原因仍走灰阶。
+   开关没开时退回淡灰蓝：能看出已经取到，但不会和开启态抢注意力。 */
+.rk-v.motd {
+  color: var(--ac);
+  font-weight: 500;
+}
+
+.rk-v.motd.off {
+  color: var(--motd-idle);
 }
 
 .err {

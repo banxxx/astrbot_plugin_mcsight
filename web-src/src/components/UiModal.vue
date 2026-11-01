@@ -2,6 +2,10 @@
 /* 弹窗规矩：遮罩点击与 Esc 都不关闭，只走按钮；同档位内尺寸恒定，
    高度按该档位最重状态定高；窄屏允许宽度收缩（max-width），高度不变。
    标题/副标题的字体与颜色按画布逐格分：等价命令行＝等宽+主色，说明行＝正体+灰。 */
+import { onBeforeUnmount, onMounted } from "vue";
+import UiIcon from "./UiIcon.vue";
+import { useIsMobile } from "../lib/useMediaQuery";
+
 withDefaults(
   defineProps<{
     cls?: "m-confirm" | "m-form" | "m-list" | "m-json";
@@ -14,14 +18,60 @@ withDefaults(
   }>(),
   { cls: "m-form", titleMono: false, subMono: false, subNote: false },
 );
+
+const emit = defineEmits<{ (e: "close"): void }>();
+const isMobile = useIsMobile();
+
+/* 弹窗打开期间锁住背后的文档滚动：手机上弹窗是整屏 sheet、内部 .mb 自己滚，
+   不锁的话头部/底部和滚动链会把背景页面一起带着滚，出现两条滚动条。
+   用 fixed body + 记录 scrollY 的方式，兼容 iOS Safari 对 overflow:hidden 的忽略。 */
+let lockDepth = 0;
+let lockedScrollY = 0;
+let lockedPadding = "";
+
+function lockPageScroll() {
+  if (lockDepth++ > 0) return;
+  const body = document.body;
+  lockedScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+  lockedPadding = body.style.paddingRight;
+  const scrollbar = Math.max(0, window.innerWidth - document.documentElement.clientWidth);
+  body.style.position = "fixed";
+  body.style.top = `-${lockedScrollY}px`;
+  body.style.left = "0";
+  body.style.right = "0";
+  body.style.width = "100%";
+  if (scrollbar > 0) body.style.paddingRight = `${scrollbar}px`;
+  document.documentElement.classList.add("modal-open");
+}
+
+function unlockPageScroll() {
+  if (lockDepth === 0) return;
+  lockDepth -= 1;
+  if (lockDepth > 0) return;
+  const body = document.body;
+  body.style.position = "";
+  body.style.top = "";
+  body.style.left = "";
+  body.style.right = "";
+  body.style.width = "";
+  body.style.paddingRight = lockedPadding;
+  document.documentElement.classList.remove("modal-open");
+  window.scrollTo(0, lockedScrollY);
+}
+
+onMounted(lockPageScroll);
+onBeforeUnmount(unlockPageScroll);
 </script>
 
 <template>
-  <div class="veil">
-    <div class="modal" :class="cls" role="dialog" :aria-label="title">
+  <div class="veil" :class="{ 'is-mobile': isMobile }">
+    <div class="modal" :class="[cls, { 'is-mobile': isMobile }]" role="dialog" aria-modal="true" :aria-label="title">
       <div class="mh">
         <h3 :class="titleMono ? 'mono' : ''">{{ title }}</h3>
         <div v-if="sub" class="ms" :class="[subMono ? 'mono' : '', subNote ? 'note' : '']">{{ sub }}</div>
+        <button v-if="isMobile" class="mx" type="button" aria-label="关闭" @click="emit('close')">
+          <UiIcon name="x" :size="20" />
+        </button>
       </div>
       <div class="mb"><slot /></div>
       <div class="mf">

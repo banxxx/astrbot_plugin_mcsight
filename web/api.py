@@ -326,6 +326,11 @@ async def view_server_create():
     remark_err = validate_remark(remark)
     if remark_err:
         return _err(remark_err)
+    remark_src = str(body.get("remark_src") or "").strip().lower()
+    if remark_src and remark_src not in REMARK_SOURCES:
+        return _err("备注来源只能是 manual 或 motd")
+    # 添加弹窗里先「获取 MOTD」时带回来的值：直接落缓存，省得创建后再查一次
+    remark_motd = clean_motd(str(body.get("remark_motd") or ""))
     token = str(body.get("token", "")).strip()
     if token:
         token_err = _validate_console_token(token)
@@ -336,8 +341,12 @@ async def view_server_create():
         return _err(f"添加失败：每个群最多绑定 {MAX_SERVERS_PER_GROUP} 个服务器。")
     if not cm.add_server(name, host, port):
         return _err(f"失败（名称已存在）：{name}")
-    if remark:
-        cm.edit_server(name, remark=remark)
+    if remark or remark_src:
+        ok, why = cm.edit_server(name, remark=remark, remark_src=remark_src or None)
+        if not ok:
+            return _err(why)
+    if remark_src == REMARK_SRC_MOTD and remark_motd:
+        cm.set_remark_motd(name, remark_motd, int(time.time()))
     if token:
         cm.edit_server_console_token(name, token)
     return _ok(_group_payload(gid))
@@ -619,6 +628,30 @@ async def _read_motd(entry: dict, wm, token: str):
         return text, ""
     reasons.append(str(raw.get("error") or "SLP 没返回 motd（服务器没开着？）"))
     return "", "；".join(reasons)
+
+
+async def view_server_motd_preview():
+    """添加服务器前按表单里的 host / 模组端口取一次 MOTD，只回显不落盘。
+
+    走的是和「立即同步」同一条采集链：配了 api_port 先问模组 /api/status，
+    拿不到再回落 SLP；没配 api_port 就直接走 SLP。所以只要地址填对，
+    即使服务器还没加进配置也能先看到 MOTD。
+    """
+    body, err = await _body()
+    if err:
+        return _err(err)
+    host = str(body.get("host", "")).strip()
+    host_err = validate_host(host, allow_private=True)
+    if host_err:
+        return _err(host_err)
+    port, port_err = _parse_port(body.get("api_port"))
+    if port_err:
+        return _err(port_err)
+    entry = {"name": "", "host": host, "api_port": port}
+    text, why = await _read_motd(entry, WhitelistManager(), _mod_token())
+    if not text:
+        return _err(why or "没拿到 MOTD")
+    return _ok({"motd": text})
 
 
 async def view_remark_sync():
@@ -964,6 +997,7 @@ ROUTES = (
     ("server/batch_add", view_server_batch_add, ["POST"], "批量添加服务器"),
     ("server/batch_remove", view_server_batch_remove, ["POST"], "批量删除服务器"),
     ("server/whitelist", view_server_whitelist, ["POST"], "下发模组登录开关"),
+    ("server/motd_preview", view_server_motd_preview, ["POST"], "添加前预览服务器 MOTD"),
     ("server/remark_sync", view_remark_sync, ["POST"], "同步各服 MOTD 到备注缓存"),
     ("server/mod_state", view_server_mod_state, ["GET"], "读取各服模组状态"),
     ("json/group", view_json_group, ["GET"], "群配置文件预览"),

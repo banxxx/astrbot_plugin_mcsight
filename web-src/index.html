@@ -7,6 +7,87 @@
   </head>
   <body>
     <div id="app"></div>
+    <div id="boot-fallback" role="status">正在加载 MCSight…</div>
+    <style>
+      #boot-fallback {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        color: #7a8494;
+        font: 14px/1.7 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        text-align: center;
+        overflow-wrap: anywhere;
+        pointer-events: none;
+      }
+      #boot-fallback.is-error {
+        color: #d9534f;
+      }
+    </style>
+    <noscript>
+      <div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;color:#d9534f;font:14px/1.7 system-ui,sans-serif">
+        配置页需要启用 JavaScript，请在浏览器设置里允许本站运行脚本。
+      </div>
+    </noscript>
+    <script>
+      /* 启动兜底：脚本没加载/初始化抛错时，至少把原因显示出来，不要留一整页空白。
+         提示放在 #app 外面，Vue 挂载失败时不会被一起清掉；挂载成功后再移除。 */
+      (function () {
+        var el = document.getElementById("boot-fallback");
+        if (!el) return;
+        var timer = 0;
+        function mounted() {
+          return !!document.querySelector(".shell");
+        }
+        function hideIfMounted() {
+          if (!mounted()) return false;
+          window.clearTimeout(timer);
+          el.remove();
+          return true;
+        }
+        function show(prefix, detail) {
+          /* 已经挂载成功就不再抢屏：运行期的请求错误由页面自己的 toast 处理。 */
+          if (mounted()) return;
+          window.clearTimeout(timer);
+          el.className = "is-error";
+          el.textContent = prefix + (detail ? "：" + detail : "");
+        }
+        if (!hideIfMounted()) {
+          var observer = new MutationObserver(function () {
+            if (hideIfMounted()) observer.disconnect();
+          });
+          observer.observe(document.documentElement, { childList: true, subtree: true });
+          timer = window.setTimeout(function () {
+            if (!mounted()) {
+              show(
+                "配置页脚本没有启动",
+                "请先刷新；仍然空白的话，把浏览器型号和这行提示告诉开发者。",
+              );
+            }
+          }, 6000);
+        }
+        window.addEventListener(
+          "error",
+          function (e) {
+            if (e && e.target && e.target.tagName === "SCRIPT") {
+              var name = String(e.target.src || "").split("/").pop().split("?")[0];
+              show("配置页脚本加载失败", name || "脚本");
+              return;
+            }
+            show("配置页脚本出错", e && e.message ? e.message : "");
+          },
+          true,
+        );
+        window.addEventListener("unhandledrejection", function (e) {
+          var r = e && e.reason;
+          show("配置页请求出错", r && r.message ? r.message : String(r || ""));
+        });
+      })();
+    </script>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

@@ -7,7 +7,10 @@ import UiNotice from "../components/UiNotice.vue";
 import UiSecretInput from "../components/UiSecretInput.vue";
 import UiSwitch from "../components/UiSwitch.vue";
 import { S, fail, loadConfig, loading, openDialog } from "../store";
+import { useIsMobile } from "../lib/useMediaQuery";
 import type { ConfigItem } from "../lib/types";
+
+const isMobile = useIsMobile();
 
 onMounted(() => {
   loadConfig().catch(fail);
@@ -116,42 +119,73 @@ const groups = computed(() => {
       AstrBot 自带的面板表单与本页面写同一份 config 文件：两边同时打开时，后保存的会覆盖先保存的
     </UiNotice>
 
-    <section v-for="grp in groups" :key="grp.title" class="card">
+    <section v-for="grp in groups" :key="grp.title" :class="isMobile ? 'm-card' : 'card'">
       <div class="ch">
         <span class="bar" />
         <h2>{{ grp.title }}</h2>
         <span class="hint">{{ [sectionDesc[grp.title], grp.items.length + " 个键"].filter(Boolean).join(" · ") }}</span>
       </div>
 
-      <div v-for="it in grp.items" :key="it.key" class="prow">
-        <div class="pl">
-          <b>{{ label(it) }}</b>
-          <span>{{ meta(it) }}</span>
-        </div>
+      <template v-if="isMobile">
+        <div v-for="it in grp.items" :key="it.key" class="m-cfgrow" :class="{ bool: it.type === 'bool' }">
+          <div class="m-cfgrow-t">
+            <b>{{ label(it) }}</b>
+            <span>{{ meta(it) }}</span>
+          </div>
 
-        <div class="pr">
-          <UiSwitch v-if="it.type === 'bool'" :on="boolVal(it)" @toggle="setDraft(it, !boolVal(it))" />
-          <UiSecretInput
-            v-else-if="it.secret"
-            :style="cellStyle(it)"
-            :model-value="draft(it)"
-            :has-value="it.has_value && !!it.key"
-            @update:model-value="(v: string) => setDraft(it, v)"
-          />
-          <template v-else-if="it.type === 'list'">
-            <span class="cnt">名单内 {{ listCount(it) }} 个</span>
-            <UiButton kind="line" @click="openDialog('list-manage', { item: it, label: label(it) })"><UiIcon name="list" :size="13" />管理名单</UiButton>
-          </template>
-          <UiInput
-            v-else
-            class="cell"
-            :style="cellStyle(it)"
-            :model-value="draft(it)"
-            :placeholder="it.default === '' || it.default === null ? '（空）' : String(it.default ?? '')"
-            @update:model-value="(v: string) => setDraft(it, v)"
-          />
+          <div class="m-cfgrow-c">
+            <UiSwitch v-if="it.type === 'bool'" :on="boolVal(it)" @toggle="setDraft(it, !boolVal(it))" />
+            <UiSecretInput
+              v-else-if="it.secret"
+              :model-value="draft(it)"
+              :has-value="it.has_value && !!it.key"
+              @update:model-value="(v: string) => setDraft(it, v)"
+            />
+            <template v-else-if="it.type === 'list'">
+              <span class="m-count">名单内 {{ listCount(it) }} 个</span>
+              <UiButton kind="line" @click="openDialog('list-manage', { item: it, label: label(it) })"><UiIcon name="list" :size="14" />管理名单</UiButton>
+            </template>
+            <UiInput
+              v-else
+              :model-value="draft(it)"
+              :placeholder="it.default === '' || it.default === null ? '（空）' : String(it.default ?? '')"
+              @update:model-value="(v: string) => setDraft(it, v)"
+            />
+          </div>
         </div>
-      </div>
+      </template>
+
+      <template v-else>
+        <div v-for="it in grp.items" :key="it.key" class="prow">
+          <div class="pl">
+            <b>{{ label(it) }}</b>
+            <span>{{ meta(it) }}</span>
+          </div>
+
+          <div class="pr">
+            <UiSwitch v-if="it.type === 'bool'" :on="boolVal(it)" @toggle="setDraft(it, !boolVal(it))" />
+            <UiSecretInput
+              v-else-if="it.secret"
+              :style="cellStyle(it)"
+              :model-value="draft(it)"
+              :has-value="it.has_value && !!it.key"
+              @update:model-value="(v: string) => setDraft(it, v)"
+            />
+            <template v-else-if="it.type === 'list'">
+              <span class="cnt">名单内 {{ listCount(it) }} 个</span>
+              <UiButton kind="line" @click="openDialog('list-manage', { item: it, label: label(it) })"><UiIcon name="list" :size="13" />管理名单</UiButton>
+            </template>
+            <UiInput
+              v-else
+              class="cell"
+              :style="cellStyle(it)"
+              :model-value="draft(it)"
+              :placeholder="it.default === '' || it.default === null ? '（空）' : String(it.default ?? '')"
+              @update:model-value="(v: string) => setDraft(it, v)"
+            />
+          </div>
+        </div>
+      </template>
     </section>
 
     <UiNotice v-if="S.error" tone="bad" class="errline">{{ S.error }}</UiNotice>

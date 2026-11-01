@@ -13,6 +13,7 @@ import type {
   IgnorePayload,
   JsonPayload,
   ModStatePayload,
+  MotdPreviewPayload,
   ReloadPayload,
   SecretPayload,
   SummaryPayload,
@@ -51,8 +52,20 @@ export const api = {
   ignoreAdd: (gid: string, qq: string) => post<IgnorePayload>("group/ignore_add", { gid, qq }),
   ignoreRemove: (gid: string, qq: string) => post<IgnorePayload>("group/ignore_remove", { gid, qq }),
 
-  serverCreate: (gid: string, f: { name: string; host: string; api_port: string; remark: string; token: string }) =>
-    post<GroupPayload>("server/create", { gid, ...f }),
+  serverCreate: (
+    gid: string,
+    f: {
+      name: string;
+      host: string;
+      api_port: string;
+      remark: string;
+      remark_src: string;
+      remark_motd: string;
+      token: string;
+    },
+  ) => post<GroupPayload>("server/create", { gid, ...f }),
+  serverMotdPreview: (host: string, api_port: string) =>
+    post<MotdPreviewPayload>("server/motd_preview", { host, api_port }),
   serverUpdate: (
     gid: string,
     f: { name: string; new_name: string; host: string; api_port: string; remark: string; remark_src?: string },

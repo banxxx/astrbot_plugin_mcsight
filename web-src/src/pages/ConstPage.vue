@@ -3,7 +3,10 @@ import { computed, onMounted } from "vue";
 import UiIcon from "../components/UiIcon.vue";
 import UiNotice from "../components/UiNotice.vue";
 import { S, fail, loadConstants, loading } from "../store";
+import { useIsMobile } from "../lib/useMediaQuery";
 import type { ConstRow } from "../lib/types";
+
+const isMobile = useIsMobile();
 
 onMounted(() => {
   loadConstants().catch(fail);
@@ -61,7 +64,27 @@ const groups = computed(() => {
       唯一配置读入口：whitelist_config 的 _get_config_value / _get_config_list。
     </UiNotice>
 
-    <section class="card">
+    <template v-if="isMobile">
+      <section v-for="grp in groups" :key="grp.title" class="m-card">
+        <div class="m-card-h">
+          <span class="bar" />
+          <h2>{{ grp.title }}</h2>
+          <span class="m-count">{{ grp.rows.length }} 项</span>
+        </div>
+        <div v-for="r in grp.rows" :key="r.name" class="m-const">
+          <div class="m-const-h">
+            <b>{{ r.title }}</b>
+            <span class="mono">{{ r.value }}{{ r.unit }}</span>
+          </div>
+          <div class="m-const-kv"><span>常量名</span><code class="mono">{{ r.name }}</code></div>
+          <div class="m-const-kv"><span>源码</span><code class="mono">{{ r.source }}</code></div>
+        </div>
+      </section>
+      <div v-if="loading && !S.constRows.length" class="m-empty">读取中…</div>
+      <div v-else class="m-foot">共 {{ S.constRows.length }} 项</div>
+    </template>
+
+    <section v-else class="card">
       <div class="th">
         <div class="cols">
           <span class="c-t1">参数含义</span><span class="c-t2">常量名</span><span class="c-t3">当前值</span><span

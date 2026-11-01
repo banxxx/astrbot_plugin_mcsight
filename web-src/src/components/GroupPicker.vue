@@ -36,7 +36,14 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
 
 <template>
   <div ref="box" class="pick">
-    <button class="trig" :class="{ on: open }" type="button" @click="open = !open">
+    <button
+      class="trig"
+      :class="{ on: open }"
+      type="button"
+      aria-haspopup="listbox"
+      :aria-expanded="open"
+      @click="open = !open"
+    >
       <b>{{ S.gid || "无群" }}</b>
       <i>· {{ currentCount }} 台</i>
       <UiIcon :name="open ? 'chevron-up' : 'chevron-down'" :size="14" />
@@ -45,15 +52,17 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
     <div v-if="open" class="panel">
       <div class="filter">
         <UiIcon name="search" :size="13" />
-        <input v-model="filter" placeholder="输入群号筛选" />
+        <input v-model="filter" aria-label="输入群号筛选" placeholder="输入群号筛选" />
       </div>
-      <div class="list">
+      <div class="list" role="listbox" aria-label="群列表">
         <button
           v-for="g in list"
           :key="g.gid"
           class="it"
           :class="{ on: g.gid === S.gid }"
           type="button"
+          role="option"
+          :aria-selected="g.gid === S.gid"
           @click="pick(g.gid)"
         >
           <span>{{ g.gid }}</span>

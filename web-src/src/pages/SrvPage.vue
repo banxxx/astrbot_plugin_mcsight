@@ -7,8 +7,10 @@ import UiSwitch from "../components/UiSwitch.vue";
 import UiNotice from "../components/UiNotice.vue";
 import GroupPicker from "../components/GroupPicker.vue";
 import { S, api, currentGroup, loadGroup, loading, openDialog, run, setWhitelist, setHidden, toast } from "../store";
+import { useIsMobile } from "../lib/useMediaQuery";
 import type { ModState, ServerEntry } from "../lib/types";
 
+const isMobile = useIsMobile();
 const g = computed(() => currentGroup.value);
 const servers = computed(() => g.value?.servers ?? []);
 const modCount = computed(() => g.value?.mod_count ?? 0);
@@ -91,6 +93,30 @@ function remarkTitle(s: ServerEntry): string {
   return s.remark_motd ? `手填的值 · 另存着上次采到的 motd：${s.remark_motd}` : "手填的值";
 }
 
+/* 手机卡片空间小：同一句解释不在「模组状态」和「登录开关」里重复两遍 */
+function modNote(s: ServerEntry): string {
+  if (s.api_port === null) return "没写 api_port：该服按未安装模组处理";
+  const st = modState(s);
+  if (!st) return S.modStateLoading ? "" : "尚未读到该服状态";
+  if (!st.reachable) return st.reason || "连不上该服的模组 API";
+  if (st.enabled === null) return st.reason || "模组版本没有登录开关字段";
+  return "";
+}
+
+function tokenNote(s: ServerEntry): string {
+  if (!s.has_token) return "/执行 对该服不可用";
+  if (s.api_port === null) return "该服未配模组端口，/执行 发不出去";
+  return "";
+}
+
+function modShort(s: ServerEntry): string {
+  if (s.api_port === null) return "不可用";
+  const state = S.modStates[s.name];
+  if (!state) return S.modStateLoading ? "读取中…" : "不可用";
+  if (state.enabled === null) return "不可用";
+  return state.enabled ? "已开启" : "已关闭";
+}
+
 async function move(srv: ServerEntry, dir: -1 | 1) {
   const at = servers.value.findIndex((s) => s.name === srv.name);
   const index = at + dir;
@@ -105,7 +131,17 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
 
 <template>
   <div class="page">
-    <section class="gbar">
+    <section v-if="isMobile" class="m-groupbar">
+      <div class="m-groupbar-top">
+        <label>当前群</label>
+        <GroupPicker />
+      </div>
+      <div class="m-groupbar-acts">
+        <UiButton kind="ghost" @click="openDialog('add-group')"><UiIcon name="plus" :size="14" />新增群</UiButton>
+        <UiButton kind="danger-light" :disabled="!g" @click="openDialog('del-group')">删除群配置</UiButton>
+      </div>
+    </section>
+    <section v-else class="gbar">
       <span class="bar" />
       <label>当前群</label>
       <GroupPicker />
@@ -122,7 +158,19 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
       </div>
     </section>
 
-    <section class="stats">
+    <section v-if="isMobile" class="m-stats">
+      <div class="m-stat"><label>群组配置文件</label><b>{{ groupCount }}</b><em>servers_&lt;群号&gt;.json</em></div>
+      <div class="m-stat"><label>服务器条目</label><b>{{ servers.length }} / {{ S.maxServers }}</b></div>
+      <div class="m-stat">
+        <label>已装模组</label><b>{{ modCount }} / {{ servers.length }}</b>
+        <span class="cap"><i :style="{ width: servers.length ? (modCount / servers.length) * 100 + '%' : '0%' }" /></span>
+      </div>
+      <div class="m-stat">
+        <label>已配命令 Token</label><b>{{ tokenCount }} / {{ servers.length }}</b>
+        <span class="cap warn"><i :style="{ width: servers.length ? (tokenCount / servers.length) * 100 + '%' : '0%' }" /></span>
+      </div>
+    </section>
+    <section v-else class="stats">
       <div class="st"><label>群组配置文件</label><b>{{ groupCount }}</b><em>servers_&lt;群号&gt;.json</em></div>
       <span class="sp" />
       <div class="st"><label>服务器条目 / 本群</label><b>{{ servers.length }} / {{ S.maxServers }}</b></div>
@@ -138,101 +186,212 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
       </div>
     </section>
 
-    <section class="card">
-      <div class="ch">
-        <span class="bar" />
-        <h2>服务器条目</h2>
-        <div class="acts">
+    <template v-if="isMobile">
+      <section class="m-sec">
+        <div class="m-sec-h">
+          <span class="bar" />
+          <h2>服务器条目</h2>
+          <span class="m-count">{{ servers.length }} / {{ S.maxServers }}</span>
+        </div>
+        <div class="m-tools">
           <UiButton kind="tool" :disabled="!g" @click="openDialog('json-group')">查看 JSON</UiButton>
           <UiButton kind="tool" :disabled="servers.length === 0" @click="openDialog('batch-del')">批量删除</UiButton>
           <UiButton kind="tool" :disabled="!g" @click="openDialog('batch-add')">批量添加</UiButton>
-          <UiButton kind="pri" :disabled="!g" @click="openDialog('add-server')"><UiIcon name="plus" :size="14" />添加服务器</UiButton>
+          <UiButton kind="pri" :disabled="!g" @click="openDialog('add-server')"><UiIcon name="plus" :size="15" />添加服务器</UiButton>
         </div>
-      </div>
+      </section>
 
-      <div class="th">
-        <div class="cols">
-          <span class="c-name">名称</span><span class="c-host">主机地址</span><span class="c-port">API 端口</span>
-          <span class="c-rmk">备注</span><span class="c-tk">命令 Token</span><span class="c-mod">模组状态</span>
-          <span class="c-wl">登录开关</span><span class="c-op">操作</span>
+      <div v-if="servers.length" class="m-list">
+        <article v-for="(s, i) in servers" :key="s.name" class="srv-card" :class="{ hid: s.hidden }">
+          <div class="srv-h">
+            <b class="srv-name">{{ s.name }}</b>
+            <UiBadge v-if="s.hidden" tone="off">已隐藏</UiBadge>
+          </div>
+          <dl class="srv-kv">
+            <div><dt>地址</dt><dd>{{ s.host }}</dd></div>
+            <div><dt>API 端口</dt><dd :class="{ dash: s.api_port === null }">{{ s.api_port ?? "—" }}</dd></div>
+            <div>
+              <dt>备注</dt>
+              <dd>
+                <UiBadge v-if="s.remark_src === 'motd' && s.remark_motd" tone="neutral">MOTD</UiBadge>
+                <span :class="{ dash: !s.remark_display }">{{ s.remark_display || "—" }}</span>
+              </dd>
+            </div>
+            <div>
+              <dt>命令 Token</dt>
+              <dd>
+                <UiBadge :tone="s.has_token ? 'neutral' : 'off'">{{ s.has_token ? "已配置" : "未设置" }}</UiBadge>
+                <span v-if="tokenNote(s)" class="mnote">{{ tokenNote(s) }}</span>
+              </dd>
+            </div>
+            <div>
+              <dt>模组状态</dt>
+              <dd>
+                <UiBadge :tone="modBadge(s).tone">{{ modBadge(s).text }}</UiBadge>
+                <span v-if="modNote(s)" class="mnote">{{ modNote(s) }}</span>
+              </dd>
+            </div>
+            <div class="srv-sw">
+              <dt>登录开关</dt>
+              <dd>
+                <UiSwitch
+                  :on="modOn(s)"
+                  :disabled="!modKnown(s)"
+                  :title="modTitle(s)"
+                  @toggle="setWhitelist(s.name, !modOn(s))"
+                />
+                <span class="mnote">{{ modShort(s) }}</span>
+              </dd>
+            </div>
+          </dl>
+          <div class="srv-acts">
+            <button class="mact" type="button" @click="openDialog('edit-server', { server: s, index: i })">编辑</button>
+            <button class="mact" type="button" @click="setHidden(s.name, !s.hidden)">{{ s.hidden ? "显示" : "隐藏" }}</button>
+            <button class="mact" type="button" title="上移" aria-label="上移" :disabled="i === 0" @click="move(s, -1)"><UiIcon name="arrow-up" :size="15" /></button>
+            <button class="mact" type="button" title="下移" aria-label="下移" :disabled="i === servers.length - 1" @click="move(s, 1)"><UiIcon name="arrow-down" :size="15" /></button>
+            <button class="mact danger" type="button" @click="openDialog('del-server', { server: s })">删除</button>
+          </div>
+        </article>
+      </div>
+      <div v-else-if="loading && !servers.length" class="m-empty">读取中…</div>
+      <div v-else-if="g" class="m-empty">本群还没有服务器条目，点上方「添加服务器」建第一条。</div>
+      <div v-else class="m-empty">还没有群配置文件</div>
+
+      <div class="m-foot">共 {{ servers.length }} 条 · 每群上限 {{ S.maxServers }} 台（代码常量 MAX_SERVERS_PER_GROUP）</div>
+
+      <section class="m-card">
+        <div class="m-card-h">
+          <span class="bar" />
+          <h2>本群开关</h2>
+          <span class="m-count">servers_&lt;群号&gt;.json</span>
         </div>
-      </div>
-
-      <div v-for="(s, i) in servers" :key="s.name" class="row" :class="{ hid: s.hidden }">
-        <div class="cols">
-          <span class="c-name"><span class="cell-label">名称</span><b class="nm ell">{{ s.name }}</b><UiBadge v-if="s.hidden" tone="off">已隐藏</UiBadge></span>
-          <span class="c-host"><span class="cell-label">地址</span><span class="ell">{{ s.host }}</span></span>
-          <span class="c-port"><span class="cell-label">端口</span><span :class="{ dash: s.api_port === null }">{{ s.api_port ?? "—" }}</span></span>
-          <span class="c-rmk"><span class="cell-label">备注</span><UiBadge v-if="s.remark_src === 'motd' && s.remark_motd" tone="neutral" title="该值来自服务端 motd">MOTD</UiBadge><span class="ell" :class="{ dash: !s.remark_display }" :title="remarkTitle(s)">{{ s.remark_display || "—" }}</span></span>
-          <span class="c-tk"><UiBadge :tone="s.has_token ? 'neutral' : 'off'" :title="tokTitle(s)">{{ s.has_token ? "已配置" : "未设置" }}</UiBadge></span>
-          <span class="c-mod">
-            <UiBadge :tone="modBadge(s).tone" :title="modBadge(s).title">{{ modBadge(s).text }}</UiBadge>
-          </span>
-          <span class="c-wl">
-            <span class="cell-label">登录开关</span>
-            <UiSwitch
-              :on="modOn(s)"
-              :disabled="!modKnown(s)"
-              :title="modTitle(s)"
-              @toggle="setWhitelist(s.name, !modOn(s))"
-            />
-          </span>
-          <span class="c-op ops">
-            <button class="lnk" type="button" @click="openDialog('edit-server', { server: s, index: i })">编辑</button>
-            <button class="lnk" type="button" :title="s.hidden ? '取消隐藏：/在线 会重新采集并出这张卡' : '隐藏：/在线 不再采集这台，也不出卡片'" @click="setHidden(s.name, !s.hidden)">{{ s.hidden ? "显示" : "隐藏" }}</button>
-            <button class="arw" type="button" title="上移" :disabled="i === 0" @click="move(s, -1)"><UiIcon name="arrow-up" :size="12" /></button>
-            <button class="arw" type="button" title="下移" :disabled="i === servers.length - 1" @click="move(s, 1)"><UiIcon name="arrow-down" :size="12" /></button>
-            <button class="lnk bad" type="button" @click="openDialog('del-server', { server: s })">删除</button>
-          </span>
+        <div class="m-swrow">
+          <div class="m-swrow-t">
+            <b>上次在线显示</b>
+            <span>开启后 /在线 会显示服务器最后活动时间</span>
+            <em>/上次在线 开|关</em>
+          </div>
+          <UiSwitch :on="!!g?.last_online_enabled" :disabled="!g" @toggle="toggleFlag('last_online_enabled', !g?.last_online_enabled)" />
         </div>
-      </div>
-
-      <div v-if="g && !servers.length" class="empty">本群还没有服务器条目，点右上「添加服务器」建第一条。</div>
-
-      <div class="tf">
-        <span v-if="loading && !servers.length">读取中…</span>
-        <span v-else>共 {{ servers.length }} 条 · 每群上限 {{ S.maxServers }} 台（代码常量 MAX_SERVERS_PER_GROUP）</span>
-        <span class="tip"><UiIcon name="arrow-up-down" :size="12" />↑↓ 对应 /mc move（位置序号从 0 开始）</span>
-      </div>
-    </section>
-
-    <section class="card swc">
-      <div class="ch">
-        <span class="bar" />
-        <h2>本群开关</h2>
-        <span class="hint">与服务器条目同文件（servers_&lt;群号&gt;.json）</span>
-      </div>
-
-      <div class="swrow">
-        <div class="sl">
-          <b>上次在线显示</b>
-          <span>开启后 /在线 会显示服务器最后活动时间</span>
-          <em>/上次在线 开|关</em>
+        <div class="m-swrow">
+          <div class="m-swrow-t">
+            <b>昵称检测</b>
+            <span>开启后本群可使用 /检测昵称</span>
+            <em>/mc nicknamecheck 开|关</em>
+          </div>
+          <UiSwitch :on="!!g?.nickname_check_enabled" :disabled="!g" @toggle="toggleFlag('nickname_check_enabled', !g?.nickname_check_enabled)" />
         </div>
-        <UiSwitch :on="!!g?.last_online_enabled" :disabled="!g" @toggle="toggleFlag('last_online_enabled', !g?.last_online_enabled)" />
-      </div>
+        <div class="m-swrow">
+          <div class="m-swrow-t">
+            <b>昵称检测忽略名单</b>
+            <span>名单内的 QQ 不参与名片校验</span>
+            <em>/mc nicknamecheck 忽略|取消忽略 &lt;QQ&gt;</em>
+          </div>
+          <div class="m-swrow-r">
+            <span class="m-count">名单内 {{ ignoreCount }} 个 QQ</span>
+            <UiButton kind="line" :disabled="!g" @click="openDialog('ignore-list')"><UiIcon name="list" :size="14" />管理名单</UiButton>
+          </div>
+        </div>
+      </section>
+    </template>
 
-      <div class="swrow">
-        <div class="sl">
-          <b>昵称检测</b>
-          <span>开启后本群可使用 /检测昵称</span>
-          <em>/mc nicknamecheck 开|关</em>
+    <template v-else>
+      <section class="card">
+        <div class="ch">
+          <span class="bar" />
+          <h2>服务器条目</h2>
+          <div class="acts">
+            <UiButton kind="tool" :disabled="!g" @click="openDialog('json-group')">查看 JSON</UiButton>
+            <UiButton kind="tool" :disabled="servers.length === 0" @click="openDialog('batch-del')">批量删除</UiButton>
+            <UiButton kind="tool" :disabled="!g" @click="openDialog('batch-add')">批量添加</UiButton>
+            <UiButton kind="pri" :disabled="!g" @click="openDialog('add-server')"><UiIcon name="plus" :size="14" />添加服务器</UiButton>
+          </div>
         </div>
-        <UiSwitch :on="!!g?.nickname_check_enabled" :disabled="!g" @toggle="toggleFlag('nickname_check_enabled', !g?.nickname_check_enabled)" />
-      </div>
 
-      <div class="swrow">
-        <div class="sl">
-          <b>昵称检测忽略名单</b>
-          <span>名单内的 QQ 不参与名片校验</span>
-          <em>/mc nicknamecheck 忽略|取消忽略 &lt;QQ&gt;</em>
+        <div class="th">
+          <div class="cols">
+            <span class="c-name">名称</span><span class="c-host">主机地址</span><span class="c-port">API 端口</span>
+            <span class="c-rmk">备注</span><span class="c-tk">命令 Token</span><span class="c-mod">模组状态</span>
+            <span class="c-wl">登录开关</span><span class="c-op">操作</span>
+          </div>
         </div>
-        <div class="sr">
-          <span class="cnt">名单内 {{ ignoreCount }} 个 QQ</span>
-          <UiButton kind="line" :disabled="!g" @click="openDialog('ignore-list')"><UiIcon name="list" :size="13" />管理名单</UiButton>
+
+        <div v-for="(s, i) in servers" :key="s.name" class="row" :class="{ hid: s.hidden }">
+          <div class="cols">
+            <span class="c-name"><span class="cell-label">名称</span><b class="nm ell">{{ s.name }}</b><UiBadge v-if="s.hidden" tone="off">已隐藏</UiBadge></span>
+            <span class="c-host"><span class="cell-label">地址</span><span class="ell">{{ s.host }}</span></span>
+            <span class="c-port"><span class="cell-label">端口</span><span :class="{ dash: s.api_port === null }">{{ s.api_port ?? "—" }}</span></span>
+            <span class="c-rmk"><span class="cell-label">备注</span><UiBadge v-if="s.remark_src === 'motd' && s.remark_motd" tone="neutral" title="该值来自服务端 motd">MOTD</UiBadge><span class="ell" :class="{ dash: !s.remark_display }" :title="remarkTitle(s)">{{ s.remark_display || "—" }}</span></span>
+            <span class="c-tk"><UiBadge :tone="s.has_token ? 'neutral' : 'off'" :title="tokTitle(s)">{{ s.has_token ? "已配置" : "未设置" }}</UiBadge></span>
+            <span class="c-mod">
+              <UiBadge :tone="modBadge(s).tone" :title="modBadge(s).title">{{ modBadge(s).text }}</UiBadge>
+            </span>
+            <span class="c-wl">
+              <span class="cell-label">登录开关</span>
+              <UiSwitch
+                :on="modOn(s)"
+                :disabled="!modKnown(s)"
+                :title="modTitle(s)"
+                @toggle="setWhitelist(s.name, !modOn(s))"
+              />
+            </span>
+            <span class="c-op ops">
+              <button class="lnk" type="button" @click="openDialog('edit-server', { server: s, index: i })">编辑</button>
+              <button class="lnk" type="button" :title="s.hidden ? '取消隐藏：/在线 会重新采集并出这张卡' : '隐藏：/在线 不再采集这台，也不出卡片'" @click="setHidden(s.name, !s.hidden)">{{ s.hidden ? "显示" : "隐藏" }}</button>
+              <button class="arw" type="button" title="上移" :disabled="i === 0" @click="move(s, -1)"><UiIcon name="arrow-up" :size="12" /></button>
+              <button class="arw" type="button" title="下移" :disabled="i === servers.length - 1" @click="move(s, 1)"><UiIcon name="arrow-down" :size="12" /></button>
+              <button class="lnk bad" type="button" @click="openDialog('del-server', { server: s })">删除</button>
+            </span>
+          </div>
         </div>
-      </div>
-    </section>
+
+        <div v-if="g && !servers.length" class="empty">本群还没有服务器条目，点右上「添加服务器」建第一条。</div>
+
+        <div class="tf">
+          <span v-if="loading && !servers.length">读取中…</span>
+          <span v-else>共 {{ servers.length }} 条 · 每群上限 {{ S.maxServers }} 台（代码常量 MAX_SERVERS_PER_GROUP）</span>
+          <span class="tip"><UiIcon name="arrow-up-down" :size="12" />↑↓ 对应 /mc move（位置序号从 0 开始）</span>
+        </div>
+      </section>
+
+      <section class="card swc">
+        <div class="ch">
+          <span class="bar" />
+          <h2>本群开关</h2>
+          <span class="hint">与服务器条目同文件（servers_&lt;群号&gt;.json）</span>
+        </div>
+
+        <div class="swrow">
+          <div class="sl">
+            <b>上次在线显示</b>
+            <span>开启后 /在线 会显示服务器最后活动时间</span>
+            <em>/上次在线 开|关</em>
+          </div>
+          <UiSwitch :on="!!g?.last_online_enabled" :disabled="!g" @toggle="toggleFlag('last_online_enabled', !g?.last_online_enabled)" />
+        </div>
+
+        <div class="swrow">
+          <div class="sl">
+            <b>昵称检测</b>
+            <span>开启后本群可使用 /检测昵称</span>
+            <em>/mc nicknamecheck 开|关</em>
+          </div>
+          <UiSwitch :on="!!g?.nickname_check_enabled" :disabled="!g" @toggle="toggleFlag('nickname_check_enabled', !g?.nickname_check_enabled)" />
+        </div>
+
+        <div class="swrow">
+          <div class="sl">
+            <b>昵称检测忽略名单</b>
+            <span>名单内的 QQ 不参与名片校验</span>
+            <em>/mc nicknamecheck 忽略|取消忽略 &lt;QQ&gt;</em>
+          </div>
+          <div class="sr">
+            <span class="cnt">名单内 {{ ignoreCount }} 个 QQ</span>
+            <UiButton kind="line" :disabled="!g" @click="openDialog('ignore-list')"><UiIcon name="list" :size="13" />管理名单</UiButton>
+          </div>
+        </div>
+      </section>
+    </template>
 
     <UiNotice v-if="S.error" tone="bad" class="errline">{{ S.error }}</UiNotice>
   </div>

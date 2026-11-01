@@ -14,6 +14,8 @@
   --ac-soft: #edf0fa;
   --ac-line: #c9d2ee;
   --ac-deep: #33417f;
+  /* 已取到 MOTD、但开关没开：淡灰蓝，和未取到的提示灰区分开 */
+  --motd-idle: #7d88a8;
   --ink: #1e2532;
   --ink2: #55606f;
   --ink3: #8892a2;
@@ -51,6 +53,8 @@
   --ac-soft: #232b45;
   --ac-line: #3b4770;
   --ac-deep: #c2cbf5;
+  /* 已取到 MOTD、但开关没开：淡灰蓝，和未取到的提示灰区分开 */
+  --motd-idle: #8d97b5;
   --ink: #e4e9f4;
   --ink2: #aab4c8;
   --ink3: #7e8798;
@@ -106,4 +110,10 @@ body {
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+}
+
+/* 弹窗打开时背景页面不再滚；body 的 fixed 锁在 UiModal 里做，这里兜住桌面/旧内核 */
+html.modal-open,
+html.modal-open body {
+  overflow: hidden;
 }

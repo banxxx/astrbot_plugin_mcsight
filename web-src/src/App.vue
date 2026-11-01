@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import UiIcon from "./components/UiIcon.vue";
 import UiButton from "./components/UiButton.vue";
 import DialogHost from "./components/DialogHost.vue";
@@ -9,6 +9,7 @@ import ConstPage from "./pages/ConstPage.vue";
 import MapPage from "./pages/MapPage.vue";
 import HelpPage from "./pages/HelpPage.vue";
 import { S, boot, dirtyCount, reloadPlugin, saveDrafts } from "./store";
+import { useIsMobile } from "./lib/useMediaQuery";
 import type { PageKey } from "./store";
 
 const NAV: { group: string; items: { key: PageKey; label: string; icon: string }[] }[] = [
@@ -39,45 +40,101 @@ const PAGES: Record<PageKey, unknown> = {
 
 const pageComp = computed(() => PAGES[S.page]);
 
+const isMobile = useIsMobile();
+const menuOpen = ref(false);
+const flatNav = NAV.flatMap((grp) => grp.items);
+const pageLabel = computed(() => flatNav.find((it) => it.key === S.page)?.label ?? "");
+const version = computed(() => (S.pluginVersion ? `v${S.pluginVersion}` : ""));
+
+watch(
+  () => S.page,
+  () => {
+    menuOpen.value = false;
+  },
+);
+
 onMounted(boot);
 </script>
 
 <template>
-  <div class="shell">
-    <header class="tb">
-      <div class="tb-l">
-        <img class="logo" src="./assets/logo.png" alt="MCSight" />
-        <b>MCSight</b>
-        <span class="sep" />
-        <span class="crumb">配置中心</span>
-        <span class="ver mono">astrbot_plugin_mcsight{{ S.pluginVersion ? ` · v${S.pluginVersion}` : "" }}</span>
-      </div>
-      <div class="tb-r">
-        <span class="who">当前身份 超级管理员</span>
-        <UiButton kind="tool" title="等同面板「插件列表」里的重载：本插件会拆掉重装，配置与连接随之重建" @click="reloadPlugin"><UiIcon name="refresh" :size="14" />重载插件</UiButton>
-        <UiButton v-if="S.page === 'cfg'" kind="pri" :disabled="!dirtyCount" @click="saveDrafts">
-          <UiIcon name="check" :size="14" />保存更改
-        </UiButton>
-      </div>
-    </header>
+  <div class="shell" :class="{ mobile: isMobile, 'has-savebar': isMobile && S.page === 'cfg' && !!dirtyCount }">
+    <template v-if="!isMobile">
+      <header class="tb">
+        <div class="tb-l">
+          <img class="logo" src="./assets/logo.png" alt="MCSight" />
+          <b>MCSight</b>
+          <span class="sep" />
+          <span class="crumb">配置中心</span>
+          <span class="ver mono">astrbot_plugin_mcsight{{ S.pluginVersion ? ` · v${S.pluginVersion}` : "" }}</span>
+        </div>
+        <div class="tb-r">
+          <span class="who">当前身份 超级管理员</span>
+          <UiButton kind="tool" title="等同面板「插件列表」里的重载：本插件会拆掉重装，配置与连接随之重建" @click="reloadPlugin"><UiIcon name="refresh" :size="14" />重载插件</UiButton>
+          <UiButton v-if="S.page === 'cfg'" kind="pri" :disabled="!dirtyCount" @click="saveDrafts">
+            <UiIcon name="check" :size="14" />保存更改
+          </UiButton>
+        </div>
+      </header>
 
-    <nav class="side">
-      <template v-for="grp in NAV" :key="grp.group">
-        <div class="nav-label">{{ grp.group }}</div>
+      <nav class="side">
+        <template v-for="grp in NAV" :key="grp.group">
+          <div class="nav-label">{{ grp.group }}</div>
+          <button
+            v-for="it in grp.items"
+            :key="it.key"
+            class="nav"
+            :class="{ on: S.page === it.key }"
+            type="button"
+            @click="S.page = it.key"
+          >
+            <span class="bar" />
+            <UiIcon :name="it.icon" :size="15" />
+            <span class="ntx ell">{{ it.label }}</span>
+          </button>
+        </template>
+      </nav>
+    </template>
+
+    <div v-else class="mtop">
+      <header class="mtb">
+        <img class="logo" src="./assets/logo.png" alt="MCSight" />
+        <div class="mtb-t">
+          <b>MCSight</b>
+          <span>{{ pageLabel }}</span>
+        </div>
         <button
-          v-for="it in grp.items"
+          class="mtb-menu"
+          type="button"
+          aria-label="更多操作"
+          aria-haspopup="menu"
+          :aria-expanded="menuOpen"
+          @click="menuOpen = !menuOpen"
+        >
+          <UiIcon name="more-horizontal" :size="19" />
+        </button>
+        <div v-if="menuOpen" class="mmenu-veil" @click="menuOpen = false" />
+        <div v-if="menuOpen" class="mmenu" role="menu" aria-label="更多操作">
+          <div class="mmenu-h">MCSight{{ version ? ` · ${version}` : "" }}</div>
+          <button class="mmenu-it" type="button" role="menuitem" @click="menuOpen = false; reloadPlugin()">
+            <UiIcon name="refresh" :size="15" />重载插件
+          </button>
+        </div>
+      </header>
+      <nav class="mnav" aria-label="页面导航">
+        <button
+          v-for="it in flatNav"
           :key="it.key"
-          class="nav"
+          class="mnav-it"
           :class="{ on: S.page === it.key }"
+          :aria-current="S.page === it.key ? 'page' : undefined"
           type="button"
           @click="S.page = it.key"
         >
-          <span class="bar" />
-          <UiIcon :name="it.icon" :size="15" />
-          <span class="ntx ell">{{ it.label }}</span>
+          <UiIcon :name="it.icon" :size="17" />
+          <span>{{ it.label }}</span>
         </button>
-      </template>
-    </nav>
+      </nav>
+    </div>
 
     <main class="content">
       <div v-if="S.noBridge" class="card">
@@ -89,7 +146,18 @@ onMounted(boot);
       <component v-else :is="pageComp" />
     </main>
 
-    <div v-if="S.toast" class="toast">{{ S.toast }}</div>
+    <div v-if="isMobile && S.page === 'cfg' && dirtyCount" class="msavebar">
+      <span>{{ dirtyCount }} 项待保存</span>
+      <UiButton kind="pri" @click="saveDrafts"><UiIcon name="check" :size="15" />保存更改</UiButton>
+    </div>
+
+    <div
+      v-if="S.toast"
+      class="toast"
+      :class="{ 'above-savebar': isMobile && S.page === 'cfg' && !!dirtyCount }"
+      role="status"
+      aria-live="polite"
+    >{{ S.toast }}</div>
     <DialogHost />
   </div>
 </template>

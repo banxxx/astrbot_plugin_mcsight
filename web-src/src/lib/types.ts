@@ -36,6 +36,10 @@ export interface RemarkSyncPayload {
   group: GroupPayload;
 }
 
+export interface MotdPreviewPayload {
+  motd: string;
+}
+
 export interface GroupPayload {
   gid: string;
   file: string;
