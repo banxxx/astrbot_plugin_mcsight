@@ -24,7 +24,6 @@
 ### 说明
 - 清理测试残留：移除仅用于一次性皮肤渲染实验的 `test/` 目录与未被引用的 `resources/images/steve-skin.png`。插件运行不依赖 `skinpy`，`requirements.txt` 也从未声明它；头像兜底图 `resources/images/steve-avatar.png` 保留。
 - 正则别名处理函数（`/绑定`、`/解绑`、`/查绑定`）当前不会被内核的指令管理页列出，docstring 先补上，供后续内核版本或其它展示入口使用。
-- 本节先按 1.2.7 记录；`metadata.yaml` 与 `main.py` 的版本号仍是 1.2.6，发布 1.2.7 时再统一更新。
 
 ## 1.2.6 — 2026-11-02
 
