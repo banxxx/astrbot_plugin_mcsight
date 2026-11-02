@@ -40,6 +40,20 @@ _EXTRA_PRIVATE_NETS = (
 )
 
 
+def normalize_host_input(host: str) -> str:
+    """把用户输入的主机地址归一化。
+
+    - 中文全角冒号 `：` 按端口分隔符处理；
+    - 去掉冒号前后的空白（`host : 25565` → `host:25565`）。
+
+    只处理冒号，其他空白/特殊字符原样保留，仍由 validate_host 拒绝，
+    避免把 `host name` 之类的输入静默拼成一个新地址。
+    """
+    if not isinstance(host, str):
+        return host
+    return re.sub(r"\s*:\s*", ":", host.strip().replace("：", ":"))
+
+
 def validate_host(host: str, allow_private: bool = False) -> Optional[str]:
     """校验服务器 host。
 
@@ -61,9 +75,10 @@ def validate_host(host: str, allow_private: bool = False) -> Optional[str]:
     addr, sep, port_txt = host.partition(":")
     if sep:
         if ":" in port_txt:
-            # 多处冒号＝IPv6 字面量（含 [::1]:25565 这种带方括号的写法）
-            return "暂不支持 IPv6 地址（请使用 IPv4 或域名）"
-        if not port_txt.isdigit():
+            # 多处冒号＝IPv6 字面量（含 [::1]:25565 这种带方括号的写法），
+            # 也可能是一次写了两个端口；两种都不支持
+            return "冒号太多：暂不支持 IPv6 地址，也不能一次写多个端口"
+        if not port_txt.isdecimal():
             return "冒号后面要写 1-65535 的游戏端口"
         if not 1 <= int(port_txt) <= 65535:
             return "游戏端口必须在 1-65535 之间"

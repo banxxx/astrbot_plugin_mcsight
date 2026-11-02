@@ -106,7 +106,8 @@ FOLD_ROW_H = 34                   # 卡片内"…还有 N 人在线"折叠行高
 AVATAR_DOWNLOAD_CONCURRENCY = 10
 
 OFFLINE_KEYWORDS = ['积极拒绝', 'Connection refused', 'timeout', '超时',
-                    '连接超时', '连接失败']
+                    '连接超时', '连接失败', 'Broken pipe', '连接被服务器中断',
+                    '连接被服务器重置']
 
 
 def format_last_online(ts_ms: int) -> str:

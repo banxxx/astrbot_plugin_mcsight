@@ -46,6 +46,8 @@ def truncate_by_width(text: str, max_width: int) -> str:
 
 def validate_server_name(name: str) -> str:
     """返回拒绝原因；合法返回空串"""
+    if any(c.isspace() for c in name):
+        return "名称不能含空格（指令用空格分隔参数），请用 - 或 _ 连接"
     bad = [c for c in INVALID_NAME_CHARS if c in name]
     if bad:
         return "名称不能包含方括号（{}），/执行 要用 [服务器名] 定界".format(" ".join(bad))
@@ -123,7 +125,9 @@ def _flatten_json_text(raw: str) -> Optional[str]:
             parts.append(item)
 
     walk(node)
-    return " ".join(" ".join(part.split()) for part in parts if part.strip())
+    # 文本组件在游戏里是直接拼接的，不能按段落补空格：
+    # {"text":"A","extra":[{"text":"B"}]} 应显示 AB，而不是 A B
+    return " ".join("".join(parts).split())
 
 
 def clean_motd(raw) -> str:
@@ -353,13 +357,14 @@ class ConfigManager:
         existing = {s["name"] for s in data["servers"]}
         success = 0
         failed = []
+        servers_str = servers_str.replace("：", ":").replace("，", ",")
         for pair in servers_str.split(","):
             pair = pair.strip()
             if not pair:
                 continue
             parts = pair.split(":")
             if len(parts) < 2 or len(parts) > 3:
-                failed.append(pair)
+                failed.append(f"{pair}（格式应为 名称:主机[:模组API端口]）")
                 continue
             name = parts[0].strip()
             host = parts[1].strip()
@@ -371,10 +376,10 @@ class ConfigManager:
                     if port < 1 or port > 65535:
                         raise ValueError
                 except ValueError:
-                    failed.append(f"{pair} (无效端口)")
+                    failed.append(f"{pair}（模组 API 端口无效）")
                     continue
             if not name or not host:
-                failed.append(pair)
+                failed.append(f"{pair}（名称和主机都不能为空）")
                 continue
             if name_validator is not None:
                 name_err = name_validator(name)
@@ -403,6 +408,7 @@ class ConfigManager:
 
     def batch_remove(self, names_str: str) -> Tuple[int, List[str]]:
         data = self._load()
+        names_str = names_str.replace("，", ",")
         to_remove = [n.strip() for n in names_str.split(",") if n.strip()]
         # 记录删除前的所有服务器名称，用于判断哪些名称真正不存在
         original_names = {s["name"] for s in data["servers"]}

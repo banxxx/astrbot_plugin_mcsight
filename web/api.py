@@ -39,7 +39,7 @@ from ..config.server_config import (
 from ..config.whitelist_config import WhitelistManager
 from ..features.player_status.checker import query_one
 from ..utils import mod_http
-from ..utils.host_validator import validate_host
+from ..utils.host_validator import normalize_host_input, validate_host
 from ..utils.plugin_paths import PLUGIN_NAME, sub_dir
 from .constants import ROWS
 
@@ -173,9 +173,9 @@ def _parse_port(raw):
     try:
         port = int(str(raw).strip())
     except (TypeError, ValueError):
-        return None, "端口必须是 1-65535 的数字"
+        return None, "模组 API 端口必须是 1-65535 的数字（留空表示未装模组）"
     if port < 1 or port > 65535:
-        return None, "端口必须是 1-65535 的数字"
+        return None, "模组 API 端口必须是 1-65535 的数字（留空表示未装模组）"
     return port, ""
 
 
@@ -269,7 +269,7 @@ async def view_group_ignore_add():
     if not os.path.exists(group_config_path(gid)):
         return _err(f"servers_{gid}.json 不存在")
     qq = str(body.get("qq", "")).strip()
-    if not qq.isdigit():
+    if not qq.isdecimal():
         return _err("QQ 号必须是纯数字")
     cm = ConfigManager(group_id=int(gid))
     ids = cm.get_nickname_check_ignore_ids()
@@ -309,7 +309,7 @@ async def view_server_create():
     if not os.path.exists(group_config_path(gid)):
         return _err(f"servers_{gid}.json 不存在")
     name = str(body.get("name", "")).strip()
-    host = str(body.get("host", "")).strip()
+    host = normalize_host_input(str(body.get("host", "")))
     if not name:
         return _err("名称不能为空")
     name_err = validate_server_name(name)
@@ -374,7 +374,7 @@ async def view_server_update():
     name_err = validate_server_name(new_name)
     if name_err:
         return _err(name_err)
-    host = str(body.get("host", "")).strip()
+    host = normalize_host_input(str(body.get("host", "")))
     host_err = validate_host(host, allow_private=True)
     if host_err:
         return _err(host_err)
@@ -641,7 +641,7 @@ async def view_server_motd_preview():
     body, err = await _body()
     if err:
         return _err(err)
-    host = str(body.get("host", "")).strip()
+    host = normalize_host_input(str(body.get("host", "")))
     host_err = validate_host(host, allow_private=True)
     if host_err:
         return _err(host_err)

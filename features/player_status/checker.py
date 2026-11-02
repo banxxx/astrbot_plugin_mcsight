@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import socket
 import time
 import aiohttp
@@ -13,6 +14,16 @@ from ...config.server_config import clean_motd, effective_remark
 # 状态卡片「延迟」胶囊的测速上界（裸 TCP 建连，见 ping_server）。健康服实测 26~45ms，
 # 1.2 秒留了几十倍余量；这条命令的总时长等于最慢那台的测速，一台不应答就能拖满。
 PING_TIMEOUT = 1.2
+
+# SLP 查询预算与重试：服务器/转发端偶发在建连后立刻断开（Broken pipe / Connection reset），
+# mcstatus 自带的 tries 是在同一条已断开的 socket 上重试，重试必然还是同一个错误。
+STATUS_TIMEOUT = 5.0
+STATUS_ATTEMPTS = 3
+STATUS_RETRY_DELAY = 0.2
+# 显式写了默认端口 25565 却连不上时，按域名的 SRV 记录再查一次的预算。
+SRV_LOOKUP_TIMEOUT = 1.5
+EXPLICIT_25565_TIMEOUT = 2.0
+SRV_FALLBACK_TIMEOUT = 3.0
 
 # ========== 模组 API 辅助函数 ==========
 def build_mod_api_url(host: str, port: int, endpoint: str) -> Optional[str]:
@@ -111,17 +122,113 @@ def motd_from_status(status) -> str:
     return clean_motd(to_plain() if callable(to_plain) else str(motd))
 
 
+def split_explicit_port(host: str):
+    """把「域名:端口」拆成 (域名, 端口)；没写端口或端口不是数字时返回 (host, None)。"""
+    base, sep, port_str = host.rpartition(":")
+    if sep and port_str.isdigit():
+        return base, int(port_str)
+    return host, None
+
+
+def describe_query_error(exc: BaseException) -> str:
+    """把 socket 层的英文异常翻译成卡片上能看懂的一句话。"""
+    if isinstance(exc, BrokenPipeError):
+        return "连接被服务器中断（Broken pipe）"
+    if isinstance(exc, ConnectionResetError):
+        return "连接被服务器重置"
+    if isinstance(exc, ConnectionRefusedError):
+        return "服务器积极拒绝连接"
+    return str(exc) or type(exc).__name__
+
+
+def _status_once(server):
+    """单次 SLP 查询，不让 mcstatus 在同一条 socket 上重试。"""
+    try:
+        return server.status(tries=1)
+    except TypeError:
+        # 老版本 mcstatus 没有 tries 关键字
+        return server.status()
+
+
+async def _lookup_server(address: str, timeout: float):
+    return await asyncio.wait_for(
+        asyncio.to_thread(JavaServer.lookup, address), timeout=timeout)
+
+
+async def _status_with_retry(server, timeout: float):
+    """在 timeout 预算内用新连接重试 SLP；连接被对端关闭后必须重新 lookup/status。"""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    last_exc = None
+    for attempt in range(STATUS_ATTEMPTS):
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            break
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_status_once, server), timeout=remaining)
+        except (asyncio.TimeoutError, OSError) as e:
+            last_exc = e
+            if attempt + 1 < STATUS_ATTEMPTS:
+                delay = min(STATUS_RETRY_DELAY * (attempt + 1),
+                            max(0.0, deadline - loop.time()))
+                if delay > 0:
+                    await asyncio.sleep(delay)
+    if last_exc is None:
+        raise asyncio.TimeoutError()
+    raise last_exc
+
+
+async def _srv_alternative(host: str):
+    """显式写了 25565 时，返回域名的 SRV 目标；没有 SRV 或地址是 IP 时返回 None。"""
+    base, port = split_explicit_port(host)
+    if port != 25565:
+        return None
+    try:
+        ipaddress.ip_address(base)
+        return None  # IP 没有 SRV，省掉一次 DNS
+    except ValueError:
+        pass
+    try:
+        return await _lookup_server(base, SRV_LOOKUP_TIMEOUT)
+    except Exception:
+        return None
+
+
+async def fetch_status(host: str):
+    """查询服务器 SLP 状态，连接级错误换新连接重试。
+
+    显式写成「域名:25565」会让 mcstatus 跳过 SRV 查询（与 Minecraft 地址栏一致）。
+    有些服真实端口在 SRV 记录里，25565 不是游戏端口，就会 Broken pipe / 拒绝连接；
+    这种「写了默认端口」的配置在失败后按 SRV 再试一次，更符合用户本意。
+    """
+    server = await _lookup_server(host, STATUS_TIMEOUT)
+    fallback = await _srv_alternative(host)
+    if fallback is None or fallback.address == server.address:
+        return await _status_with_retry(server, STATUS_TIMEOUT)
+
+    # 有 SRV 备选时，先把显式端口的等待压短：多数情况下 25565 就是写错的，
+    # 不该为了等一个丢包的端口把整张卡拖满 5 秒。
+    try:
+        return await _status_with_retry(server, EXPLICIT_25565_TIMEOUT)
+    except (asyncio.TimeoutError, OSError) as first_exc:
+        logger.info(
+            f"服务器 {host} 的 25565 查询失败（{type(first_exc).__name__}: {first_exc}），"
+            f"按其 SRV 记录改用 {fallback.address.host}:{fallback.address.port} 重试"
+        )
+        try:
+            return await _status_with_retry(fallback, SRV_FALLBACK_TIMEOUT)
+        except Exception:
+            raise first_exc
+
+
 async def query_one(server_info: dict) -> Dict[str, Any]:
     """查询单个 Minecraft 服务器的状态（使用 mcstatus）"""
     host = server_info["host"]
     name = server_info["name"]
     remark = effective_remark(server_info)
     try:
-        server = await asyncio.to_thread(JavaServer.lookup, host)
-        status = await asyncio.wait_for(
-            asyncio.to_thread(server.status),
-            timeout=5.0
-        )
+        status = await fetch_status(host)
         players = []
         if status.players.sample:
             players = [p.name for p in status.players.sample]
@@ -174,12 +281,19 @@ async def query_one(server_info: dict) -> Dict[str, Any]:
             "error": "查询超时"
         }
     except Exception as e:
-        logger.error(f"查询服务器 {host} 失败: {e}")
+        _, explicit_port = split_explicit_port(host)
+        hint = ("；若该服使用 SRV 记录，请把地址改成不带端口的域名"
+                if explicit_port == 25565 else "")
+        retried = (f"（已换新连接重试 {STATUS_ATTEMPTS} 次）"
+                   if isinstance(e, OSError) else "")
+        logger.error(
+            f"查询服务器 {host} 失败{retried}: "
+            f"{type(e).__name__}: {e}{hint}")
         return {
             "name": name, "host": host, "remark": remark, "motd": "",
             "online": 0, "max": 0, "players": [],
             "version": "未知", "latency": 0.0,
-            "error": str(e)
+            "error": describe_query_error(e)
         }
 
 async def query_all_servers(servers: List[dict]) -> List[Dict[str, Any]]:

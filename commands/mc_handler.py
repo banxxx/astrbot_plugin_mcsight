@@ -41,11 +41,13 @@ async def handle_mc_command(event: AstrMessageEvent):
         yield event.plain_result("您已被列入黑名单，无法使用本插件的功能。")
         return
 
+    # 用户输入的第一个词就是命中的指令名/别名（「指令管理」里可改名或加别名），
+    # 内核只按新名字匹配、不会改写 message_str，所以不能假设它一定是 "mc"。
     msg = event.message_str.strip()
     if msg.startswith('/'):
-        msg = msg[1:]
-    if msg.lower().startswith('mc'):
-        msg = msg[2:].strip()
+        msg = msg[1:].lstrip()
+    parts = msg.split(maxsplit=1)
+    msg = parts[1].strip() if len(parts) > 1 else ""
 
     if not msg:
         yield event.plain_result("请提供子命令。使用 /mc help 查看帮助。")

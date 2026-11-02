@@ -595,17 +595,17 @@ async function removeIgnore(qq: string) {
       <UiField
         label="主机地址"
         required
-        :help="name === 'add-server' ? '一条地址字段；不写端口则按 25565 探测。内网 / 回环地址仅超管可加' : '一条字段；可带 :游戏端口（探测层已按冒号拆分）'"
+        :help="name === 'add-server' ? '一条地址字段；只写域名会自动跟随 SRV 记录，不写端口时回落 25565。冒号前后的空格和全角「：」会自动忽略；内网 / 回环地址仅超管可加' : '一条字段；可带 :游戏端口（写了端口就不再查 SRV）。冒号前后的空格和全角「：」会自动忽略'"
       >
         <UiInput
           v-model="f.host"
-          :placeholder="name === 'add-server' ? 'mc-a1.example.net 或 …net:25565' : undefined"
+          :placeholder="name === 'add-server' ? 'mc-a1.example.net（推荐）或 play.example.net:25501' : undefined"
           @blur="maybeFetchMotdOnBlur"
         />
       </UiField>
       <UiField
         label="模组 API 端口"
-        :help="name === 'add-server' ? '填了才会走模组 HTTP；留空时 /执行 与 /广播 不可用' : '清空并保存＝删掉 api_port，退回「未装模组」'"
+        :help="name === 'add-server' ? '这是模组 API 端口，不是游戏端口；填了才会走模组 HTTP，留空时 /执行 与 /广播 不可用' : '这是模组 API 端口；清空并保存＝删掉 api_port，退回「未装模组」'"
       >
         <UiInput v-model="f.port" placeholder="留空则视为未装模组" @blur="maybeFetchMotdOnBlur" />
       </UiField>
