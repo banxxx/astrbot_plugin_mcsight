@@ -350,7 +350,7 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
         <div class="tf">
           <span v-if="loading && !servers.length">读取中…</span>
           <span v-else>共 {{ servers.length }} 条 · 每群上限 {{ S.maxServers }} 台（代码常量 MAX_SERVERS_PER_GROUP）</span>
-          <span class="tip"><UiIcon name="arrow-up-down" :size="12" />↑↓ 对应 /mc move（位置序号从 0 开始）</span>
+          <span class="tip"><UiIcon name="arrow-up-down" :size="12" />对应 /mc move（位置序号从 0 开始）</span>
         </div>
       </section>
 

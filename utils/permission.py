@@ -6,8 +6,10 @@ from ..config.whitelist_config import WhitelistManager
 # 权限等级定义
 LEVEL_BLACKLIST = 0
 LEVEL_MEMBER = 1
-LEVEL_WHITELIST_ADMIN = 2
+# 配置里的「白名单管理员」承诺与群主/群管理员同等权限（schema 的 hint 也这么写），
+# 所以和 LEVEL_GROUP_ADMIN 同级；曾经是 2，比群管理员低一级，配了也过不了管理命令
 LEVEL_GROUP_ADMIN = 3
+LEVEL_WHITELIST_ADMIN = LEVEL_GROUP_ADMIN
 LEVEL_SUPER_ADMIN = 4
 
 # 各命令所需最低权限等级
@@ -74,15 +76,16 @@ async def get_user_permission_level(event: AstrMessageEvent) -> int:
         logger.debug(f"用户 {user_id} 是插件白名单管理员")
         return LEVEL_WHITELIST_ADMIN
 
-    # 5. 群管理员（包括群主）
-    if await is_group_admin(event):
-        role = await get_group_role(event)
-        if role == 'owner' and wm.enable_group_owner:
-            logger.debug(f"用户 {user_id} 是群主，且开关已启用")
-            return LEVEL_GROUP_ADMIN
-        elif role in ('admin', 'owner') and wm.enable_group_admin:
-            logger.debug(f"用户 {user_id} 是群管理员，且开关已启用")
-            return LEVEL_GROUP_ADMIN
+    # 5. 群主 / 群管理员：两个开关各管各的角色。
+    # 旧写法里群主走的是 `role in ('admin','owner') and enable_group_admin` 那条，
+    # 于是「允许群主」关掉后，只要「允许管理员」还开着，群主照样能过——那个开关等于没生效。
+    role = await get_group_role(event)
+    if role == 'owner' and wm.enable_group_owner:
+        logger.debug(f"用户 {user_id} 是群主，且开关已启用")
+        return LEVEL_GROUP_ADMIN
+    if role == 'admin' and wm.enable_group_admin:
+        logger.debug(f"用户 {user_id} 是群管理员，且开关已启用")
+        return LEVEL_GROUP_ADMIN
 
     return LEVEL_MEMBER
 
@@ -95,7 +98,13 @@ async def get_group_role(event: AstrMessageEvent) -> str:
         logger.debug("无法获取群号，返回 member")
         return 'member'
 
-    user_id = int(event.get_sender_id())
+    # 群成员接口要数字 user_id；qq_official 等平台的 ID 可能是 openid，
+    # 直接 int() 会在这里抛 ValueError，把整条命令打成异常
+    try:
+        user_id = int(event.get_sender_id())
+    except (TypeError, ValueError):
+        logger.debug(f"发送者 ID 不是数字（{event.get_sender_id()!r}），无法按群角色判定")
+        return 'member'
 
     # 如果是 AiocqhttpMessageEvent，使用其 bot.get_group_member_info
     if isinstance(event, AiocqhttpMessageEvent):
@@ -140,27 +149,36 @@ async def get_group_role(event: AstrMessageEvent) -> str:
     except Exception as e:
         logger.debug(f"bot.get_group_member_info 获取角色失败: {e}")
 
-    # 回退到 event.is_admin()
-    try:
-        if event.is_admin():
-            logger.debug("回退到 event.is_admin() 返回 admin")
-            return 'admin'
-    except Exception:
-        pass
+    # 注意：event.is_admin() 表示的是 AstrBot 全局管理员（role="admin"），
+    # 不是群角色；全局管理员在 get_user_permission_level() 里已经按超级管理员处理，
+    # 这里不能拿它冒充群管理员。
     logger.debug("无法获取角色，返回 member")
     return 'member'
 
 
 def is_astrbot_super_admin(event: AstrMessageEvent) -> bool:
+    """是否是 AstrBot 全局管理员（config 里的 admins_id）。
+
+    4.29 的唤醒阶段会把 admins_id 命中的发送者标成 role="admin"，官方判断入口就是
+    event.is_admin()；旧写法查的 get_admin_list / get_sender_admin / get_priority
+    在 4.29 里根本不存在，于是全局管理员一直不被认，管理命令照样提示权限不足。
+    """
     try:
-        if hasattr(event, 'get_admin_list') and callable(event.get_admin_list):
-            admin_list = event.get_admin_list()
-            if admin_list and event.get_sender_id() in admin_list:
+        if event.is_admin():
+            return True
+    except Exception:
+        pass
+
+    # 兼容其它版本/适配器提供的接口；名单里可能混着 int，统一按字符串比
+    try:
+        getter = getattr(event, 'get_admin_list', None)
+        if callable(getter):
+            admin_list = getter()
+            if admin_list and str(event.get_sender_id()) in {str(a) for a in admin_list}:
                 return True
-        if hasattr(event, 'get_sender_admin') and callable(event.get_sender_admin):
-            return event.get_sender_admin()
-        if hasattr(event, 'get_priority') and callable(event.get_priority):
-            return event.get_priority() >= 100
+        getter = getattr(event, 'get_sender_admin', None)
+        if callable(getter) and getter():
+            return True
     except Exception:
         pass
     return False

@@ -15,6 +15,7 @@ http://{host}:{port} 发起请求，而 mod_http 的错误文案能区分「连�
 """
 import ipaddress
 import re
+import socket
 from typing import Optional
 
 # 单标签或带点的域名（允许下划线：LAN 内主机名常见写法；允许尾点 FQDN）
@@ -25,6 +26,12 @@ _DOMAIN_RE = re.compile(
 
 # 内网语义的主机名后缀（不含裸 localhost，单独判断）
 _PRIVATE_SUFFIXES = (".localhost", ".local", ".internal", ".home.arpa")
+
+# inet_aton / getaddrinfo 接受的非标准 IPv4 写法：127.1、0x7f000001、0177.0.0.1 等。
+# 只匹配「整个字符串都由十进制数字段或 0x 十六进制段组成」的形式；
+# 0x0.example.com 这类正常域名的 label 不是纯数字/0x 形式，不会被误伤。
+_ALT_IPV4_RE = re.compile(
+    r"^(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+)){0,3}$", re.IGNORECASE)
 
 # stdlib is_private 在部分 Python 版本不覆盖、但语义上属于内网/非公网的段
 _EXTRA_PRIVATE_NETS = (
@@ -62,9 +69,11 @@ def validate_host(host: str, allow_private: bool = False) -> Optional[str]:
             return "游戏端口必须在 1-65535 之间"
         bare = addr
 
-    # IPv4 字面量判断
+    # IPv4 字面量判断：先去掉 FQDN 尾点，否则 "127.0.0.1." 过不了 ipaddress，
+    # 却会被 getaddrinfo 当成 127.0.0.1 连出去
+    bare_addr = bare.rstrip(".")
     try:
-        ip = ipaddress.ip_address(bare)
+        ip = ipaddress.ip_address(bare_addr)
     except ValueError:
         ip = None
 
@@ -86,8 +95,24 @@ def validate_host(host: str, allow_private: bool = False) -> Optional[str]:
             return f"{host} 是{reason}，普通成员不允许添加内网/回环地址"
         return None
 
-    # 域名/主机名
-    lowered = bare.lower()
+    # 只由数字和点组成的“域名”不是域名：getaddrinfo / inet_aton 会把 127.1、
+    # 2130706433、0177.0.0.1 这类简写解析成 IPv4，绕过上面的内网判断
+    if re.fullmatch(r"[0-9.]+", bare_addr):
+        return "不是合法的域名或 IPv4 地址（IPv4 请写完整四段）"
+    # 0x7f000001、0177.0.0.1、1.0x7f000001 等非标准 IPv4 写法同样会被 inet_aton
+    # 当成地址。只拒绝「整串都能当 IPv4 段」的形式，不能见到 0x 开头的 label 就
+    # 一刀切：0x0.example.com 这种正常域名也会被误伤。
+    if _ALT_IPV4_RE.match(bare_addr):
+        return "不是合法的域名或 IPv4 地址"
+    try:
+        socket.inet_aton(bare_addr)
+    except (OSError, UnicodeError):
+        pass
+    else:
+        return "不是合法的域名或 IPv4 地址"
+
+    # 域名/主机名（同样按去掉尾点后的形式判断 localhost. 之类的内网名）
+    lowered = bare_addr.lower()
     is_private_name = lowered == "localhost" or lowered.endswith(_PRIVATE_SUFFIXES)
     if is_private_name and not allow_private:
         return f"{host} 指向本机或内网，普通成员不允许添加"

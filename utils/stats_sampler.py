@@ -13,6 +13,7 @@ from typing import Dict, Tuple
 
 from astrbot.api import logger
 
+from ..config.server_config import is_hidden
 from ..config.whitelist_config import WhitelistManager
 from . import mod_http, stats_snapshot
 from .plugin_paths import data_dir
@@ -42,7 +43,8 @@ def _server_endpoints() -> Dict[str, Tuple[str, int]]:
             continue
         for srv in servers:
             name = str(srv.get("name", "")).strip().lower()
-            if not name or not wm.has_mod_api(srv):
+            # 隐藏的服务器承诺「一个查询都不发」，采样也不能例外
+            if not name or is_hidden(srv) or not wm.has_mod_api(srv):
                 continue
             out[name] = (srv["host"], wm.get_server_port(srv))
     return out

@@ -13,6 +13,9 @@ class MCWatcher(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
         WhitelistManager().set_context(context)
+        # 内核按插件目录名加载 data/config/<目录名>_config.json，把这份配置对象也交给
+        # WhitelistManager：文件路径对不上时仍能读到真实配置（超管名单、模组 Token 等）
+        WhitelistManager().set_config(config)
         start_db_keepalive()
         # config 是 data/config/<插件名>_config.json 的内存对象，配置页写它就等于面板改配置
         register_view_api(context, config)

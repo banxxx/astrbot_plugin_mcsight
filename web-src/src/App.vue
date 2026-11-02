@@ -8,7 +8,7 @@ import CfgPage from "./pages/CfgPage.vue";
 import ConstPage from "./pages/ConstPage.vue";
 import MapPage from "./pages/MapPage.vue";
 import HelpPage from "./pages/HelpPage.vue";
-import { S, boot, dirtyCount, reloadPlugin, saveDrafts } from "./store";
+import { S, boot, dirtyCount, reloadPlugin, requestPage, saveDrafts } from "./store";
 import { useIsMobile } from "./lib/useMediaQuery";
 import type { PageKey } from "./store";
 
@@ -85,7 +85,7 @@ onMounted(boot);
             class="nav"
             :class="{ on: S.page === it.key }"
             type="button"
-            @click="S.page = it.key"
+            @click="requestPage(it.key)"
           >
             <span class="bar" />
             <UiIcon :name="it.icon" :size="15" />
@@ -128,7 +128,7 @@ onMounted(boot);
           :class="{ on: S.page === it.key }"
           :aria-current="S.page === it.key ? 'page' : undefined"
           type="button"
-          @click="S.page = it.key"
+          @click="requestPage(it.key)"
         >
           <UiIcon :name="it.icon" :size="17" />
           <span>{{ it.label }}</span>

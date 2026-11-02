@@ -8,7 +8,7 @@ import { useIsMobile } from "../lib/useMediaQuery";
 
 withDefaults(
   defineProps<{
-    cls?: "m-confirm" | "m-form" | "m-list" | "m-json";
+    cls?: "m-confirm" | "m-confirm-typed" | "m-form" | "m-list" | "m-json";
     title: string;
     titleMono?: boolean;
     sub?: string;
@@ -106,6 +106,12 @@ onBeforeUnmount(unlockPageScroll);
 .m-confirm {
   width: 440px;
   height: 260px;
+}
+
+/* 删除群配置：确认提示 + 输入框，比普通确认弹窗高一档（实测内容高 199 + 页头页脚） */
+.m-confirm-typed {
+  width: 440px;
+  height: 340px;
 }
 
 .m-form {

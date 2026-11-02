@@ -50,7 +50,6 @@ export interface GroupPayload {
   nickname_check_enabled: boolean;
   nickname_check_ignore_ids: string[];
   max_servers_per_group: number;
-  default_api_port: number;
 }
 
 export interface GroupBrief {
@@ -63,7 +62,6 @@ export interface GroupBrief {
 export interface SummaryPayload {
   groups: GroupBrief[];
   max_servers_per_group: number;
-  default_api_port: number;
   plugin_version: string;
   plugin_name: string;
 }

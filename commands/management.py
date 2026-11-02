@@ -6,7 +6,8 @@ from ..utils.permission import is_astrbot_super_admin
 
 
 def _caller_allows_private(event: AstrMessageEvent) -> bool:
-    """内网/回环地址只允许插件超级管理员添加，防止群管理员借机器人探测内网。"""
+    """内网/回环地址只允许超级管理员（插件配置或 AstrBot admins_id）添加，
+    防止群管理员借机器人探测内网。"""
     wm = WhitelistManager()
     return is_astrbot_super_admin(event) or wm.is_super_admin(str(event.get_sender_id()))
 
@@ -173,14 +174,11 @@ async def handle_list(event: AstrMessageEvent, config: ConfigManager):
         yield event.plain_result("当前没有任何服务器。")
     else:
         wm = WhitelistManager()
-        default_port = wm.default_api_port
         lines = ["已添加的服务器："]
         for s in servers:
-            port = s.get("api_port")
-            if port is not None:
-                port_display = f" (端口: {port})"
-            else:
-                port_display = f" (默认端口: {default_port})"
+            # 端口必须能真正拿来调模组才算「装了模组」，否则 /执行、/广播 的可用性会被说反
+            port_display = (f" (模组端口: {wm.get_server_port(s)})"
+                            if wm.has_mod_api(s) else " (未装模组)")
             lines.append(f"{s['name']} -> {s['host']}{port_display}")
         yield event.plain_result("\n".join(lines))
 

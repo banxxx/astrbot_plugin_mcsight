@@ -1040,21 +1040,26 @@
   background: var(--thead);
 }
 
-.shell.mobile .modal.is-mobile.m-confirm {
+.shell.mobile .modal.is-mobile.m-confirm,
+.shell.mobile .modal.is-mobile.m-confirm-typed {
   align-self: center;
   width: calc(100% - 32px);
   height: auto;
+  /* iOS 15 不认 dvh：先给 vh 兜底，支持 dvh 的浏览器再覆盖成动态视口 */
+  max-height: calc(100vh - 32px);
   max-height: calc(100dvh - 32px);
   border: 1px solid var(--bd);
   border-radius: 12px;
 }
 
-.shell.mobile .modal.is-mobile.m-confirm .mb {
+.shell.mobile .modal.is-mobile.m-confirm .mb,
+.shell.mobile .modal.is-mobile.m-confirm-typed .mb {
   flex: 0 1 auto;
   overflow-y: auto;
 }
 
-.shell.mobile .modal.is-mobile.m-confirm .mf {
+.shell.mobile .modal.is-mobile.m-confirm .mf,
+.shell.mobile .modal.is-mobile.m-confirm-typed .mf {
   padding-bottom: 10px;
 }
 
@@ -1081,6 +1086,7 @@
   right: 14px;
   width: auto;
   max-width: 420px;
+  max-height: min(336px, 50vh);
   max-height: min(336px, 50dvh);
   padding: 10px;
   border-radius: 10px;

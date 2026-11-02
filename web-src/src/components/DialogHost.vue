@@ -11,7 +11,20 @@ import UiModal from "./UiModal.vue";
 import UiNotice from "./UiNotice.vue";
 import UiSecretInput from "./UiSecretInput.vue";
 import UiSwitch from "./UiSwitch.vue";
-import { S, api, closeDialog, loadGroup, run, servers, toast } from "../store";
+import {
+  S,
+  api,
+  closeDialog,
+  dirtyCount,
+  discardDrafts,
+  loadGroup,
+  loadSummary,
+  run,
+  saveDrafts,
+  servers,
+  toast,
+  type PageKey,
+} from "../store";
 import { ApiError } from "../lib/bridge";
 import type { ConfigItem, ServerEntry } from "../lib/types";
 
@@ -35,13 +48,15 @@ const motdPreview = reactive({ text: "", error: "", loading: false });
 let previewSeq = 0;
 
 const FORMS = ["add-server", "edit-server"];
-const CONFIRMS = ["del-server", "del-group"];
+const CONFIRMS = ["del-server", "del-group", "leave-cfg"];
 const LISTS = ["ignore-list", "list-manage"];
 const JSONS = ["json-group", "json-config"];
 /* 画布上「等价命令 / 文件操作」副标题是等宽主色，说明行是正体灰；只有 JSON 弹窗标题用等宽 */
 const NOTE_SUBS = ["add-group", "json-group", "json-config"];
 
 const modalCls = computed(() => {
+  /* 删除群配置要多一个「输入确认词」的输入框，桌面固定高度得比普通确认弹窗高一档 */
+  if (name.value === "del-group") return "m-confirm-typed";
   if (CONFIRMS.includes(name.value)) return "m-confirm";
   if (JSONS.includes(name.value) || name.value === "batch-add") return "m-json";
   if (name.value === "batch-del" || LISTS.includes(name.value)) return "m-list";
@@ -67,11 +82,13 @@ const title = computed(() => {
     case "json-group":
       return `servers_${S.gid}.json`;
     case "json-config":
-      return "astrbot_plugin_mcsight_config.json";
+      return jsonText.file || "插件配置";
     case "ignore-list":
       return `忽略名单 · ${S.gid}`;
     case "list-manage":
       return `${String(payload.value.label ?? "")}名单`;
+    case "leave-cfg":
+      return "有未保存的更改";
     default:
       return "";
   }
@@ -94,7 +111,9 @@ const sub = computed(() => {
     case "ignore-list":
       return "等价命令 /mc nicknamecheck 忽略|取消忽略 <QQ>";
     case "list-manage":
-      return `写 _conf_schema.json 的 ${String(payload.value.item ?? "")} · 整表覆盖保存`;
+      return `写 _conf_schema.json 的 ${(payload.value.item as ConfigItem | undefined)?.key ?? ""} · 增删只改草稿`;
+    case "leave-cfg":
+      return `全局参数 · ${dirtyCount.value} 项待保存`;
     default:
       return "";
   }
@@ -109,17 +128,28 @@ const footInfo = computed(() => {
 const listNote = computed(() =>
   name.value === "ignore-list"
     ? `名单内 ${listItems.value.length} 个 QQ · 添加与移除即时写入 servers_<群号>.json`
-    : `名单内 ${listItems.value.length} 个 · 保存时整表写回 _conf_schema.json`,
+    : `名单内 ${listItems.value.length} 个 · 增删只改草稿，回页面点「保存更改」才落盘`,
 );
 const confirmWarn = computed(() => {
   if (name.value === "del-server") return `将从 servers_${S.gid}.json 移除「${srv.value?.name ?? ""}」，其命令 Token 一并删除。`;
+  if (name.value === "leave-cfg") {
+    return `「全局参数」里还有 ${dirtyCount.value} 项改动没有保存，切走之后这些改动会丢掉。`;
+  }
   return `该群还有 ${servers.value.length} 台服务器条目，删除后 /在线 /绑定 /查询 在这个群全部失效，且不会自动恢复。`;
 });
 const confirmNote = computed(() => {
   if (name.value === "del-server") return "绑定记录不受影响。";
+  if (name.value === "leave-cfg") return "可以先「保存并离开」，或回去点右上角的「保存更改」。";
   return "本群开关与忽略名单一并随文件删除。绑定记录不在此文件内，不受影响。";
 });
 const confirmVerb = computed(() => (name.value === "del-server" ? "确认删除" : "确认删除文件"));
+/* 删除群配置必须手打「确认删除」才放行，防的是弹窗一开随手回车/连点把群配置删掉 */
+const delGroupReady = computed(() => (f.confirm ?? "").trim() === "确认删除");
+const footerDisabled = computed(
+  () =>
+    (name.value === "batch-del" && !selectedNames.value.length) ||
+    (name.value === "del-group" && !delGroupReady.value),
+);
 const footAction = computed(() => {
   switch (name.value) {
     case "add-server":
@@ -149,6 +179,33 @@ const footVerb = computed(() => {
 });
 const footKind = computed(() => (name.value === "del-server" || name.value === "del-group" || name.value === "batch-del" ? "danger" : "pri"));
 const footIcon = computed(() => (CONFIRMS.includes(name.value) || name.value === "batch-del" ? null : name.value === "edit-server" ? "check" : "plus"));
+
+/* 切页确认：只有保存成功才真的跳走；保存失败就留在弹窗里，草稿还在 */
+const leaving = ref(false);
+function leaveTarget(): PageKey {
+  return String(payload.value.to ?? "srv") as PageKey;
+}
+async function saveThenLeave() {
+  if (leaving.value) return;
+  /* 保存是逐项 await 的：先把目标页和本次弹窗记下来。期间用户点 X 关掉、
+     或打开了别的弹窗时，保存完成后不能替他跳页/关掉新弹窗。 */
+  const target = leaveTarget();
+  const dlg = S.dialog;
+  leaving.value = true;
+  try {
+    if (await saveDrafts() && S.dialog === dlg) {
+      closeDialog();
+      S.page = target;
+    }
+  } finally {
+    leaving.value = false;
+  }
+}
+function discardThenLeave() {
+  discardDrafts();
+  closeDialog();
+  S.page = leaveTarget();
+}
 
 watch(
   d,
@@ -220,11 +277,65 @@ watch(
   },
 );
 
+/* 全局参数的名单（超管 / 白名单管理员 / 黑名单）：改的是草稿，回页面点「保存更改」才落盘。
+   原先这里只给群忽略名单做了增删，配置类名单只能看不能改——配超管却加不进去。 */
+function configListItem(): ConfigItem | undefined {
+  return name.value === "list-manage" ? (payload.value.item as ConfigItem | undefined) : undefined;
+}
+
+/** 名单条目的值可能是数组，也可能是手写配置里的「111,222」逗号串：统一摊平 */
+function asRows(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
+  if (typeof v === "string") {
+    return v.split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function configList(): string[] {
+  const it = configListItem();
+  if (!it) return [];
+  const key = it.key;
+  return key in S.cfgDraft ? asRows(S.cfgDraft[key]) : asRows(it.value);
+}
+
+function commitConfigList(next: string[]) {
+  const it = configListItem();
+  if (!it) return;
+  const orig = asRows(it.value);
+  // 改回原样就从草稿里删掉，免得「保存更改」一直亮着却没有任何变化
+  const same = next.length === orig.length && next.every((v, i) => v === orig[i]);
+  if (same) delete S.cfgDraft[it.key];
+  else S.cfgDraft[it.key] = next;
+}
+
+function addConfigList() {
+  const ids = f.qq.split(/[,，\s]+/).map((v) => v.trim()).filter(Boolean);
+  if (!ids.length) return;
+  const next = configList().slice();
+  for (const id of ids) if (!next.includes(id)) next.push(id);
+  commitConfigList(next);
+  f.qq = "";
+}
+
+function removeConfigList(id: string) {
+  commitConfigList(configList().filter((v) => v !== id));
+}
+
 const listItems = computed<string[]>(() => {
   if (name.value === "ignore-list") return S.group?.nickname_check_ignore_ids ?? [];
-  const it = payload.value.item as ConfigItem | undefined;
-  return Array.isArray(it?.value) ? (it?.value as string[]) : [];
+  return configList();
 });
+
+function addEntry() {
+  if (name.value === "ignore-list") void addIgnore();
+  else addConfigList();
+}
+
+function removeEntry(id: string) {
+  if (name.value === "ignore-list") void removeIgnore(id);
+  else removeConfigList(id);
+}
 
 const selectedNames = computed(() => servers.value.filter((s) => selected[s.name]).map((s) => s.name));
 
@@ -395,8 +506,11 @@ function motdValueText(): string {
 async function submitAddGroup() {
   await run("create", async () => {
     const r = await api.groupCreate(f.gid);
+    /* 群列表来自 summary：不重读的话「当前群」下拉里看不到刚建的群，
+       要等下次刷新页面才出现。先刷新列表，再把选中项落到新群。 */
+    await loadSummary();
     S.gid = r.gid;
-    await loadGroup();
+    S.group = r;  // 立即切到新群，别让面板停在旧群等请求回来
     closeDialog();
     toast(`已创建 servers_${r.gid}.json`);
   });
@@ -415,10 +529,16 @@ async function submitDelServer() {
 
 async function submitDelGroup() {
   await run("delgroup", async () => {
-    await api.groupDelete(S.gid);
+    const gone = S.gid;
+    await api.groupDelete(gone);
+    /* 先把面板从已删除的群上摘下来：loadSummary 会把 S.gid 换成剩下的第一个群
+       （没有了就置空），watcher 再按新群拉数据。原先这里还对着已删的群号调
+       loadGroup，只会拿回 404，列表里那一条也一直留着。 */
+    S.group = null;
+    S.modStates = {};
     closeDialog();
-    await loadGroup();
-    toast("已删除该群配置文件");
+    await loadSummary();
+    toast(`已删除 servers_${gone}.json`);
   });
 }
 
@@ -544,11 +664,22 @@ async function removeIgnore(qq: string) {
     <template v-else-if="CONFIRMS.includes(name)">
       <UiNotice tone="bad">{{ confirmWarn }}</UiNotice>
       <div class="cnote">{{ confirmNote }}</div>
+      <UiField
+        v-if="name === 'del-group'"
+        label="输入「确认删除」以继续"
+        help="内容必须与上面四个字完全一致，下方删除按钮才会可用"
+      >
+        <UiInput
+          v-model="f.confirm"
+          placeholder="确认删除"
+          :error="!!f.confirm && !delGroupReady"
+        />
+      </UiField>
     </template>
 
     <template v-else-if="name === 'batch-add'">
       <UiInput v-model="f.text" class="btext" :rows="4" mono placeholder="起床服:mc7.example.net:25566" />
-      <div class="bhelp">逗号或换行分隔；第三段端口留空则继承全局 default_api_port</div>
+      <div class="bhelp">逗号或换行分隔；第三段不写（不要留空冒号）则该服视为未装模组（/执行、/广播 不可用）</div>
       <div class="rlbl">回显与命令输出同格式</div>
       <div v-if="batchResult.message" class="rbox mono">
         <div>{{ batchResult.message }}</div>
@@ -583,29 +714,45 @@ async function removeIgnore(qq: string) {
 
     <template v-else-if="LISTS.includes(name)">
       <div class="addrow">
-        <UiInput v-model="f.qq" placeholder="输入 QQ 号" class="grow" />
-        <UiButton v-if="name === 'ignore-list'" kind="pri" class="add" @click="addIgnore"><UiIcon name="plus" :size="13" />添加</UiButton>
+        <UiInput
+          v-model="f.qq"
+          :placeholder="name === 'ignore-list' ? '输入 QQ 号' : '输入 QQ 号，逗号可一次加多个'"
+          class="grow"
+          @enter="addEntry"
+        />
+        <UiButton kind="pri" class="add" @click="addEntry"><UiIcon name="plus" :size="13" />添加</UiButton>
       </div>
       <div class="rows">
         <div v-for="q in listItems" :key="q" class="li">
           <span class="mono">{{ q }}</span>
-          <button v-if="name === 'ignore-list'" class="rm" type="button" @click="removeIgnore(q)">移除</button>
+          <button class="rm" type="button" @click="removeEntry(q)">移除</button>
         </div>
-        <div v-if="!listItems.length" class="li empty">名单为空 · 添加后即时生效</div>
+        <div v-if="!listItems.length" class="li empty">
+          {{ name === "ignore-list" ? "名单为空 · 添加后即时生效" : "名单为空 · 添加后回页面点「保存更改」" }}
+        </div>
       </div>
       <UiNotice tone="neutral">{{ listNote }}</UiNotice>
     </template>
 
     <template #foot>
-      <UiButton @click="closeDialog">{{ JSONS.includes(name) || LISTS.includes(name) ? "关闭" : "取消" }}</UiButton>
-      <UiButton
-        v-if="footAction"
-        :kind="footKind"
-        :disabled="name === 'batch-del' && !selectedNames.length"
-        @click="footAction()"
-      >
-        <UiIcon v-if="footIcon" :name="footIcon" :size="14" />{{ footVerb }}
-      </UiButton>
+      <template v-if="name === 'leave-cfg'">
+        <UiButton :disabled="leaving" @click="closeDialog">继续编辑</UiButton>
+        <UiButton kind="danger-light" :disabled="leaving" @click="discardThenLeave">放弃更改</UiButton>
+        <UiButton kind="pri" :disabled="leaving" @click="saveThenLeave">
+          <UiIcon v-if="!leaving" name="check" :size="14" />{{ leaving ? "保存中…" : "保存并离开" }}
+        </UiButton>
+      </template>
+      <template v-else>
+        <UiButton @click="closeDialog">{{ JSONS.includes(name) || LISTS.includes(name) ? "关闭" : "取消" }}</UiButton>
+        <UiButton
+          v-if="footAction"
+          :kind="footKind"
+          :disabled="footerDisabled"
+          @click="footAction()"
+        >
+          <UiIcon v-if="footIcon" :name="footIcon" :size="14" />{{ footVerb }}
+        </UiButton>
+      </template>
     </template>
   </UiModal>
 </template>

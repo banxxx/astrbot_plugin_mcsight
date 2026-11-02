@@ -211,6 +211,10 @@ async def request(host: str, port: Any, endpoint: str,
     if per_timeout is not None:
         kwargs["timeout"] = per_timeout
 
+    # 不跟随重定向：host 只过了语法/内网校验，公网主机仍可 302 到 169.254.169.254
+    # 等内网地址，跟过去就等于替调用方完成了 SSRF
+    kwargs["allow_redirects"] = False
+
     upper = (method or "").upper()
     if upper == "POST":
         kwargs["json"] = data

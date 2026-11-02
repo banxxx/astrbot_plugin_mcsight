@@ -48,6 +48,9 @@ ROUTE_PREFIX = f"/{PLUGIN_NAME}/view"
 MOD_READ_TIMEOUT = 3.0
 MOD_WRITE_TIMEOUT = 5.0
 PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 内核按**插件目录名**给配置文件命名（注册名 astrbot_plugin_mcsight 拼不出真实路径），
+# JSON 弹窗标题和回执里要显示真实的那个文件
+CONFIG_FILE_NAME = f"{os.path.basename(PLUGIN_DIR)}_config.json"
 SCHEMA_PATH = os.path.join(PLUGIN_DIR, "_conf_schema.json")
 METADATA_PATH = os.path.join(PLUGIN_DIR, "metadata.yaml")
 
@@ -75,8 +78,8 @@ SECTIONS = (
     ("状态与权限", "决定谁能用功能",
      ("enable_group_owner", "enable_group_admin",
       "super_admins", "whitelist_admins", "blacklist")),
-    ("模组 API", "插件调用服务器内模组的地址与鉴权",
-     ("default_api_port", "mod_api_token")),
+    ("模组 API", "插件调用服务器内模组时的鉴权",
+     ("mod_api_token",)),
     ("中心数据库", "绑定数据的云端落点",
      ("use_central_db", "db_host", "db_port", "db_user",
       "db_password", "db_name")),
@@ -148,19 +151,18 @@ def _token_count(servers: list) -> int:
 
 def _group_payload(gid: str) -> dict:
     cm = ConfigManager(group_id=int(gid))
-    wm = WhitelistManager()
     servers = cm.get_all_servers()
+    wm = WhitelistManager()
     return {
         "gid": gid,
         "file": f"servers_{gid}.json",
         "servers": [_server_view(s) for s in servers],
-        "mod_count": sum(1 for s in servers if s.get("api_port") is not None),
+        "mod_count": sum(1 for s in servers if wm.has_mod_api(s)),
         "token_count": _token_count(servers),
         "last_online_enabled": cm.is_last_online_enabled(),
         "nickname_check_enabled": cm.is_nickname_check_enabled(),
         "nickname_check_ignore_ids": cm.get_nickname_check_ignore_ids(),
         "max_servers_per_group": MAX_SERVERS_PER_GROUP,
-        "default_api_port": wm.default_api_port,
     }
 
 
@@ -181,19 +183,18 @@ def _parse_port(raw):
 
 async def view_summary():
     groups = []
+    wm = WhitelistManager()
     for gid in _group_ids():
         servers = ConfigManager(group_id=int(gid)).get_all_servers()
         groups.append({
             "gid": gid,
             "server_count": len(servers),
-            "mod_count": sum(1 for s in servers if s.get("api_port") is not None),
+            "mod_count": sum(1 for s in servers if wm.has_mod_api(s)),
             "token_count": sum(1 for s in servers if s.get("console_token")),
         })
-    wm = WhitelistManager()
     return _ok({
         "groups": groups,
         "max_servers_per_group": MAX_SERVERS_PER_GROUP,
-        "default_api_port": wm.default_api_port,
         "plugin_version": _plugin_version(),
         "plugin_name": PLUGIN_NAME,
     })
@@ -772,6 +773,19 @@ def _section_of(key: str) -> str:
     return "其他"
 
 
+def _normalize_list(value) -> list:
+    """名单类配置统一成字符串数组。
+
+    手写配置里 ``"super_admins": "111,222"`` 这种逗号串也要能正常编辑：
+    页面若把它当空名单，用户加一个人再保存，原有名单就被整表覆盖掉了。
+    """
+    if isinstance(value, str):
+        value = re.split(r"[,，\s]+", value)
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [str(x).strip() for x in value if str(x).strip()]
+
+
 def _coerce(kind: str, key: str, value):
     """按 schema 声明的类型校验并转换，返回 (值, 错误原因)"""
     if kind == "bool":
@@ -784,14 +798,14 @@ def _coerce(kind: str, key: str, value):
                 value = int(str(value).strip())
             except (TypeError, ValueError):
                 return None, f"{key} 必须是整数"
-        if key.endswith("_port") or key == "default_api_port":
+        if key.endswith("_port"):
             if value < 1 or value > 65535:
                 return None, "端口必须是 1-65535 的数字"
         return value, ""
     if kind == "list":
         if not isinstance(value, list):
             return None, f"{key} 必须是列表"
-        return [str(x).strip() for x in value if str(x).strip()], ""
+        return _normalize_list(value), ""
     if value is None:
         return "", ""
     if not isinstance(value, str):
@@ -810,6 +824,9 @@ def _config_item(key: str) -> dict:
     else:
         value = current
         has_value = True
+    if kind == "list":
+        # 手写/旧版配置可能是逗号串：统一成数组，页面才能逐条增删
+        value = _normalize_list(value)
     return {
         "key": key,
         "type": kind,
@@ -893,7 +910,7 @@ async def view_config_json():
         snapshot[key] = REDACTED if (key in SECRET_KEYS and current) else current
     for key in sorted(k for k in _plugin_config.keys() if k not in _schema):
         snapshot[key] = _plugin_config.get(key)
-    return _ok({"file": f"{PLUGIN_NAME}_config.json",
+    return _ok({"file": CONFIG_FILE_NAME,
                 "text": json.dumps(snapshot, ensure_ascii=False, indent=4)})
 
 

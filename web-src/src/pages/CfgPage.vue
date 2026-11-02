@@ -22,7 +22,6 @@ const LABELS: Record<string, string> = {
   super_admins: "超级管理员",
   whitelist_admins: "白名单管理员",
   blacklist: "黑名单",
-  default_api_port: "全局默认 API 端口",
   mod_api_token: "模组 API 鉴权 Token",
   use_central_db: "启用中心数据库（D1）",
   db_host: "数据库主机地址",
@@ -37,7 +36,6 @@ const LABELS: Record<string, string> = {
 
 /* 画布给每个字段定了不同的输入框宽度，不按内容自适应 */
 const WIDTHS: Record<string, number> = {
-  default_api_port: 120,
   db_host: 300,
   db_port: 120,
   db_user: 240,
@@ -67,7 +65,9 @@ function setDraft(it: ConfigItem, v: unknown) {
 }
 
 function listCount(it: ConfigItem): number {
-  return Array.isArray(it.value) ? it.value.length : 0;
+  // 名单弹窗改的是草稿：这里跟着草稿走，页面上的「名单内 N 个」才不会停在旧值
+  const v = it.key in S.cfgDraft ? S.cfgDraft[it.key] : it.value;
+  return Array.isArray(v) ? v.length : 0;
 }
 
 function defaultText(it: ConfigItem): string {

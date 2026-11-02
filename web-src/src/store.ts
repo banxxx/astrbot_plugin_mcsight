@@ -33,7 +33,6 @@ interface State {
   gid: string;
   group: GroupPayload | null;
   maxServers: number;
-  defaultApiPort: number;
   cfgItems: ConfigItem[];
   cfgSections: ConfigSection[];
   cfgExtraKeys: string[];
@@ -59,7 +58,6 @@ export const S = reactive<State>({
   gid: "",
   group: null,
   maxServers: 20,
-  defaultApiPort: 25566,
   cfgItems: [],
   cfgSections: [],
   cfgExtraKeys: [],
@@ -118,7 +116,6 @@ export async function loadSummary() {
   const r = await inflight(() => api.summary());
   S.groups = r.groups;
   S.maxServers = r.max_servers_per_group;
-  S.defaultApiPort = r.default_api_port;
   S.pluginVersion = r.plugin_version;
   if (!S.gid || !r.groups.some((g) => g.gid === S.gid)) {
     S.gid = r.groups[0]?.gid || "";
@@ -126,35 +123,50 @@ export async function loadSummary() {
 }
 
 export async function loadGroup() {
-  if (!S.gid) {
+  const gid = S.gid;
+  if (!gid) {
     S.group = null;
     return;
   }
-  S.group = await inflight(() => api.group(S.gid));
+  try {
+    const group = await inflight(() => api.group(gid));
+    /* 连点/快速切群时旧请求可能后回来：只接受仍对应当前选中群的响应，
+       否则面板会被上一群的慢响应覆盖 */
+    if (S.gid === gid) S.group = group;
+  } catch (err) {
+    /* 读失败（群文件被外部删掉等）就清空，别把上一群的列表留在面板上：
+       S.gid 已指向新群，带着旧群的服名去隐藏/删除会打到同名的另一台服 */
+    if (S.gid === gid) S.group = null;
+    throw err;
+  }
 }
 
 /* 换群只改 S.gid，重拉交给这里收口，免得每个入口各自记得刷 */
 watch(
   () => S.gid,
   () => {
-    void loadGroup();
+    /* 群可能在别处被删掉：读回来 404 时给出提示，别留一个未处理的 rejection */
+    void loadGroup().catch(fail);
     void loadModState();
   },
 );
 
 /** 读各服登录开关的当前值：整群一次并发，失败的那台由调用侧渲染成 unknown */
 export async function loadModState() {
-  if (!S.gid) {
+  const gid = S.gid;
+  if (!gid) {
     S.modStates = {};
+    S.modStateLoading = false;
     return;
   }
   S.modStateLoading = true;
   try {
-    const r = await inflight(() => api.serverModState(S.gid));
-    S.modStates = r.states;  } catch (err) {
+    const r = await inflight(() => api.serverModState(gid));
+    if (S.gid === gid) S.modStates = r.states;
+  } catch (err) {
     fail(err);
   } finally {
-    S.modStateLoading = false;
+    if (S.gid === gid) S.modStateLoading = false;
   }
 }
 
@@ -186,11 +198,11 @@ export async function loadConfig(force = false) {
 }
 
 /** 全局参数：草稿逐条写回，密钥走 config/secret，其余走 config/update；写完强制刷新读值。 */
-export async function saveDrafts() {
+export async function saveDrafts(): Promise<boolean> {
   const keys = Object.keys(S.cfgDraft);
   if (!keys.length) {
     toast("没有待保存的改动");
-    return;
+    return true;
   }
   S.pending++;
   const written: string[] = [];
@@ -199,7 +211,10 @@ export async function saveDrafts() {
     for (const key of keys) {
       const item = S.cfgItems.find((it) => it.key === key);
       if (!item) continue;
-      const value = S.cfgDraft[key];
+      /* 草稿里的名单是 Vue 响应式数组，直接过 postMessage 会报
+         "The object can not be cloned"——发之前摊平回普通数组 */
+      const raw = S.cfgDraft[key];
+      const value = Array.isArray(raw) ? Array.from(raw) : raw;
       if (item.secret) {
         const r = await api.configSecret(key, String(value ?? ""));
         restart = restart || r.restart_required;
@@ -212,11 +227,31 @@ export async function saveDrafts() {
     for (const k of written) delete S.cfgDraft[k];
     await loadConfig(true);
     toast(`已写入 ${written.length} 项${restart ? "；需重载插件才建新连接" : ""}`);
+    return true;
   } catch (err) {
+    /* 前面几项可能已经落盘：把它们的草稿清掉并重读，页面别把已保存的值继续标成「待保存」 */
+    for (const k of written) delete S.cfgDraft[k];
+    await loadConfig(true).catch(() => {});
     fail(err);
+    return false;
   } finally {
     S.pending--;
   }
+}
+
+/** 丢掉全部全局参数草稿（「放弃更改并离开」用） */
+export function discardDrafts() {
+  for (const k of Object.keys(S.cfgDraft)) delete S.cfgDraft[k];
+}
+
+/** 切页入口：在「全局参数」攒了草稿时先问一句，别让切 tab 把改动静默丢掉 */
+export function requestPage(key: PageKey) {
+  if (key === S.page) return;
+  if (S.page === "cfg" && dirtyCount.value > 0) {
+    openDialog("leave-cfg", { to: key });
+    return;
+  }
+  S.page = key;
 }
 
 export async function loadConstants() {

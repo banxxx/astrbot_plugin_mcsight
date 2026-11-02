@@ -12,9 +12,18 @@ const list = computed(() => {
   return q ? S.groups.filter((g) => g.gid.includes(q)) : S.groups;
 });
 
+/* summary 里的 server_count 只在换群/刷新时更新；增删服务器后当前群的面板已经
+   拿到新列表，这里以 S.group 为准，免得下拉里一直显示旧台数 */
+function countOf(g: { gid: string; server_count: number }) {
+  return g.gid === S.gid && S.group?.gid === g.gid
+    ? S.group.servers.length
+    : g.server_count;
+}
+
 const currentCount = computed(() => {
   const hit = S.groups.find((g) => g.gid === S.gid);
-  return hit ? hit.server_count : 0;
+  if (hit) return countOf(hit);
+  return S.group?.gid === S.gid ? S.group.servers.length : 0;
 });
 
 function pick(gid: string) {
@@ -66,7 +75,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
           @click="pick(g.gid)"
         >
           <span>{{ g.gid }}</span>
-          <em>{{ g.server_count }} 台</em>
+          <em>{{ countOf(g) }} 台</em>
         </button>
         <div v-if="!list.length" class="empty">没有匹配的群号</div>
       </div>

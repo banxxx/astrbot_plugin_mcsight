@@ -49,12 +49,6 @@
             "description": "用户ID"
         }
     },
-    "default_api_port": {
-        "description": "全局默认 API 端口",
-        "type": "int",
-        "default": 25566,
-        "hint": "条目未填 api_port 时继承此值"
-    },
     "mod_api_token": {
         "description": "模组 API 鉴权 Token",
         "hint": "需要与配置文件中的 API_TOKEN 完全一致",
