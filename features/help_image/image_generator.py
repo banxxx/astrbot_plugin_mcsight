@@ -19,6 +19,9 @@ PAD = 36
 CARD_PAD_X = 32
 CARD_PAD_TOP = 24
 CARD_PAD_BOTTOM = 18
+# 主帮助图专用留白（收紧白卡上下间距）；绑定帮助仍用上面的共享值
+HELP_PAD_TOP = 16
+HELP_PAD_BOTTOM = 6
 CARD_GAP = 18
 CARD_RADIUS = 16
 
@@ -190,11 +193,12 @@ def place_width(draw, runs, size):
 
 
 def add_row(draw, ops, x, y, max_w, row, tight=False,
-            cmd_size=16, desc_size=15):
+            cmd_size=16, desc_size=15, cmd_col_w=None):
     """绘制一行，返回行总高"""
     vpad = ROW_VPAD_TIGHT if tight else ROW_VPAD
     top = y + vpad
     cx = x
+    col_w = CMD_COL_W if cmd_col_w is None else cmd_col_w
 
     if row.get('q'):
         qw = text_w(draw, row['q'], cmd_size)
@@ -204,7 +208,7 @@ def add_row(draw, ops, x, y, max_w, row, tight=False,
         cx = place_runs(ops, draw, cx, top + 3, row['cmd'], cmd_size) + 6
         if not tight:
             # 命令列定宽：胶囊/描述从同一竖线开始（同 HTML min-width: 250px）
-            cx = max(cx, x + CMD_COL_W)
+            cx = max(cx, x + col_w)
     for p in row.get('pills', []):
         cx += add_pill(ops, draw, cx, top + 1, p) + 6
     if row.get('pills'):
@@ -235,6 +239,63 @@ def add_row(draw, ops, x, y, max_w, row, tight=False,
     return vpad + content_h + vpad
 
 
+def _widen_cmd(runs):
+    """命令列词间隔加宽：空格双写，让参数分隔更醒目（仅命令，描述/胶囊不动）"""
+    return [(t.replace(' ', '  '), c) for t, c in runs]
+
+
+def group_cols(draw, rows, cmd_size=16):
+    """组内左对齐列：命令→胶囊→权限牌→描述，逐组量宽，全部左缘/首字成列"""
+    cmd_max = 0.0
+    for r in rows:
+        if r.get('cmd'):
+            cmd_max = max(cmd_max, place_width(draw, r['cmd'], cmd_size) + 6)
+    pill_col = cmd_max
+    pill_block = 0.0
+    for r in rows:
+        pills = r.get('pills') or []
+        if pills:
+            pill_block = max(pill_block, sum(
+                text_w(draw, p, PILL_SIZE) + 18 + 6 for p in pills) + 4)
+    tag_col = pill_col + pill_block
+    tag_block = 0.0
+    for r in rows:
+        tags = r.get('tags') or []
+        if tags:
+            tag_block = max(tag_block, sum(
+                text_w(draw, t[0], TAG_SIZE) + 14 + 8 for t in tags))
+    return pill_col, tag_col, tag_col + tag_block
+
+
+def add_row_fixed(draw, ops, x, y, max_w, row, cols, cmd_size=16, desc_size=15):
+    """按组内固定列左对齐绘制一行，返回行总高"""
+    pill_col, tag_col, desc_col = cols
+    vpad = ROW_VPAD
+    top = y + vpad
+    if row.get('cmd'):
+        place_runs(ops, draw, x, top + 3, row['cmd'], cmd_size)
+
+    px = x + pill_col
+    for p in row.get('pills', []):
+        px += add_pill(ops, draw, px, top + 1, p) + 6
+
+    tx = x + tag_col
+    for t in row.get('tags', []):
+        tx += add_tag(ops, draw, tx, top + 2, t) + 8
+
+    content_h = CMD_LINE_H
+    desc = row.get('desc')
+    if desc:
+        dx = x + desc_col
+        lines = wrap_runs(draw, desc, desc_size, max_w - desc_col)
+        dy = top + 3
+        for ln in lines:
+            place_runs(ops, draw, dx, dy, ln, desc_size)
+            dy += DESC_LINE_H
+        content_h = max(CMD_LINE_H, 3 + len(lines) * DESC_LINE_H - 1)
+    return vpad + content_h + vpad
+
+
 def add_grid2(draw, ops, x, y, max_w, rows, cmd_size=15, desc_size=14):
     """双列网格，按 HTML 的 grid 行为：逐行填充（1→左, 2→右, 3→左…）"""
     col_gap = 28
@@ -252,7 +313,7 @@ def add_grid2(draw, ops, x, y, max_w, rows, cmd_size=15, desc_size=14):
 
 
 # ========== 分区 ==========
-def add_section(draw, ops, x, y, max_w, sec):
+def add_section(draw, ops, x, y, max_w, sec, cmd_col_w=None):
     # 标题行：色条 + 名称 + 提示
     add_rect(ops, 'bg1', x, y + 4, 4, 18, 2, sec['bar'])
     tx = x + 14
@@ -267,12 +328,19 @@ def add_section(draw, ops, x, y, max_w, sec):
     rows = sec['rows']
     if sec.get('grid'):
         y = add_grid2(draw, ops, x, y, max_w, rows)
+    elif sec.get('align_cols'):
+        cols = group_cols(draw, rows)
+        for i, r in enumerate(rows):
+            if i:
+                add_dash(ops, x, x + max_w, y + 1)
+                y += 2
+            y += add_row_fixed(draw, ops, x, y, max_w, r, cols)
     else:
         for i, r in enumerate(rows):
             if i:
                 add_dash(ops, x, x + max_w, y + 1)
                 y += 2
-            y += add_row(draw, ops, x, y, max_w, r)
+            y += add_row(draw, ops, x, y, max_w, r, cmd_col_w=cmd_col_w)
     return y + 16
 
 
@@ -382,7 +450,7 @@ def _row(cmd=None, pills=None, desc=None, tags=None, q=None):
     return r
 
 
-def _sec(bar, title, rows, hint=None, hint_tag=None, grid=False):
+def _sec(bar, title, rows, hint=None, hint_tag=None, grid=False, align_cols=False):
     s = {'bar': bar, 'title': title, 'rows': rows}
     if hint:
         s['hint'] = hint
@@ -390,6 +458,8 @@ def _sec(bar, title, rows, hint=None, hint_tag=None, grid=False):
         s['hint_tag'] = hint_tag
     if grid:
         s['grid'] = True
+    if align_cols:
+        s['align_cols'] = True
     return s
 
 
@@ -399,16 +469,19 @@ HELP_CARDS = [
         _sec(GREEN, "状态查询", [
             _row(_c("/在线"), pills=["/online", "/mc status"],
                  desc=_plain("查询所有服务器在线情况（生成状态卡片图片）")),
-            _row(_runs(("/查询 ", ACCENT), ("<玩家名> [服务器名]", DIM)),
+            _row(_runs(("/查询 ", ACCENT), ("<玩家名> [-s 服务器名]", DIM)),
                  pills=["/mc stats"],
                  desc=_plain("查询玩家数据统计（图片）；也可用 -s 服务器名 指定服务器")),
+            _row(_runs(("/排行 ", ACCENT), ("[类型] [窗口] -s <服务器名>", DIM)),
+                 pills=["/mc rank"],
+                 desc=_plain("时长 / 死亡 / 击杀生物 / 钓鱼排行榜；周/月只看近 7/30 天活跃玩家")),
             _row(_runs(("/tps ", ACCENT), ("[-s 服务器名]", DIM)),
                  pills=["/mc tps"],
                  desc=_plain("查询服务器 TPS，缺省查询全部服务器")),
-            _row(_runs(("/广播 ", ACCENT), ("[服务器名] <消息>", DIM)),
+            _row(_runs(("/广播 ", ACCENT), ("[-s 服务器名] <消息>", DIM)),
                  pills=["/mc say"],
                  desc=_plain("向游戏内发送广播；省略服务器名则广播至全部服务器")),
-            _row(_runs(("/执行 ", ACCENT), ("[服务器名] <命令>", DIM)),
+            _row(_runs(("/执行 ", ACCENT), ("-s <服务器名> <命令>", DIM)),
                  pills=["/mc exec"],
                  desc=_plain("在指定服务器执行控制台命令并回显输出（需先为该服配置命令 Token）")),
         ], hint="所有人可用"),
@@ -437,38 +510,38 @@ HELP_CARDS = [
     ],
     [
         _sec(AMBER, "服务器管理", [
-            _row(_runs(("/mc add ", ACCENT), ("名称 主机[:端口] [API端口]", DIM)),
+            _row(_runs(("/mc add ", ACCENT), ("<服务器名> <主机> [模组API端口]", DIM)),
                  desc=_plain("添加服务器；第三段是模组 API 端口，不是游戏端口")),
-            _row(_runs(("/mc remove ", ACCENT), ("名称", DIM)),
+            _row(_runs(("/mc remove ", ACCENT), ("<服务器名>", DIM)),
                  desc=_plain("删除服务器")),
-            _row(_runs(("/mc batchadd ", ACCENT), ("名:主机[:API端口],…", DIM)),
+            _row(_runs(("/mc batchadd ", ACCENT), ("<服务器名:主机>…", DIM)),
                  desc=_plain("批量添加；第三段是模组 API 端口")),
-            _row(_runs(("/mc batchremove ", ACCENT), ("名,名", DIM)),
+            _row(_runs(("/mc batchremove ", ACCENT), ("<服务器名>…", DIM)),
                  desc=_plain("批量删除")),
-            _row(_runs(("/mc edit ", ACCENT), ("名称 字段 值", DIM)),
+            _row(_runs(("/mc edit ", ACCENT), ("<服务器名> <字段> <新值>", DIM)),
                  desc=_plain("改 name / host / port（模组 API 端口）字段")),
-            _row(_runs(("/mc edit ", ACCENT), ("名称 remark 备注", DIM)),
+            _row(_runs(("/mc edit ", ACCENT), ("<服务器名> remark <备注>", DIM)),
                  desc=_plain("服务器备注，显示在 /在线 卡片名字下方")),
             _row(_c("/mc list"), desc=_plain("查看服务器列表（含独立端口）")),
-            _row(_runs(("/mc move ", ACCENT), ("名称 序号", DIM)),
+            _row(_runs(("/mc move ", ACCENT), ("<服务器名> <序号>", DIM)),
                  desc=_plain("移动排序位置（从 0 开始）")),
-            _row(_runs(("/mc swap ", ACCENT), ("名1 名2", DIM)),
+            _row(_runs(("/mc swap ", ACCENT), ("<服务器名1> <服务器名2>", DIM)),
                  desc=_plain("交换两台服务器位置")),
-            _row(_runs(("/mc token ", ACCENT), ("名称 Token|清除", DIM)),
+            _row(_runs(("/mc token ", ACCENT), ("<服务器名> <Token|清除>", DIM)),
                  desc=_plain("单独设置该服的命令 Token")),
-        ], hint_tag=ADMIN_TAG, hint="需要群管或插件管理员权限", grid=True),
+        ], hint_tag=ADMIN_TAG, hint="需要群管或插件管理员权限", align_cols=True),
         _sec(AMBER, "昵称检测与显示", [
             _row(_c("/检测昵称"), pills=["/mc checknick"],
                  desc=_plain("检测群成员昵称是否含「玩家（游戏ID）」")),
-            _row(_runs(("/检测昵称 ", ACCENT), ("开|关", DIM)),
+            _row(_runs(("/检测昵称 ", ACCENT), ("<开|关>", DIM)),
                  pills=["/mc nicknamecheck"], desc=_plain("本群昵称检测开关")),
-            _row(_runs(("/检测昵称 ", ACCENT), ("忽略 QQ", DIM)),
+            _row(_runs(("/检测昵称 ", ACCENT), ("<忽略|取消忽略> <QQ号>", DIM)),
                  desc=_plain("加入忽略列表（移除：忽略→取消忽略）")),
             _row(_runs(("/检测昵称 ", ACCENT), ("忽略列表", DIM)),
                  desc=_plain("查看当前忽略名单")),
-            _row(_runs(("/上次在线 ", ACCENT), ("开|关", DIM)),
+            _row(_runs(("/上次在线 ", ACCENT), ("<开|关>", DIM)),
                  pills=["/mc lastonline"], desc=_plain("状态卡片“上次在线”显示开关")),
-        ], grid=True),
+        ], align_cols=True),
         _sec(ROSE, "高级", [
             _row(_c("/mc whitelist list"),
                  desc=_plain("查看白名单配置（修改请前往 AstrBot WebUI）")),
@@ -480,7 +553,7 @@ HELP_CARDS = [
 # 权限表改了，/帮助 图、/绑定帮助 图和配置页的标识会一起变；手写的牌会和 utils/permission 对不上。
 # 中文命令 → /mc 子命令的对应关系抄自 main.py 里各命令对 message_str 的重写。
 _SUB_OF_CN = {
-    "在线": "status", "查询": "stats", "广播": "say", "执行": "exec", "tps": "tps",
+    "在线": "status", "查询": "stats", "排行": "rank", "广播": "say", "执行": "exec", "tps": "tps",
     "绑定": "bind", "解绑": "unbind", "查绑定": "check", "绑定检测": "bindcheck",
     "检测昵称": "checknick", "上次在线": "lastonline", "帮助": "help", "绑定帮助": "bindhelp",
 }
@@ -540,6 +613,25 @@ for _hcard in HELP_CARDS:
                 else:
                     _hrow.pop("tags", None)
 
+# 命令列词间隔加宽（空格双写）；共享命令列按加宽后的最长命令自适应，
+# 保证状态查询等单列分区的胶囊不因加宽而顶歪成列。
+_measure_draw = ImageDraw.Draw(Image.new('RGB', (8, 8)))
+for _hcard in HELP_CARDS:
+    for _hsec in _hcard:
+        for _hrow in _hsec.get("rows", []):
+            if isinstance(_hrow, dict) and isinstance(_hrow.get("cmd"), list):
+                _hrow["cmd"] = _widen_cmd(_hrow["cmd"])
+_need_col = CMD_COL_W
+for _hcard in HELP_CARDS:
+    for _hsec in _hcard:
+        if _hsec.get("align_cols") or _hsec.get("grid"):
+            continue
+        for _hrow in _hsec.get("rows", []):
+            if isinstance(_hrow, dict) and _hrow.get("cmd"):
+                _need_col = max(_need_col,
+                                place_width(_measure_draw, _hrow["cmd"], 16) + 6)
+HELP_CMD_COL_W = int(_need_col + 0.5)
+
 BRAND_RUNS = _runs(("QQ 群 × ", FAINT), ("Minecraft", ACCENT), (" 服务器助手", FAINT))
 FOOT_RUNS = _runs(
     ("提示：中文命令可直接发送，英文别名见各命令后的胶囊 · ", NOTE),
@@ -552,10 +644,11 @@ def _build_main(draw, ops, cards, y):
     inner_w = WIDTH - PAD * 2 - CARD_PAD_X * 2
     for sections in cards:
         card_top = y
-        cy = y + CARD_PAD_TOP
+        cy = y + HELP_PAD_TOP
         for sec in sections:
-            cy = add_section(draw, ops, PAD + CARD_PAD_X, cy, inner_w, sec)
-        card_h = cy - card_top + CARD_PAD_BOTTOM
+            cy = add_section(draw, ops, PAD + CARD_PAD_X, cy, inner_w, sec,
+                             cmd_col_w=HELP_CMD_COL_W)
+        card_h = cy - card_top + HELP_PAD_BOTTOM
         add_rect(ops, 'bg0', PAD, card_top, WIDTH - PAD * 2, card_h,
                  CARD_RADIUS, CARD_BG)
         y = card_top + card_h + CARD_GAP

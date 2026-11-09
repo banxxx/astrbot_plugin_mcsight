@@ -17,16 +17,21 @@ MAX_OUTPUT_CHARS = 1200
 # 模组端主线程等待上限是 8 秒，这里留出网络余量
 REQUEST_TIMEOUT = 10.0
 
-USAGE = ("用法: /执行 [服务器名] <命令...>\n"
-         "例：/执行 [一服] say 这是一条测试命令")
+USAGE = ("用法: /执行 -s <服务器名> <命令...>（或 /执行 [服务器名] <命令...>）\n"
+         "例：/执行 -s 一服 say 这是一条测试命令")
 
-# 服名用方括号包起来是这条命令唯一的定界手段，所以全角括号一并收下：
+# 服名用方括号包起来是旧写法的定界手段，所以全角括号一并收下：
 # 中文输入法下 【一服】 比 [一服] 更容易打出来
 _TARGET_RE = re.compile(r"^\s*[\[【]([^\[\]【】]*)[\]】]\s*")
+# 与 /广播 /查询 统一的 -s 选服写法；服务器名不含空格，取一个 token
+_S_TARGET_RE = re.compile(r"^\s*-s\s+(\S+)\s*")
 
 
 def parse_target(rest: str):
-    """取出开头的 [服务器名]，返回 (服名, 命令)；没有括号时服名为 None"""
+    """取出开头的 -s 服务器名 或 [服务器名]，返回 (服名, 命令)；都没有时服名为 None"""
+    sm = _S_TARGET_RE.match(rest)
+    if sm:
+        return sm.group(1).strip(), rest[sm.end():].strip()
     matched = _TARGET_RE.match(rest)
     if not matched:
         return None, ""
@@ -36,7 +41,7 @@ def parse_target(rest: str):
 async def handle_exec(event, config: ConfigManager, rest: str):
     server_name, command = parse_target(rest)
     if server_name is None:
-        yield event.plain_result(USAGE + "\n\n必须用 [服务器名] 点名要操作哪一台，不能省略。")
+        yield event.plain_result(USAGE + "\n\n必须用 -s 服务器名（或 [服务器名]）点名要操作哪一台，不能省略。")
         return
     if not server_name:
         yield event.plain_result(USAGE + "\n\n方括号里的服务器名是空的。")

@@ -78,12 +78,11 @@ ITEM_GAP_X = 10
 ITEM_GAP_Y = 8
 LBL_SIZE = 13
 LBL_COLOR = '#888888'
+ZERO_DIM = '#a9aebf'
 VAL_SIZE = 17
 VAL_COLOR = '#333333'
 LBL_LH = 18
 VAL_LH = 23
-NOTE_SIZE = 15
-NOTE_COLOR = '#a5aabb'
 
 TIME_SIZE = 16
 TIME_COLOR = '#aaaaaa'
@@ -98,7 +97,7 @@ CATEGORY_COLORS = ['#b9c1ea', '#a9d8bc', '#ecd7ac', '#e9b9bd', '#b3d6de',
 # 语义类型决定这个数能进哪张图、以什么口径进：
 #   ACT   主动操作次数 —— 能跨类比，但必须先除以游玩小时（次数天然差几个数量级）
 #   FLOW  流量型（米 / 伤害点）—— 只能算"每小时流量"，绝不参与计次
-#   NOISE 被动计数 —— 不进图（跳跃是跑图顺带产生的，死亡次数多≠战斗强），明细里仍列原始值
+#   NOISE 被动计数 —— 不进图（死亡次数多≠战斗强），明细里仍列原始值
 ACT, FLOW, NOISE = 'act', 'flow', 'noise'
 
 CATEGORIES = {
@@ -106,69 +105,74 @@ CATEGORIES = {
         'items': [
             ('步行距离', 'walkDistance', 'm', 3_000_000, FLOW),
             ('疾跑距离', 'sprintDistance', 'm', 2_000_000, FLOW),
-            ('飞行距离', 'flyDistance', 'm', 1_500_000, FLOW),
-            ('鞘翅滑行', 'elytraDistance', 'm', 2_000_000, FLOW),
-            ('骑马距离', 'horseDistance', 'm', 800_000, FLOW),
             ('游泳距离', 'swimDistance', 'm', 200_000, FLOW),
             ('攀爬距离', 'climbDistance', 'm', 150_000, FLOW),
-            ('跳跃次数', 'jump', '', 300_000, NOISE),
-            ('打开箱子', 'openChest', '', 300_000, ACT),
-            ('打开木桶', 'openBarrel', '', 200_000, ACT)
-        ]
-    },
-    '建筑': {
-        'items': [
-            ('使用工作台', 'interactWithCraftingTable', '', 150_000, ACT),
-            ('使用切石机', 'interactWithStonecutter', '', 40_000, ACT),
-            ('使用织布机', 'interactWithLoom', '', 15_000, ACT),
-            ('使用制图台', 'interactWithCartographyTable', '', 15_000, ACT),
-            ('花盆种花', 'potFlower', '', 3_000, ACT),
-            ('填充炼药锅', 'fillCauldron', '', 5_000, ACT),
-            ('清洗盔甲', 'cleanArmor', '', 5_000, ACT)
-        ]
-    },
-    '工业': {
-        'items': [
-            ('使用熔炉', 'interactWithFurnace', '', 200_000, ACT),
-            ('使用高炉', 'interactWithBlastFurnace', '', 80_000, ACT),
-            ('使用烟熏炉', 'interactWithSmoker', '', 80_000, ACT),
-            ('使用酿造台', 'interactWithBrewingStand', '', 80_000, ACT),
-            ('使用铁砧', 'interactWithAnvil', '', 40_000, ACT),
-            ('使用信标', 'interactWithBeacon', '', 150_000, ACT),
-            ('查看漏斗', 'inspectHopper', '', 150_000, ACT),
-            ('物品附魔', 'enchantItem', '', 15_000, ACT)
+            ('骑马距离', 'horseDistance', 'm', 800_000, FLOW),
+            ('划船距离', 'boatDistance', 'm', 500_000, FLOW),
+            ('矿车距离', 'minecartDistance', 'm', 300_000, FLOW),
+            ('鞘翅滑行', 'elytraDistance', 'm', 2_000_000, FLOW)
         ]
     },
     '战斗': {
         'items': [
             ('造成伤害', 'damageDealt', '点', 3_000_000, FLOW),
             ('承受伤害', 'damageTaken', '点', 1_000_000, FLOW),
-            ('吸收伤害', 'damageAbsorbed', '点', 300_000, FLOW),
             ('盾牌格挡', 'damageBlockedByShield', '点', 200_000, FLOW),
+            ('吸收伤害', 'damageAbsorbed', '点', 300_000, FLOW),
             ('击杀生物', 'mobKills', '', 80_000, ACT),
             ('击杀玩家', 'playerKills', '', 300, ACT),
             ('死亡次数', 'deaths', '', 1_500, NOISE),
             ('击中标靶', 'targetHit', '', 20_000, ACT)
         ]
     },
-    '社交': {
+    '工艺': {
+        'items': [
+            ('使用工作台', 'interactWithCraftingTable', '', 150_000, ACT),
+            ('使用切石机', 'interactWithStonecutter', '', 40_000, ACT),
+            ('使用熔炉', 'interactWithFurnace', '', 200_000, ACT),
+            ('使用高炉', 'interactWithBlastFurnace', '', 80_000, ACT),
+            ('使用烟熏炉', 'interactWithSmoker', '', 80_000, ACT),
+            ('使用酿造台', 'interactWithBrewingStand', '', 80_000, ACT),
+            ('使用铁砧', 'interactWithAnvil', '', 40_000, ACT),
+            ('使用砂轮', 'interactWithGrindstone', '', 40_000, ACT),
+            ('使用锻造台', 'interactWithSmithingTable', '', 20_000, ACT),
+            ('物品附魔', 'enchantItem', '', 15_000, ACT)
+        ]
+    },
+    '仓储': {
+        'items': [
+            ('打开箱子', 'openChest', '', 300_000, ACT),
+            ('打开木桶', 'openBarrel', '', 200_000, ACT),
+            ('打开末影箱', 'openEnderchest', '', 100_000, ACT),
+            ('打开潜影盒', 'openShulkerBox', '', 100_000, ACT),
+            ('查看漏斗', 'inspectHopper', '', 150_000, ACT),
+            ('查看投掷器', 'inspectDropper', '', 50_000, ACT),
+            ('查看发射器', 'inspectDispenser', '', 50_000, ACT),
+            ('触发陷阱箱', 'triggerTrappedChest', '', 20_000, ACT)
+        ]
+    },
+    '田园': {
         'items': [
             ('与村民对话', 'talkedToVillager', '', 30_000, ACT),
             ('与村民交易', 'tradedWithVillager', '', 30_000, ACT),
+            ('繁殖动物', 'animalsBred', '', 30_000, ACT),
+            ('钓鱼次数', 'fishCaught', '', 15_000, ACT),
             ('床上入眠', 'sleepInBed', '', 3_000, ACT),
+            ('使用营火', 'interactWithCampfire', '', 30_000, ACT),
             ('吃蛋糕', 'eatCakeSlice', '', 2_000, ACT),
             ('袭击胜利', 'raidWin', '', 250, ACT)
         ]
     },
-    '养老': {
+    '休闲': {
         'items': [
-            ('繁殖动物', 'animalsBred', '', 30_000, ACT),
-            ('钓鱼次数', 'fishCaught', '', 15_000, ACT),
             ('播放唱片', 'playRecord', '', 1_000, ACT),
             ('播放音符盒', 'playNoteblock', '', 15_000, ACT),
             ('音符盒调音', 'tuneNoteblock', '', 40_000, ACT),
             ('鸣钟', 'bellRing', '', 3_000, ACT),
-            ('使用营火', 'interactWithCampfire', '', 30_000, ACT)
+            ('使用织布机', 'interactWithLoom', '', 15_000, ACT),
+            ('使用制图台', 'interactWithCartographyTable', '', 15_000, ACT),
+            ('花盆种花', 'potFlower', '', 3_000, ACT),
+            ('填充炼药锅', 'fillCauldron', '', 5_000, ACT)
         ]
     }
 }
@@ -919,15 +923,7 @@ def _draw_charts(draw, ops, doc, x0, x1, y):
 def _draw_detail(draw, ops, doc, x0, x1, y):
     inner_w = x1 - x0 - D_PAD * 2
     cats = doc['display_categories']
-    if not cats:
-        card_h = D_PAD * 2 + 30
-        add_rect(ops, 'bg0', x0, y, x1 - x0, card_h, CARD_RADIUS, CARD_BG)
-        t = "暂无详细数据"
-        tw = text_w(draw, t, NOTE_SIZE)
-        add_text(ops, x0 + (x1 - x0 - tw) / 2, y + card_h / 2 - NOTE_SIZE / 2,
-                 t, NOTE_SIZE, NOTE_COLOR)
-        return card_h
-
+    cat_idx = {c: i for i, (c, _it) in enumerate(cats)}
     col_w = (inner_w - (D_COLS - 1) * D_GAP) / D_COLS
     groups = [cats[i:i + D_COLS] for i in range(0, len(cats), D_COLS)]
     row_hs = [max(_cat_card_h(it) for _, it in g) for g in groups]
@@ -941,8 +937,10 @@ def _draw_detail(draw, ops, doc, x0, x1, y):
             cx0 = x0 + D_PAD + ci * (col_w + D_GAP)
             add_rect(ops, 'bg1', cx0, gy, col_w, rh, CAT_R, CAT_BG)
             tx = cx0 + CAT_PAD_X
-            add_text(ops, tx, gy + CAT_PAD_V, cat, CAT_H_SIZE, ACCENT)
-            badge = str(len(items))
+            add_ellipse(ops, 'bg1', tx, gy + CAT_PAD_V + 4, 9,
+                        CATEGORY_COLORS[cat_idx[cat] % len(CATEGORY_COLORS)])
+            add_text(ops, tx + 15, gy + CAT_PAD_V, cat, CAT_H_SIZE, ACCENT)
+            badge = f"{sum(1 for it in items if it[3])}/{len(items)}"
             bw = text_w(draw, badge, BADGE_SIZE) + 16
             bx = cx0 + col_w - CAT_PAD_X - bw
             add_rect(ops, 'bg1', bx, gy + CAT_PAD_V - 1, bw, BADGE_H,
@@ -957,9 +955,13 @@ def _draw_detail(draw, ops, doc, x0, x1, y):
                 r, c = divmod(ii, ITEM_COLS)
                 ix = tx + c * (col_iw + ITEM_GAP_X)
                 yy = iy + r * (LBL_LH + VAL_LH + ITEM_GAP_Y)
-                add_text(ops, ix, yy, label, LBL_SIZE, LBL_COLOR)
-                add_text(ops, ix, yy + LBL_LH,
-                         format_value(val, unit), VAL_SIZE, VAL_COLOR)
+                if val:
+                    add_text(ops, ix, yy, label, LBL_SIZE, LBL_COLOR)
+                    add_text(ops, ix, yy + LBL_LH,
+                             format_value(val, unit), VAL_SIZE, VAL_COLOR)
+                else:
+                    add_text(ops, ix, yy, label, LBL_SIZE, ZERO_DIM)
+                    add_text(ops, ix, yy + LBL_LH, '0', VAL_SIZE, ZERO_DIM)
         gy += rh + D_GAP
     return card_h
 
@@ -1040,13 +1042,9 @@ def draw_player_stats_image(
 
     display_categories = []
     for cat in category_names:
-        items = []
-        for label, key, unit, _ref, _kind in CATEGORIES[cat]['items']:
-            val = stats_data.get(key, 0)
-            if val:
-                items.append((label, key, unit, val))
-        if items:
-            display_categories.append((cat, items))
+        items = [(label, key, unit, stats_data.get(key, 0))
+                 for label, key, unit, _ref, _kind in CATEGORIES[cat]['items']]
+        display_categories.append((cat, items))
 
     # 头像（2x 像素，NEAREST 放大保持像素风）
     ava_px = int(AVATAR * SCALE)
@@ -1090,7 +1088,7 @@ def draw_player_stats_image(
         'summary': [
             f"🗡️ 击杀 {stats_data.get('mobKills', 0)}",
             f"💀 死亡 {stats_data.get('deaths', 0)}",
-            f"⏱️ 在线 {stats_data.get('playTimeFormatted', '0分钟')}",
+            f"⏱️ 游玩 {stats_data.get('playTimeFormatted', '0分钟')}",
         ],
         'server_label': server_label,
         'srv_w': srv_w,

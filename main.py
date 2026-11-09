@@ -40,7 +40,7 @@ class MCWatcher(Star):
 
     @filter.command("mc")
     async def mc(self, event: AstrMessageEvent):
-        """插件总入口：/mc help | status | list | add | remove | edit | batchadd | batchremove | move | swap | token | say | exec | tps | stats | bind | unbind | check | whitelist | lastonline | checknick | nicknamecheck | bindcheck（子命令说明见 /帮助）"""
+        """插件总入口：/mc help | status | list | add | remove | edit | batchadd | batchremove | move | swap | token | say | exec | tps | stats | rank | bind | unbind | check | whitelist | lastonline | checknick | nicknamecheck | bindcheck（子命令说明见 /帮助）"""
         async for result in handle_mc_command(event):
             yield result
 
@@ -60,6 +60,17 @@ class MCWatcher(Star):
             event.message_str = f"/mc stats {rest}"
         else:
             event.message_str = "/mc stats"
+        async for result in handle_mc_command(event):
+            yield result
+
+    @filter.command("排行")
+    async def rank(self, event: AstrMessageEvent):
+        """排行榜：「/排行 [类型] [窗口] -s <服务器名> [-n N]」，类型 时长/死亡/击杀生物/钓鱼，窗口 总/周/月。等同于 /mc rank"""
+        rest = _rest_after_command(event)
+        if rest:
+            event.message_str = f"/mc rank {rest}"
+        else:
+            event.message_str = "/mc rank"
         async for result in handle_mc_command(event):
             yield result
 
@@ -97,7 +108,7 @@ class MCWatcher(Star):
     # ---------- 控制台命令 ----------
     @filter.command("执行", alias={"exec"})
     async def exec_command(self, event: AstrMessageEvent):
-        """在指定服务器执行控制台命令：「/执行 [服务器名] <命令>」，需先为该服配置命令 Token；服务器名必须紧跟命令前，省略即拒绝。等同于 /mc exec"""
+        """在指定服务器执行控制台命令：「/执行 -s <服务器名> <命令>」（或「/执行 [服务器名] <命令>」），需先为该服配置命令 Token；服务器名必须紧跟命令前，省略即拒绝。等同于 /mc exec"""
         rest = _rest_after_command(event)
         if rest:
             event.message_str = f"/mc exec {rest}"

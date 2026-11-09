@@ -20,7 +20,8 @@ from ..commands import (
     handle_say, handle_tps, handle_status, handle_stats,
     handle_exec, handle_token,
     handle_bind, handle_unbind, handle_check,
-    handle_checknick, handle_nicknamecheck_switch, handle_bindcheck
+    handle_checknick, handle_nicknamecheck_switch, handle_bindcheck,
+    handle_rank
 )
 
 async def handle_mc_command(event: AstrMessageEvent):
@@ -152,6 +153,10 @@ async def handle_mc_command(event: AstrMessageEvent):
             yield result
     elif sub_cmd == "bindcheck":
         async for result in handle_bindcheck(event, config, parts):
+            yield result
+    elif sub_cmd == "rank":
+        # 服名可能带空格，必须拿未拆分的原始余下文本再解析
+        async for result in handle_rank(event, config, msg[len(sub_cmd):]):
             yield result
     else:
         yield event.plain_result(f"未知子命令: {sub_cmd}，使用 /mc help 查看帮助。")

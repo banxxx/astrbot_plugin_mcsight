@@ -1,14 +1,20 @@
+"""玩家头像：官方纹理链路为主、第三方兜底。
+脸图按纹理 hash 落盘（内容寻址，换皮即换文件），映射层带 TTL，兜底图只进内存。
+"""
 import os
+import io
+import re
 import time
-import asyncio
+import json
+import base64
 import hashlib
 from urllib.parse import quote
 from collections import OrderedDict
-from typing import Optional
-from astrbot.api import logger
+from typing import Optional, Tuple
 
 import aiohttp
 from PIL import Image, ImageDraw
+from astrbot.api import logger
 
 from .plugin_paths import sub_dir
 
@@ -16,46 +22,77 @@ from .plugin_paths import sub_dir
 # ================= 配置常量 =================
 CACHE_DIR = sub_dir('avatar_cache')
 LOCAL_STEVE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'resources', 'images', 'steve-avatar.png')
-MAX_MEMORY_CACHE = 200          # 内存最多缓存 200 个头像
-DISK_CACHE_EXPIRE_DAYS = 7      # 磁盘缓存过期天数
-DOWNLOAD_TIMEOUT = 5.0          # 单个头像下载超时（秒）
 
-# 头像 API 源（按优先级依次尝试）
-AVATAR_API_TEMPLATES = [
-    "https://minotar.net/avatar/{identifier}/{size}",    # 首选
-    "https://crafthead.net/avatar/{identifier}/{size}",  # 备选
+MAX_MEMORY_CACHE = 200          # 内存最多缓存 200 个头像
+NAME_UUID_TTL = 7 * 24 * 3600   # 名字→UUID 复查周期
+PROFILE_TTL = 6 * 3600          # UUID→纹理 hash 复查周期，即换皮最迟多久被发现
+FALLBACK_TTL = 3600             # 第三方兜底图在内存里的存活时间
+REQUEST_TIMEOUT = 5.0           # 单次请求超时（秒）
+MAX_FACE_FILES = 1000           # 脸图永久保存，超过这个数量按 mtime 淘汰最旧的
+
+FACE_DIR = os.path.join(CACHE_DIR, 'face')
+NAME_DIR = os.path.join(CACHE_DIR, 'name2uuid')
+PROFILE_DIR = os.path.join(CACHE_DIR, 'profile')
+for _d in (FACE_DIR, NAME_DIR, PROFILE_DIR):
+    os.makedirs(_d, exist_ok=True)
+
+MOJANG_NAME2UUID = "https://api.mojang.com/users/profiles/minecraft/{name}"
+MOJANG_PROFILE = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
+
+# 兜底源：crafthead 在前（实测它对个别名字比 minotar 准）
+FALLBACK_TEMPLATES = [
+    "https://crafthead.net/avatar/{identifier}/{size}",
+    "https://minotar.net/avatar/{identifier}/{size}",
 ]
 
-# ================= 内存缓存（LRU） =================
+_OLD_NAME_RE = re.compile(r'^[0-9a-f]{40}\.png$')
+
+
+def _purge_legacy_cache():
+    """旧版把脸图直接放在 avatar_cache 根下、键里不含尺寸，改版后不会再被读到"""
+    try:
+        for fn in os.listdir(CACHE_DIR):
+            if _OLD_NAME_RE.match(fn):
+                os.remove(os.path.join(CACHE_DIR, fn))
+    except Exception as e:
+        logger.warning(f"清理旧版头像缓存失败: {e}")
+
+
+_purge_legacy_cache()
+
+
+# ================= 内存缓存（LRU + TTL） =================
 class LRUAvatarCache:
     def __init__(self, max_size: int = MAX_MEMORY_CACHE):
-        self.cache = OrderedDict()
+        self.cache: "OrderedDict[str, Tuple[Image.Image, float]]" = OrderedDict()
         self.max_size = max_size
 
     def get(self, key: str) -> Optional[Image.Image]:
-        if key in self.cache:
-            self.cache.move_to_end(key)
-            return self.cache[key]
-        return None
-
-    def put(self, key: str, img: Image.Image):
-        if key in self.cache:
-            self.cache.move_to_end(key)
-        else:
-            if len(self.cache) >= self.max_size:
-                self.cache.popitem(last=False)
-            self.cache[key] = img
-
-    def remove(self, key: str):
-        if key in self.cache:
+        item = self.cache.get(key)
+        if item is None:
+            return None
+        img, expire_at = item
+        if time.time() >= expire_at:
             del self.cache[key]
+            return None
+        self.cache.move_to_end(key)
+        return img
+
+    def put(self, key: str, img: Image.Image, ttl: float):
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        elif len(self.cache) >= self.max_size:
+            self.cache.popitem(last=False)
+        self.cache[key] = (img, time.time() + ttl)
 
     def clear(self):
         self.cache.clear()
 
+
 _memory_cache = LRUAvatarCache()
 
-# ================= 辅助函数 =================
+
+# ================= 通用工具 =================
 def _smart_resize(img: Image.Image, size: int) -> Image.Image:
     """像素风头像：放大用 NEAREST 保持硬边缘，缩小才用 LANCZOS"""
     if img.size == (size, size):
@@ -64,54 +101,54 @@ def _smart_resize(img: Image.Image, size: int) -> Image.Image:
     return img.resize((size, size), resample)
 
 
-def _is_cache_expired(file_path: str) -> bool:
-    if not os.path.exists(file_path):
-        return True
-    mtime = os.path.getmtime(file_path)
-    age_days = (time.time() - mtime) / (24 * 3600)
-    return age_days > DISK_CACHE_EXPIRE_DAYS
+def _disk_key(text: str) -> str:
+    return hashlib.sha1(str(text).encode('utf-8')).hexdigest()
 
-def _clean_expired_cache(file_path: str):
+
+def _read_json_cache(path: str, ttl: float):
     try:
-        os.remove(file_path)
-        logger.debug(f"已删除过期缓存: {file_path}")
+        with open(path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+        if time.time() - payload['ts'] < ttl:
+            return payload['value']
+    except Exception:
+        pass
+    return None
+
+
+def _write_json_cache(path: str, value):
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump({'ts': time.time(), 'value': value}, f)
     except Exception as e:
-        logger.warning(f"删除过期缓存失败 {file_path}: {e}")
+        logger.warning(f"写入头像缓存失败 {path}: {e}")
 
-async def _download_avatar_data(session: aiohttp.ClientSession, url: str) -> Optional[bytes]:
-    """
-    下载指定 URL 的头像数据（单次尝试，超时 DOWNLOAD_TIMEOUT 秒）
-    """
+
+async def _fetch(session: aiohttp.ClientSession, url: str) -> Tuple[int, Optional[bytes]]:
+    """返回 (HTTP 状态码, body)；网络异常记为 0，便于区分「明确没有」和「问不到」"""
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(DOWNLOAD_TIMEOUT)) as resp:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(REQUEST_TIMEOUT)) as resp:
             if resp.status == 200:
-                return await resp.read()
-            else:
-                logger.debug(f"下载头像失败，HTTP {resp.status}: {url}")
-                return None
-    except aiohttp.ClientError as e:
-        logger.error(f"客户端错误: {url} - {e}")
-        return None
+                return 200, await resp.read()
+            return resp.status, None
     except Exception as e:
-        logger.error(f"下载头像异常: {url} - {e}")
-        return None
+        logger.debug(f"头像请求失败 {url}: {e}")
+        return 0, None
+
+
+class _NoSuchAccount(Exception):
+    """官方明确答复这个标识符不存在（404），不是网络故障"""
+
 
 def get_default_avatar(size: int = 36) -> Image.Image:
-    """
-    返回默认 Steve 头像。
-    优先从本地 steve-avatar.png 加载，若失败则生成一个带灰色背景和 "S" 字母的占位图。
-    """
-    # 方案1：尝试加载本地图片
+    """默认 Steve 头像；本地图片不可用时退回灰底占位"""
     if os.path.exists(LOCAL_STEVE_PATH):
         try:
             img = Image.open(LOCAL_STEVE_PATH).convert("RGBA")
-            if img.size != (size, size):
-                img = _smart_resize(img, size)
-            return img
+            return _smart_resize(img, size)
         except Exception as e:
             logger.warning(f"加载本地 Steve 头像失败: {e}")
 
-    # 方案2：生成一个灰色背景带白色 "S" 字母的占位头像
     img = Image.new("RGBA", (size, size), (128, 128, 128, 255))
     draw = ImageDraw.Draw(img)
     try:
@@ -119,106 +156,175 @@ def get_default_avatar(size: int = 36) -> Image.Image:
         font = _load_font(int(size * 0.7))
     except Exception:
         font = None
-    draw.text(
-        (size // 2, size // 2),
-        "S",
-        fill=(255, 255, 255, 255),
-        font=font,
-        anchor="mm"
-    )
+    draw.text((size // 2, size // 2), "S", fill=(255, 255, 255, 255), font=font, anchor="mm")
     return img
 
-# ================= 核心下载函数 =================
+
+# ================= 官方纹理链路 =================
+async def _name_to_uuid(session: aiohttp.ClientSession, username: str) -> Optional[str]:
+    path = os.path.join(NAME_DIR, f"{_disk_key(username)}.json")
+    cached = _read_json_cache(path, NAME_UUID_TTL)
+    if cached:
+        return cached
+
+    url = MOJANG_NAME2UUID.format(name=quote(str(username), safe=''))
+    status, data = await _fetch(session, url)
+    if status == 404:
+        raise _NoSuchAccount(username)
+    if status != 200 or not data:
+        return None
+    try:
+        uuid = json.loads(data)['id']
+    except Exception as e:
+        logger.warning(f"解析 Mojang 名字查询结果失败 {username}: {e}")
+        return None
+    _write_json_cache(path, uuid)
+    return uuid
+
+
+async def _profile_texture(session: aiohttp.ClientSession, uuid: str) -> Optional[str]:
+    """皮肤纹理 URL，末段即内容 hash；换皮必然换 hash，旧脸图不可能被误命中"""
+    path = os.path.join(PROFILE_DIR, f"{_disk_key(uuid)}.json")
+    cached = _read_json_cache(path, PROFILE_TTL)
+    if cached:
+        return cached
+
+    url = MOJANG_PROFILE.format(uuid=quote(uuid, safe=''))
+    status, data = await _fetch(session, url)
+    if status == 404:
+        raise _NoSuchAccount(uuid)
+    if status != 200 or not data:
+        return None
+    try:
+        profile = json.loads(data)
+        prop = json.loads(base64.b64decode(profile['properties'][0]['value']).decode())
+        tex_url = prop['textures']['SKIN']['url']
+        # Mojang 下发的是 http://，同一资源 https 可达（实测字节一致），不走明文
+        if tex_url.startswith('http://'):
+            tex_url = 'https://' + tex_url[len('http://'):]
+    except Exception as e:
+        logger.warning(f"解析 Mojang profile 失败 {uuid}: {e}")
+        return None
+    _write_json_cache(path, tex_url)
+    return tex_url
+
+
+def _render_face(skin_data: bytes, size: int) -> Image.Image:
+    # 只裁脸、不叠帽子层：第三方 /avatar 端点就是只给脸，叠了会改变现有出图观感
+    skin = Image.open(io.BytesIO(skin_data)).convert("RGBA")
+    face = skin.crop((8, 8, 16, 16))
+    return face.resize((size, size), Image.NEAREST)
+
+
+def _prune_face_dir():
+    try:
+        entries = [(os.path.getmtime(os.path.join(FACE_DIR, f)), f)
+                   for f in os.listdir(FACE_DIR) if f.endswith('.png')]
+        if len(entries) <= MAX_FACE_FILES:
+            return
+        entries.sort()
+        for _, fn in entries[:len(entries) - MAX_FACE_FILES]:
+            os.remove(os.path.join(FACE_DIR, fn))
+    except Exception as e:
+        logger.debug(f"淘汰旧脸图失败: {e}")
+
+
+async def _official_face(session: aiohttp.ClientSession, username: str,
+                         uuid: Optional[str], size: int) -> Optional[Image.Image]:
+    clean_uuid = uuid.replace('-', '') if uuid else None
+    if not clean_uuid:
+        if not username:
+            return None
+        clean_uuid = await _name_to_uuid(session, username)
+    if not clean_uuid:
+        return None
+
+    tex_url = await _profile_texture(session, clean_uuid)
+    if not tex_url:
+        return None
+    tex_hash = tex_url.rsplit('/', 1)[-1]
+
+    face_path = os.path.join(FACE_DIR, f"{tex_hash}_{size}.png")
+    if os.path.exists(face_path):
+        try:
+            return Image.open(face_path).convert("RGBA")
+        except Exception as e:
+            logger.warning(f"读取脸图缓存失败 {face_path}: {e}")
+
+    status, data = await _fetch(session, tex_url)
+    if status != 200 or not data:
+        return None
+    try:
+        img = _render_face(data, size)
+    except Exception as e:
+        logger.warning(f"裁剪皮肤失败 {tex_url}: {e}")
+        return None
+    try:
+        img.save(face_path, 'PNG')
+        _prune_face_dir()
+    except Exception as e:
+        logger.warning(f"写入脸图缓存失败 {face_path}: {e}")
+    return img
+
+
+# ================= 第三方兜底 =================
+async def _fallback_face(session: aiohttp.ClientSession, identifiers, size: int) -> Optional[Image.Image]:
+    for identifier in identifiers:
+        for template in FALLBACK_TEMPLATES:
+            url = template.format(identifier=quote(str(identifier), safe=''), size=size)
+            status, data = await _fetch(session, url)
+            if status != 200 or not data:
+                continue
+            try:
+                img = Image.open(io.BytesIO(data)).convert("RGBA")
+                return _smart_resize(img, size)
+            except Exception as e:
+                logger.warning(f"解析兜底头像失败 {url}: {e}")
+    return None
+
+
+# ================= 对外入口 =================
 async def download_avatar(session: aiohttp.ClientSession,
                           username: str,
                           size: int = 36,
                           is_premium: Optional[bool] = None,
                           uuid: Optional[str] = None) -> Image.Image:
+    """取玩家头像：内存 → 官方纹理链路 → 第三方兜底 → 默认 Steve。
+
+    is_premium 明确为 False、或官方答复 404 时直接用默认头像且不缓存。
+    第三方兜底图只进内存短 TTL、不落盘——它可能返回 200 配一张假脸。
     """
-    获取玩家头像（优先内存 → 磁盘 → 网络多源回退，全部失败则返回默认灰色头像）
-    - 如果 is_premium 为 False，直接返回默认灰色头像（Steve），跳过网络请求。
-    - 如果 is_premium 为 True 或 None，走正常缓存+网络逻辑。
-    - 优先使用用户名（对关闭正版验证的服务器更友好），其次使用去连字符的 UUID。
-    """
-    # 如果是明确离线玩家，直接返回默认头像
     if is_premium is False:
         return get_default_avatar(size)
 
-    # ★ 修改：构建候选标识符列表 —— 用户名优先，UUID 其次
     identifiers = []
     if username:
         identifiers.append(username)
     if uuid:
-        clean_uuid = uuid.replace("-", "")
-        identifiers.append(clean_uuid)
-
+        identifiers.append(uuid.replace('-', ''))
     if not identifiers:
         return get_default_avatar(size)
 
-    # 先尝试从内存/磁盘缓存命中（对每个 identifier 依次检查）
     for identifier in identifiers:
-        cache_key = f"{identifier}_{size}"
-        cached = _memory_cache.get(cache_key)
+        cached = _memory_cache.get(f"{identifier}_{size}")
         if cached is not None:
             return cached.copy()
 
-    # 磁盘缓存检查（用户名做哈希作为文件名：防止恶意/异常用户名携带 ../ 等做路径穿越）
-    digest = hashlib.sha1(str(username).encode("utf-8")).hexdigest()
-    cache_path = os.path.join(CACHE_DIR, f"{digest}.png")
-
-    if os.path.exists(cache_path) and not _is_cache_expired(cache_path):
-        try:
-            img = Image.open(cache_path).convert("RGBA")
-            if img.size != (size, size):
-                img = _smart_resize(img, size)
-            # 将每个 identifier 都缓存一份到内存
+    try:
+        img = await _official_face(session, username, uuid, size)
+        if img is not None:
             for identifier in identifiers:
-                _memory_cache.put(f"{identifier}_{size}", img.copy())
+                _memory_cache.put(f"{identifier}_{size}", img.copy(), PROFILE_TTL)
             return img
-        except Exception as e:
-            logger.warning(f"读取磁盘缓存失败 {cache_path}: {e}")
-            _clean_expired_cache(cache_path)
-    elif os.path.exists(cache_path):
-        _clean_expired_cache(cache_path)
+    except _NoSuchAccount:
+        return get_default_avatar(size)
+    except Exception as e:
+        logger.warning(f"官方头像链路异常 {username}: {e}")
 
-    # 网络下载：依次尝试每个 identifier，每个 identifier 依次尝试所有 API 模板
-    data = None
-    for identifier in identifiers:
-        for template in AVATAR_API_TEMPLATES:
-            url = template.format(identifier=quote(str(identifier), safe=''), size=size)
-            data = await _download_avatar_data(session, url)
-            if data is not None:
-                logger.debug(f"头像下载成功: {url}")
-                break
-        if data is not None:
-            break
+    img = await _fallback_face(session, identifiers, size)
+    if img is not None:
+        for identifier in identifiers:
+            _memory_cache.put(f"{identifier}_{size}", img.copy(), FALLBACK_TTL)
+        return img
 
-    if data is not None:
-        try:
-            with open(cache_path, "wb") as f:
-                f.write(data)
-            img = Image.open(cache_path).convert("RGBA")
-            if img.size != (size, size):
-                img = _smart_resize(img, size)
-            # 将每个 identifier 都缓存一份到内存
-            for identifier in identifiers:
-                _memory_cache.put(f"{identifier}_{size}", img.copy())
-            return img
-        except Exception as e:
-            logger.error(f"处理头像数据失败 {username}: {e}")
-            if os.path.exists(cache_path):
-                os.remove(cache_path)
-
-    # 所有 API 都失败，返回默认灰色头像
-    if os.path.exists(LOCAL_STEVE_PATH):
-        try:
-            img = Image.open(LOCAL_STEVE_PATH).convert("RGBA")
-            if img.size != (size, size):
-                img = _smart_resize(img, size)
-            return img
-        except Exception as e:
-            logger.error(f"加载本地 Steve 头像失败: {e}")
-
-    # 最后返回纯灰色方块
-    default_img = Image.new("RGBA", (size, size), (128, 128, 128, 255))
-    return default_img
+    return get_default_avatar(size)

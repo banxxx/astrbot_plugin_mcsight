@@ -11,3 +11,4 @@ from .console import handle_exec
 from .bind import handle_bind, handle_unbind, handle_check
 from .nickname_check import handle_checknick, handle_nicknamecheck_switch
 from .bind_check import handle_bindcheck
+from .rank import handle_rank
