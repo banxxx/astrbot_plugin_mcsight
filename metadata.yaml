@@ -13,7 +13,7 @@ desc: |-
   需要配套模组 QQBindMod（Fabric / Forge / NeoForge）提供 HTTP API；
   未装模组的服务器会自动回落 mcstatus。
   WebUI 配置页需要 AstrBot 4.24 及以上，更早内核只注册聊天命令、功能不受影响。
-version: 1.2.7
+version: 1.2.8
 author: poso
 repo: https://github.com/banxxx/astrbot_plugin_mcsight
 # 平台标识用内核平台配置里的 type 值：aiocqhttp(OneBot v11 / NapCat 等)、qq_official(官方机器人
