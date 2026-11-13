@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import UiIcon from "../components/UiIcon.vue";
 import UiButton from "../components/UiButton.vue";
 import UiBadge from "../components/UiBadge.vue";
 import UiSwitch from "../components/UiSwitch.vue";
+import UiInput from "../components/UiInput.vue";
+import UiModal from "../components/UiModal.vue";
 import UiNotice from "../components/UiNotice.vue";
 import GroupPicker from "../components/GroupPicker.vue";
 import { S, api, currentGroup, loadGroup, loading, openDialog, run, setWhitelist, setHidden, toast } from "../store";
 import { useIsMobile } from "../lib/useMediaQuery";
-import type { ModState, ServerEntry } from "../lib/types";
+import type { BindRule, ModState, ServerEntry } from "../lib/types";
 
 const isMobile = useIsMobile();
 const g = computed(() => currentGroup.value);
@@ -41,12 +43,60 @@ function modBadge(s: ServerEntry): { tone: "port" | "off" | "ok" | "warn"; text:
   return { tone: "ok", text: "已装模组", title: "模组 API 已连通" };
 }
 
-async function toggleFlag(key: "last_online_enabled" | "nickname_check_enabled", value: boolean) {
+async function toggleFlag(key: "last_online_enabled" | "nickname_check_enabled" | "bind_require_nickname", value: boolean) {
   await run("flag", async () => {
     await api.groupFlag(S.gid, key, value);
     await loadGroup();
     if (!!g.value?.[key] !== value) toast(`后端未生效：${key} 读回来还是 ${!!g.value?.[key]}`);
   });
+}
+
+/* ---- 绑定群名片的匹配规则 ---- */
+const bindRule = ref<BindRule>("paren");
+const bindTemplate = ref("");
+const showBindHelp = ref(false);
+watch(
+  () => g.value,
+  (v) => {
+    bindRule.value = v?.bind_nickname_rule ?? "paren";
+    bindTemplate.value = v?.bind_nickname_template ?? "";
+  },
+  { immediate: true },
+);
+
+const RULE_SAMPLE = "Steve";
+const bindTemplateInvalid = computed(() => {
+  if (bindRule.value !== "template") return false;
+  const tpl = bindTemplate.value;
+  return !tpl.trim() || tpl.length > 64 || tpl.split("{gameId}").length - 1 !== 1;
+});
+const bindExample = computed(() => {
+  if (bindRule.value === "equals") return RULE_SAMPLE;
+  if (bindRule.value === "contains") return `玩家${RULE_SAMPLE}`;
+  if (bindRule.value === "template") return bindTemplate.value.replace("{gameId}", RULE_SAMPLE);
+  return `玩家（${RULE_SAMPLE}）`;
+});
+
+let bindSaving = false;
+async function saveBindRule() {
+  // 选了自定义模板但还没填：先给一个可用的默认，免得留下「选了却没存上」的空档
+  if (bindRule.value === "template" && !bindTemplate.value.trim()) {
+    bindTemplate.value = "MC:{gameId}";
+  }
+  if (bindTemplateInvalid.value) {
+    toast("模板必须包含且只包含一个 {gameId}");
+    return;
+  }
+  if (bindSaving) return;
+  bindSaving = true;
+  try {
+    await run("bind-rule", async () => {
+      await api.bindRule(S.gid, bindRule.value, bindTemplate.value);
+      await loadGroup();
+    });
+  } finally {
+    bindSaving = false;
+  }
 }
 
 /* 登录开关是模组侧的配置，只能实时读：读不到就禁用开关，不拿默认值冒充已知 */
@@ -275,6 +325,44 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
         </div>
         <div class="m-swrow">
           <div class="m-swrow-t">
+            <b>绑定校验群名片</b>
+            <span>开启后，/绑定 按下面的规则核对群昵称</span>
+            <em>默认开启</em>
+          </div>
+          <UiSwitch :on="!!g?.bind_require_nickname" :disabled="!g" @toggle="toggleFlag('bind_require_nickname', !g?.bind_require_nickname)" />
+        </div>
+        <div class="m-rule-row" :class="{ off: !g?.bind_require_nickname }">
+          <button class="help-btn" type="button" title="规则说明" aria-label="规则说明" @click="showBindHelp = true">?</button>
+          <div class="m-rule-line">
+            <span class="rl">匹配方式</span>
+            <div class="sel-wrap">
+              <select v-model="bindRule" class="sel" :disabled="!g?.bind_require_nickname" @change="saveBindRule">
+                <option value="paren">括号内（默认）</option>
+                <option value="equals">完全等于游戏ID</option>
+                <option value="contains">包含游戏ID</option>
+                <option value="template">自定义模板</option>
+              </select>
+            </div>
+          </div>
+          <div class="m-rule-line">
+            <span class="rl">模板</span>
+            <div class="rule-inp" @focusout="saveBindRule">
+              <UiInput
+                v-model="bindTemplate"
+                placeholder="如 MC:{gameId}"
+                mono
+                :disabled="!g?.bind_require_nickname || bindRule !== 'template'"
+                @enter="saveBindRule"
+              />
+            </div>
+          </div>
+          <div class="rule-ex" :class="{ bad: bindTemplateInvalid }">
+            <template v-if="bindTemplateInvalid">模板里要有一个 {gameId}（只能用一次）</template>
+            <template v-else>昵称示例：{{ bindExample }}</template>
+          </div>
+        </div>
+        <div class="m-swrow">
+          <div class="m-swrow-t">
             <b>昵称检测</b>
             <span>开启后本群可使用 /检测昵称</span>
             <em>/mc nicknamecheck 开|关</em>
@@ -372,6 +460,46 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
 
         <div class="swrow">
           <div class="sl">
+            <b>绑定校验群名片</b>
+            <span>开启后，/绑定 按下面的规则核对群昵称</span>
+            <em>默认开启</em>
+          </div>
+          <UiSwitch :on="!!g?.bind_require_nickname" :disabled="!g" @toggle="toggleFlag('bind_require_nickname', !g?.bind_require_nickname)" />
+        </div>
+
+        <div class="rule-row" :class="{ off: !g?.bind_require_nickname }">
+          <button class="help-btn" type="button" title="规则说明" aria-label="规则说明" @click="showBindHelp = true">?</button>
+          <div class="rule-line">
+            <span class="rl">匹配方式</span>
+            <div class="sel-wrap">
+              <select v-model="bindRule" class="sel" :disabled="!g?.bind_require_nickname" @change="saveBindRule">
+                <option value="paren">括号内（默认）</option>
+                <option value="equals">完全等于游戏ID</option>
+                <option value="contains">包含游戏ID</option>
+                <option value="template">自定义模板</option>
+              </select>
+            </div>
+          </div>
+          <div class="rule-line">
+            <span class="rl">模板</span>
+            <div class="rule-inp" @focusout="saveBindRule">
+              <UiInput
+                v-model="bindTemplate"
+                placeholder="如 MC:{gameId}"
+                mono
+                :disabled="!g?.bind_require_nickname || bindRule !== 'template'"
+                @enter="saveBindRule"
+              />
+            </div>
+          </div>
+          <div class="rule-ex" :class="{ bad: bindTemplateInvalid }">
+            <template v-if="bindTemplateInvalid">模板里要有一个 {gameId}（只能用一次）</template>
+            <template v-else>昵称示例：{{ bindExample }}</template>
+          </div>
+        </div>
+
+        <div class="swrow">
+          <div class="sl">
             <b>昵称检测</b>
             <span>开启后本群可使用 /检测昵称</span>
             <em>/mc nicknamecheck 开|关</em>
@@ -394,6 +522,66 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
     </template>
 
     <UiNotice v-if="S.error" tone="bad" class="errline">{{ S.error }}</UiNotice>
+
+    <UiModal
+      v-if="showBindHelp"
+      cls="m-help"
+      title="绑定名片规则说明"
+      sub="仅在「绑定校验群名片」开启时生效；游戏ID 始终以游戏里登录的为准"
+      subNote
+      @close="showBindHelp = false"
+    >
+      <p class="help-lead">这里决定 /绑定 时，你的群昵称要写成什么样才算通过。游戏ID 以你在游戏里登录的名字为准，下面统一用 <b>Steve</b> 举例。</p>
+      <div class="help-sec">
+        <h4>四种写法</h4>
+        <div class="help-item">
+          <div class="help-name">括号内（默认）</div>
+          <p>昵称里用括号写上游戏ID，括号里的字要和游戏ID一模一样；括号前面写什么都可以。</p>
+          <p class="help-eg"><span class="ok">能过</span>玩家（Steve）、Steve(Steve)、大佬（Steve）</p>
+          <p class="help-eg"><span class="no">过不了</span>Steve（没括号）、玩家（Steve2）、玩家（steve）</p>
+        </div>
+        <div class="help-item">
+          <div class="help-name">完全等于游戏ID</div>
+          <p>群昵称只写游戏ID，不加任何字；前后多几个空格没关系。</p>
+          <p class="help-eg"><span class="ok">能过</span>Steve</p>
+          <p class="help-eg"><span class="no">过不了</span>玩家Steve、Steve大佬</p>
+        </div>
+        <div class="help-item">
+          <div class="help-name">包含游戏ID</div>
+          <p>昵称里只要有游戏ID就行，但它不能是另一个更长ID的一部分。</p>
+          <p class="help-eg"><span class="ok">能过</span>玩家Steve、Steve大佬、大Steve</p>
+          <p class="help-eg"><span class="no">过不了</span>Steve2（那是另一个ID）、My_Steve（下划线连着的也算另一个ID）、steve（大小写不同）</p>
+        </div>
+        <div class="help-item">
+          <div class="help-name">自定义模板</div>
+          <p>你自己定格式，用 <code>{gameId}</code> 代表游戏ID，填进去以后要一字不差。</p>
+          <p class="help-eg"><span class="ok">能过</span>模板写 <code>MC:{gameId}</code>，昵称就写 MC:Steve</p>
+          <p class="help-eg"><span class="no">过不了</span>MC:steve（大小写不同）、XMC:Steve（前面多了字）</p>
+        </div>
+      </div>
+      <div class="help-sec">
+        <h4>怎么选</h4>
+        <ul>
+          <li>大多数群用默认的「括号内」就行。</li>
+          <li>群里习惯直接拿游戏ID当昵称，选「完全等于游戏ID」。</li>
+          <li>昵称里还带称呼或头衔，选「包含游戏ID」。</li>
+          <li>群里有一套固定格式（比如 MC:Steve），选「自定义模板」。</li>
+        </ul>
+      </div>
+      <div class="help-sec">
+        <h4>还要注意</h4>
+        <ul>
+          <li>大小写要一模一样：Steve 和 steve 不算同一个。</li>
+          <li>自定义模板里必须有一个 <code>{gameId}</code>，只能用一次，最多 64 个字。</li>
+          <li>模板写错时不会保存；配置文件里的规则坏了会自动按「括号内」处理，不会把绑定卡死。</li>
+          <li>关掉「绑定校验群名片」后，这些规则都不生效，绑定只看绑定码。</li>
+          <li>改上面的选择时，下面的「昵称示例」会跟着变，照着写就行。</li>
+        </ul>
+      </div>
+      <template #foot>
+        <UiButton kind="pri" @click="showBindHelp = false">知道了</UiButton>
+      </template>
+    </UiModal>
   </div>
 </template>
 
@@ -658,6 +846,232 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
   font-style: normal;
   font-weight: 500;
   line-height: 14px;
+  color: var(--ac);
+}
+
+/* 绑定匹配规则：常驻一行，主开关关闭时整行置灰 */
+.rule-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px var(--pad-card) 14px;
+  border-bottom: 1px solid var(--row);
+}
+
+.rule-row.off .rule-line,
+.rule-row.off .rule-ex {
+  opacity: 0.55;
+}
+
+.help-btn {
+  position: absolute;
+  top: 9px;
+  right: var(--pad-card);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--bd);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink3);
+  font-family: var(--ff);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.help-btn:hover {
+  border-color: var(--ac);
+  color: var(--ac);
+}
+
+.rule-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rule-line .rl {
+  width: 64px;
+  flex: none;
+  font-size: 11px;
+  color: var(--ink3);
+}
+
+.sel-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.sel-wrap::after {
+  content: "";
+  position: absolute;
+  right: 11px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--ink3);
+  border-bottom: 1.5px solid var(--ink3);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+
+.sel {
+  appearance: none;
+  color-scheme: dark;
+  height: 32px;
+  min-width: 180px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--bd);
+  border-radius: var(--r-ctl);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--ff);
+  font-size: 13px;
+}
+
+.sel:disabled {
+  cursor: not-allowed;
+}
+
+.rule-inp {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 360px;
+}
+
+.rule-ex {
+  padding-left: 74px;
+  font-size: 11px;
+  color: var(--ink4);
+}
+
+.rule-ex.bad {
+  color: var(--bad);
+}
+
+.m-rule-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--row);
+}
+
+.m-rule-row.off .m-rule-line,
+.m-rule-row.off .rule-ex {
+  opacity: 0.55;
+}
+
+.m-rule-line {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.m-rule-line .rl {
+  font-size: 11px;
+  color: var(--ink3);
+}
+
+.m-rule-row .sel {
+  width: 100%;
+  min-width: 0;
+}
+
+.m-rule-row .rule-inp {
+  max-width: none;
+}
+
+.m-rule-row .rule-ex {
+  padding-left: 0;
+}
+
+/* 规则说明弹窗内容 */
+.help-lead {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink3);
+}
+
+.help-lead b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.help-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.help-sec h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink2);
+}
+
+.help-sec p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink3);
+}
+
+.help-sec ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink3);
+}
+
+.help-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--row);
+  border-radius: 6px;
+}
+
+.help-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.help-sec .help-eg {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink4);
+}
+
+.help-eg .ok {
+  margin-right: 4px;
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.help-eg .no {
+  margin: 0 6px;
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.help-sec code {
+  font-family: var(--fm);
   color: var(--ac);
 }
 

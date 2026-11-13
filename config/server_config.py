@@ -5,6 +5,7 @@ import unicodedata
 from typing import List, Dict, Optional, Tuple
 
 from ..utils.plugin_paths import sub_dir
+from ..utils.bind_rule import normalize_rule
 
 # 每个群最多绑定的服务器数量（/mc add、/mc batchadd 时拦截）
 MAX_SERVERS_PER_GROUP = 20
@@ -480,6 +481,38 @@ class ConfigManager:
         """设置当前群组的‘昵称检测’功能开关"""
         data = self._load()
         data["nickname_check_enabled"] = enabled
+        self._save(data)
+
+    # ---------- 绑定是否强制校验群名片 ----------
+    def is_bind_require_nickname(self) -> bool:
+        """绑定是否强制校验群名片；关闭后只看绑定码（默认开启，保持原行为）"""
+        return bool(self._load().get("bind_require_nickname", True))
+
+    def set_bind_require_nickname(self, enabled: bool):
+        """设置绑定是否强制校验群名片"""
+        data = self._load()
+        data["bind_require_nickname"] = enabled
+        self._save(data)
+
+    # ---------- 绑定群名片的匹配规则 ----------
+    def get_bind_nickname_rule(self) -> str:
+        """当前群的匹配方式；缺失或非法一律回落到 paren"""
+        return normalize_rule(self._load().get("bind_nickname_rule"))
+
+    def set_bind_nickname_rule(self, rule: str):
+        """设置当前群的匹配方式"""
+        data = self._load()
+        data["bind_nickname_rule"] = rule
+        self._save(data)
+
+    def get_bind_nickname_template(self) -> str:
+        """自定义模板（仅 template 模式使用）"""
+        return str(self._load().get("bind_nickname_template") or "")
+
+    def set_bind_nickname_template(self, template: str):
+        """设置自定义模板"""
+        data = self._load()
+        data["bind_nickname_template"] = template
         self._save(data)
 
     # ---------- 昵称检测：忽略的 QQ 列表 ----------

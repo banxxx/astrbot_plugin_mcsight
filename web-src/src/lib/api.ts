@@ -1,6 +1,8 @@
 import { call, getBridge, type RawBridge } from "./bridge";
 import type {
   BatchPayload,
+  BindRule,
+  BindRulePayload,
   CommandsPayload,
   ConfigPayload,
   ConfigUpdatePayload,
@@ -49,6 +51,8 @@ export const api = {
   groupDelete: (gid: string) => post<DeleteGroupPayload>("group/delete", { gid }),
   groupFlag: (gid: string, key: GroupFlagKey, value: boolean) =>
     post<FlagPayload>("group/flag", { gid, key, value }),
+  bindRule: (gid: string, rule: BindRule, template: string) =>
+    post<BindRulePayload>("group/bind_rule", { gid, rule, template }),
   ignoreAdd: (gid: string, qq: string) => post<IgnorePayload>("group/ignore_add", { gid, qq }),
   ignoreRemove: (gid: string, qq: string) => post<IgnorePayload>("group/ignore_remove", { gid, qq }),
 

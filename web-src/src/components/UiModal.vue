@@ -8,7 +8,7 @@ import { useIsMobile } from "../lib/useMediaQuery";
 
 withDefaults(
   defineProps<{
-    cls?: "m-confirm" | "m-confirm-typed" | "m-form" | "m-list" | "m-json";
+    cls?: "m-confirm" | "m-confirm-typed" | "m-form" | "m-list" | "m-json" | "m-help";
     title: string;
     titleMono?: boolean;
     sub?: string;
@@ -129,6 +129,12 @@ onBeforeUnmount(unlockPageScroll);
 .m-json {
   width: 760px;
   height: 500px;
+}
+
+/* 说明类弹窗：内容静态、只有一段滚动，按内容最重状态定高 */
+.m-help {
+  width: 640px;
+  height: 680px;
 }
 
 .mh {

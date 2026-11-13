@@ -13,6 +13,7 @@ develop-eggs/
 dist/
 downloads/
 eggs/
+docs/
 .eggs/
 # 只锚根目录：前端源码里有 web-src/src/lib/，写成 lib/ 会把源文件一起吃掉
 /lib/

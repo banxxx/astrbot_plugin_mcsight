@@ -8,8 +8,9 @@ const props = withDefaults(
     rows?: number;
     id?: string;
     autocomplete?: string;
+    disabled?: boolean;
   }>(),
-  { rows: 0, autocomplete: "off" },
+  { rows: 0, autocomplete: "off", disabled: false },
 );
 
 const emit = defineEmits<{
@@ -31,6 +32,7 @@ function onInput(v: string) {
     :rows="props.rows"
     :placeholder="props.placeholder"
     :value="props.modelValue"
+    :disabled="props.disabled"
     @input="onInput(($event.target as HTMLTextAreaElement).value)"
   />
   <input
@@ -41,6 +43,7 @@ function onInput(v: string) {
     :placeholder="props.placeholder"
     :autocomplete="props.autocomplete"
     :value="props.modelValue"
+    :disabled="props.disabled"
     @input="onInput(($event.target as HTMLInputElement).value)"
     @keyup.enter="emit('enter')"
   />

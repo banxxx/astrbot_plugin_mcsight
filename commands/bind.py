@@ -6,7 +6,7 @@ from astrbot.api.event import AstrMessageEvent
 from ..config.server_config import ConfigManager
 from ..config.whitelist_config import WhitelistManager
 from ..utils.permission import check_permission
-from ..utils import bind_guard, bind_route, mod_http
+from ..utils import bind_guard, bind_route, bind_rule, mod_http
 from .common import call_mod_api, execute_db_update, execute_db_query
 
 
@@ -418,6 +418,27 @@ async def _validate_round(servers, token_code, robot_token, wm):
     return hit, answered_invalid, rate_limited, unsupported
 
 
+def _card_error_text(code, sender_name, target, got, rule, template):
+    """按匹配方式给出拒绝原因；paren 的三条文案与改动前逐字一致。"""
+    if code == "no_bracket":
+        return (f"❌ 您的群昵称「{sender_name}」不包含括号，请修改为「玩家（游戏ID）」格式。\n"
+                f"例如：张三（zhangsan）")
+    if code == "empty_bracket":
+        return (f"❌ 您的群昵称「{sender_name}」中括号内为空，请填写您的游戏ID。\n"
+                f"例如：张三（zhangsan）")
+    if code == "mismatch":
+        return (f"❌ 昵称中的游戏ID「{got}」与当前登录的游戏ID「{target}」不一致。\n"
+                f"请确保您的群昵称格式为「玩家（{target}）」，或重新登录游戏获取正确的绑定码。")
+    if code == "equals_fail":
+        return (f"❌ 您的群昵称「{sender_name}」应正好是游戏ID「{target}」。\n"
+                f"请把群昵称设为：{target}")
+    if code == "contains_fail":
+        return (f"❌ 您的群昵称「{sender_name}」里没有找到游戏ID「{target}」。\n"
+                f"请把游戏ID包含在群昵称中，例如：玩家{target}")
+    return (f"❌ 您的群昵称「{sender_name}」不符合本群格式。\n"
+            f"应设为：{bind_rule.sample(rule, template, target)}")
+
+
 async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: list):
     wm = WhitelistManager()
 
@@ -536,37 +557,24 @@ async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: lis
     found_server_port = hit["port"]
     bind_guard.clear(guard_scope, qq)
 
-    # ---- 步骤2：验证QQ群昵称 ----
-    sender_name = event.get_sender_name()
-    if not sender_name:
-        yield event.plain_result(
-            "❌ 无法获取您的群昵称，请确保您在群聊中发送命令。\n"
-            "请将群昵称修改为「玩家（游戏ID）」格式，例如：张三（zhangsan）"
-        )
-        return
+    # ---- 步骤2：验证QQ群昵称（可按群关闭）----
+    if config.is_bind_require_nickname():
+        sender_name = event.get_sender_name()
+        if not sender_name:
+            yield event.plain_result(
+                "❌ 无法获取您的群昵称，请确保您在群聊中发送命令。\n"
+                "请将群昵称修改为「玩家（游戏ID）」格式，例如：张三（zhangsan）"
+            )
+            return
 
-    match = re.search(r'[（(](.*?)[）)]', sender_name)
-    if not match:
-        yield event.plain_result(
-            f"❌ 您的群昵称「{sender_name}」不包含括号，请修改为「玩家（游戏ID）」格式。\n"
-            f"例如：张三（zhangsan）"
-        )
-        return
-
-    nickname_game_id = match.group(1).strip()
-    if not nickname_game_id:
-        yield event.plain_result(
-            f"❌ 您的群昵称「{sender_name}」中括号内为空，请填写您的游戏ID。\n"
-            f"例如：张三（zhangsan）"
-        )
-        return
-
-    if nickname_game_id != target_game_id:
-        yield event.plain_result(
-            f"❌ 昵称中的游戏ID「{nickname_game_id}」与当前登录的游戏ID「{target_game_id}」不一致。\n"
-            f"请确保您的群昵称格式为「玩家（{target_game_id}）」，或重新登录游戏获取正确的绑定码。"
-        )
-        return
+        rule = config.get_bind_nickname_rule()
+        template = config.get_bind_nickname_template()
+        passed, code, got = bind_rule.evaluate(
+            sender_name, target_game_id, rule, template)
+        if not passed:
+            yield event.plain_result(_card_error_text(
+                code, sender_name, target_game_id, got, rule, template))
+            return
 
     # ============================================================
     # 步骤3A：中心模式 —— 直接操作数据库
@@ -845,28 +853,14 @@ async def handle_check(event: AstrMessageEvent, config: ConfigManager, parts: li
         else:
             query_type = "ID"
     else:
-        sender_name = event.get_sender_name()
-        if not sender_name:
+        query_value = str(event.get_sender_id())
+        if not query_value:
             yield event.plain_result(
-                "无法获取您的群昵称，请手动指定查询参数。\n"
+                "无法获取您的身份，请手动指定查询参数。\n"
                 "用法: /查绑定 <游戏ID> 或 /查绑定 QQ <QQ号> 或 /查绑定 ID <游戏ID>"
             )
             return
-        match = re.search(r'[（(](.*?)[）)]', sender_name)
-        if match:
-            query_value = match.group(1).strip()
-            if not query_value:
-                yield event.plain_result(
-                    f"您的群昵称「{sender_name}」中括号内为空，请修改昵称或手动指定。"
-                )
-                return
-        else:
-            yield event.plain_result(
-                f"无法从您的群昵称「{sender_name}」中解析出查询参数。\n"
-                "请确保昵称格式为「玩家（游戏ID）」，或手动指定: /查绑定 <游戏ID>"
-            )
-            return
-        query_type = "ID"
+        query_type = "QQ"
 
     servers = config.get_all_servers()
     if not servers:

@@ -48,6 +48,9 @@ export interface GroupPayload {
   token_count: number;
   last_online_enabled: boolean;
   nickname_check_enabled: boolean;
+  bind_require_nickname: boolean;
+  bind_nickname_rule: BindRule;
+  bind_nickname_template: string;
   nickname_check_ignore_ids: string[];
   max_servers_per_group: number;
 }
@@ -66,7 +69,14 @@ export interface SummaryPayload {
   plugin_name: string;
 }
 
-export type GroupFlagKey = "last_online_enabled" | "nickname_check_enabled";
+export type GroupFlagKey = "last_online_enabled" | "nickname_check_enabled" | "bind_require_nickname";
+
+export type BindRule = "paren" | "equals" | "contains" | "template";
+
+export interface BindRulePayload {
+  rule: BindRule;
+  template: string;
+}
 
 export interface FlagPayload {
   key: GroupFlagKey;

@@ -39,6 +39,7 @@ from ..config.server_config import (
 from ..config.whitelist_config import WhitelistManager
 from ..features.player_status.checker import query_one
 from ..utils import mod_http
+from ..utils.bind_rule import validate as validate_bind_rule
 from ..utils.host_validator import normalize_host_input, validate_host
 from ..utils.plugin_paths import PLUGIN_NAME, sub_dir
 from .constants import ROWS
@@ -161,6 +162,9 @@ def _group_payload(gid: str) -> dict:
         "token_count": _token_count(servers),
         "last_online_enabled": cm.is_last_online_enabled(),
         "nickname_check_enabled": cm.is_nickname_check_enabled(),
+        "bind_require_nickname": cm.is_bind_require_nickname(),
+        "bind_nickname_rule": cm.get_bind_nickname_rule(),
+        "bind_nickname_template": cm.get_bind_nickname_template(),
         "nickname_check_ignore_ids": cm.get_nickname_check_ignore_ids(),
         "max_servers_per_group": MAX_SERVERS_PER_GROUP,
     }
@@ -245,7 +249,7 @@ async def view_group_flag():
         return _err("群号必须是 5-12 位数字")
     key = body.get("key")
     value = body.get("value")
-    if key not in ("last_online_enabled", "nickname_check_enabled"):
+    if key not in ("last_online_enabled", "nickname_check_enabled", "bind_require_nickname"):
         return _err("不支持的开关项")
     if not isinstance(value, bool):
         return _err("开关值必须是 true/false")
@@ -254,9 +258,31 @@ async def view_group_flag():
     cm = ConfigManager(group_id=int(gid))
     if key == "last_online_enabled":
         cm.set_last_online_enabled(value)
-    else:
+    elif key == "nickname_check_enabled":
         cm.set_nickname_check_enabled(value)
+    else:
+        cm.set_bind_require_nickname(value)
     return _ok({"key": key, "value": value})
+
+
+async def view_group_bind_rule():
+    body, err = await _body()
+    if err:
+        return _err(err)
+    gid = _clean_gid(body.get("gid"))
+    if not gid:
+        return _err("群号必须是 5-12 位数字")
+    rule = str(body.get("rule", "")).strip().lower()
+    template = str(body.get("template", ""))
+    why = validate_bind_rule(rule, template)
+    if why:
+        return _err(why)
+    if not os.path.exists(group_config_path(gid)):
+        return _err(f"servers_{gid}.json 不存在")
+    cm = ConfigManager(group_id=int(gid))
+    cm.set_bind_nickname_rule(rule)
+    cm.set_bind_nickname_template(template)
+    return _ok({"rule": rule, "template": template})
 
 
 async def view_group_ignore_add():
@@ -1003,6 +1029,7 @@ ROUTES = (
     ("group/create", view_group_create, ["POST"], "创建群配置文件"),
     ("group/delete", view_group_delete, ["POST"], "删除群配置文件"),
     ("group/flag", view_group_flag, ["POST"], "本群开关"),
+    ("group/bind_rule", view_group_bind_rule, ["POST"], "绑定群名片匹配规则"),
     ("group/ignore_add", view_group_ignore_add, ["POST"], "昵称检测忽略名单加人"),
     ("group/ignore_remove", view_group_ignore_remove, ["POST"], "昵称检测忽略名单减人"),
     ("server/create", view_server_create, ["POST"], "添加服务器"),
