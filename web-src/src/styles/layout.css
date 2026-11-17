@@ -1,0 +1,9 @@
+.page-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; min-width:0; }
+.page-heading>div { min-width:0; }
+.page-heading h1 { margin:0; color:var(--ink); font-size:26px; font-weight:600; line-height:39px; }
+.page-heading p { margin:6px 0 0; color:var(--ink3); font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+@media (max-width:900px),(max-height:520px) {
+ .page-heading { gap:12px; }
+ .page-heading h1 { font-size:22px; line-height:33px; }
+ .page-heading p { font-size:12px; }
+}

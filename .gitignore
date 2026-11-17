@@ -225,3 +225,7 @@ group_configs/
 node_modules/
 .vite/
 npm-debug.log*
+
+# 字体源文件只用于构建，成品已提交到 views/config/assets/。
+# 两者都入库会让仓库包多约 9.6MB，超过插件市场 16MB 上限并被自动下架。
+web-src/src/assets/fonts/

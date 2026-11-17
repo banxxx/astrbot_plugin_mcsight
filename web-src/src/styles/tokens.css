@@ -1,108 +1,65 @@
-/* 设计令牌：全部取自画布 MCSight.pen 的实测值，明暗两套。 */
+/* MCSight Pen 组件规范：浅色工作区与组件实测值。 */
 :root,
-[data-theme="light"] {
-  --canvas: #f2f4f8;
-  --surface: #ffffff;
-  --thead: #f7f8fb;
-  --bd: #e2e6ee;
-  --bd-soft: #dde3ef;
-  --row: #edf0f5;
-  /* 隐藏行的斜线纹颜色：只用来描线，不当底色用 */
-  --hatch: rgba(30, 37, 50, 0.055);
-  --ac: #3d4e9b;
-  --ac-h: #34438a;
-  --ac-soft: #edf0fa;
-  --ac-line: #c9d2ee;
-  --ac-deep: #33417f;
-  /* 已取到 MOTD、但开关没开：淡灰蓝，和未取到的提示灰区分开 */
-  --motd-idle: #7d88a8;
-  --ink: #1e2532;
-  --ink2: #55606f;
-  --ink3: #8892a2;
-  --ink4: #a6aebb;
-  --ink5: #c8cdd8;
-  --ok: #2e8b62;
-  --ok-bg: #eaf5f0;
-  --ok-bd: #cfe7dc;
-  --ok2-bg: #f1f7f4;
-  --ok2-bd: #cde3d8;
-  --warn: #a9741a;
-  --warn-bg: #fdf9f1;
-  --warn-bd: #f2e4cc;
-  --warn-badge-bg: #f7e7d2;
-  --warn-badge-bd: #e8cfa6;
-  --warn-note-bg: #fbf3e4;
-  --warn-note-bd: #f0dfc0;
-  --bad: #a93f3a;
-  --bad-deep: #8f3b37;
-  --bad-bg: #faebea;
-  --bad-bd: #efd3d1;
-  --veil: rgba(223, 228, 236, 0.78);
-}
-
+[data-theme="light"],
 [data-theme="dark"] {
-  --canvas: #151a24;
-  --surface: #1b2130;
-  --thead: #202839;
-  --bd: #2c3547;
-  --bd-soft: #333d52;
-  --row: #242c3c;
-  --hatch: rgba(228, 233, 244, 0.05);
-  --ac: #8c9ce8;
-  --ac-h: #a2b0f0;
-  --ac-soft: #232b45;
-  --ac-line: #3b4770;
-  --ac-deep: #c2cbf5;
-  /* 已取到 MOTD、但开关没开：淡灰蓝，和未取到的提示灰区分开 */
-  --motd-idle: #8d97b5;
-  --ink: #e4e9f4;
-  --ink2: #aab4c8;
-  --ink3: #7e8798;
-  --ink4: #6b7386;
-  --ink5: #4e566a;
-  --ok: #5fbf92;
-  --ok-bg: #1c2e28;
-  --ok-bd: #2c4a3d;
-  --ok2-bg: #1b2a26;
-  --ok2-bd: #2c4438;
-  --warn: #d9a65b;
-  --warn-bg: #2b2618;
-  --warn-bd: #453b22;
-  --warn-badge-bg: #332b18;
-  --warn-badge-bd: #4e4126;
-  --warn-note-bg: #2c2617;
-  --warn-note-bd: #46391f;
-  --bad: #e0776f;
-  --bad-deep: #f0a9a3;
-  --bad-bg: #2e1e20;
-  --bad-bd: #4a2c2e;
-  --veil: rgba(9, 12, 20, 0.7);
+  color-scheme: light;
+  --canvas: #f4f6fa;
+  --surface: #ffffff;
+  --thead: #f7f9fc;
+  --bd: #dce2ec;
+  --bd-soft: #dfe5ef;
+  --ctl-bd: #d8deea;
+  --row: #edf0f5;
+  --hatch: transparent;
+  --ac: #4f5ed5;
+  --ac-h: #4251c0;
+  --ac-soft: #eef0fd;
+  --ac-line: #dbe0fb;
+  --ac-deep: #4f5ed5;
+  --focus: #6a79df;
+  --focus-ring: #6a79df35;
+  --motd-idle: #68758d;
+  --ink: #20283b;
+  --ink2: #35405a;
+  --ink3: #68758d;
+  --ink4: #8b95a8;
+  --ink5: #b0b9ca;
+  --ok: #237e60;
+  --ok-bg: #eaf7f1;
+  --ok-bd: #cfe9df;
+  --ok2-bg: #eaf7f1;
+  --ok2-bd: #cfe9df;
+  --warn: #98651b;
+  --warn-bg: #fff5e5;
+  --warn-bd: #f0dfc4;
+  --warn-badge-bg: #fff5e5;
+  --warn-badge-bd: #f0dfc4;
+  --warn-note-bg: #fff7e8;
+  --warn-note-bd: transparent;
+  --bad: #b94750;
+  --bad-deep: #b94750;
+  --bad-bg: #fff1f3;
+  --bad-bd: #ebcfd4;
+  --disabled-bg: #f3f5f9;
+  --disabled-bd: #e5e9f1;
+  --veil: rgba(32, 40, 59, 0.3);
+  --ff: "MCSight Sans", "Noto Sans SC", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --ff-brand: Manrope, "MCSight Sans", "Noto Sans SC", sans-serif;
+  --fm: "IBM Plex Mono", Consolas, "Courier New", monospace;
+  --r-card: 12px;
+  --r-ctl: 8px;
+  --r-badge: 12px;
+  --r-modal: 14px;
+  --h-row: 64px;
+  --h-form: 68px;
+  --h-ctl: 40px;
+  --h-badge: 24px;
+  --pad-card: 20px;
+  --gap-card: 20px;
+  --transition: 140ms ease;
 }
-
-:root {
-  --ff: Inter, "Microsoft YaHei", "PingFang SC", sans-serif;
-  --fm: "JetBrains Mono", Consolas, "Courier New", monospace;
-  --r-card: 10px;
-  --r-ctl: 6px;
-  --r-badge: 4px;
-  --h-row: 44px;
-  --h-form: 56px;
-  --h-ctl: 32px;
-  --h-badge: 22px;
-  --pad-card: 16px;
-  --gap-card: 16px;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  margin: 0;
-  padding: 0;
-}
-
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
 body {
   background: var(--canvas);
   color: var(--ink);
@@ -111,9 +68,14 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
-
-/* 弹窗打开时背景页面不再滚；body 的 fixed 锁在 UiModal 里做，这里兜住桌面/旧内核 */
-html.modal-open,
-html.modal-open body {
-  overflow: hidden;
+button, input, textarea, select { font: inherit; }
+button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
+button { touch-action: manipulation; }
+button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+  outline: 3px solid #bbc3f7;
+  outline-offset: 2px;
+}
+html.modal-open, html.modal-open body { overflow: hidden; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
 }

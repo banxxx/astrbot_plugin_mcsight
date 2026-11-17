@@ -6,6 +6,8 @@ import vue from "@vitejs/plugin-vue";
 // 因为内核资源头写死 Cache-Control: no-store，浏览器根本不缓存，hash 只会污染仓库 diff。
 export default defineConfig({
   base: "./",
+  // This static plugin UI has no build-time secrets or environment configuration.
+  envDir: false,
   plugins: [vue()],
   build: {
     outDir: "../views/config",
@@ -16,7 +18,9 @@ export default defineConfig({
       output: {
         entryFileNames: "assets/app.js",
         chunkFileNames: "assets/[name].js",
-        assetFileNames: "assets/app[extname]",
+        assetFileNames: (asset) => asset.names.some((name) => name.endsWith(".css"))
+          ? "assets/app.css"
+          : "assets/[name][extname]",
       },
     },
   },

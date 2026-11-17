@@ -9,18 +9,15 @@ const props = withDefaults(
     id?: string;
     autocomplete?: string;
     disabled?: boolean;
+    maxlength?: number;
+    inputmode?: "none" | "text" | "tel" | "url" | "email" | "numeric" | "decimal" | "search";
   }>(),
   { rows: 0, autocomplete: "off", disabled: false },
 );
-
 const emit = defineEmits<{
   (e: "update:modelValue", v: string): void;
   (e: "enter"): void;
 }>();
-
-function onInput(v: string) {
-  emit("update:modelValue", v);
-}
 </script>
 
 <template>
@@ -33,7 +30,9 @@ function onInput(v: string) {
     :placeholder="props.placeholder"
     :value="props.modelValue"
     :disabled="props.disabled"
-    @input="onInput(($event.target as HTMLTextAreaElement).value)"
+    :maxlength="props.maxlength"
+    :aria-invalid="props.error || undefined"
+    @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
   />
   <input
     v-else
@@ -44,7 +43,10 @@ function onInput(v: string) {
     :autocomplete="props.autocomplete"
     :value="props.modelValue"
     :disabled="props.disabled"
-    @input="onInput(($event.target as HTMLInputElement).value)"
+    :maxlength="props.maxlength"
+    :inputmode="props.inputmode"
+    :aria-invalid="props.error || undefined"
+    @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
     @keyup.enter="emit('enter')"
   />
 </template>

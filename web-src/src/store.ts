@@ -1,4 +1,4 @@
-import { computed, reactive, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { api, requireBridge } from "./lib/api";
 import { ApiError } from "./lib/bridge";import type {
   ConfigItem,
@@ -197,46 +197,84 @@ export async function loadConfig(force = false) {
   S.cfgExtraKeys = r.extra_keys;
 }
 
-/** 全局参数：草稿逐条写回，密钥走 config/secret，其余走 config/update；写完强制刷新读值。 */
-export async function saveDrafts(): Promise<boolean> {
-  const keys = Object.keys(S.cfgDraft);
-  if (!keys.length) {
-    toast("没有待保存的改动");
-    return true;
+interface DraftWrite {
+  key: string;
+  value: unknown;
+  secret: boolean;
+}
+
+let draftSaveInFlight: Promise<boolean> | null = null;
+export const configSaving = ref(false);
+
+function matchesSavedDraft(value: unknown, saved: unknown): boolean {
+  if (Array.isArray(value) && Array.isArray(saved)) {
+    return value.length === saved.length && value.every((entry, index) => Object.is(entry, saved[index]));
   }
+  return Object.is(value, saved);
+}
+
+/** 只清理与本次成功写入快照仍相同的草稿，保留请求期间的新编辑。 */
+function clearWrittenDrafts(written: DraftWrite[]) {
+  for (const { key, value } of written) {
+    if (key in S.cfgDraft && matchesSavedDraft(S.cfgDraft[key], value)) delete S.cfgDraft[key];
+  }
+}
+
+async function writeDraftSnapshot(snapshot: DraftWrite[]): Promise<boolean> {
+  configSaving.value = true;
   S.pending++;
-  const written: string[] = [];
+  const written: DraftWrite[] = [];
   let restart = false;
   try {
-    for (const key of keys) {
-      const item = S.cfgItems.find((it) => it.key === key);
-      if (!item) continue;
-      /* 草稿里的名单是 Vue 响应式数组，直接过 postMessage 会报
-         "The object can not be cloned"——发之前摊平回普通数组 */
-      const raw = S.cfgDraft[key];
-      const value = Array.isArray(raw) ? Array.from(raw) : raw;
-      if (item.secret) {
+    for (const change of snapshot) {
+      const { key, value, secret } = change;
+      if (secret) {
         const r = await api.configSecret(key, String(value ?? ""));
         restart = restart || r.restart_required;
       } else {
         const r = await api.configUpdate(key, value);
         restart = restart || r.item.restart_required;
       }
-      written.push(key);
+      written.push(change);
     }
-    for (const k of written) delete S.cfgDraft[k];
+    clearWrittenDrafts(written);
     await loadConfig(true);
     toast(`已写入 ${written.length} 项${restart ? "；需重载插件才建新连接" : ""}`);
     return true;
   } catch (err) {
-    /* 前面几项可能已经落盘：把它们的草稿清掉并重读，页面别把已保存的值继续标成「待保存」 */
-    for (const k of written) delete S.cfgDraft[k];
+    /* 已成功的快照可清理；失败字段和保存期间的新编辑继续留在草稿中。 */
+    clearWrittenDrafts(written);
     await loadConfig(true).catch(() => {});
     fail(err);
     return false;
   } finally {
     S.pending--;
+    configSaving.value = false;
   }
+}
+
+/** 全局参数按一次点击时的快照逐条写回；所有保存入口共享同一个进行中的请求。 */
+export function saveDrafts(): Promise<boolean> {
+  if (draftSaveInFlight) return draftSaveInFlight;
+  S.error = "";
+  const keys = Object.keys(S.cfgDraft);
+  if (!keys.length) {
+    toast("没有待保存的改动");
+    return Promise.resolve(true);
+  }
+  const snapshot: DraftWrite[] = [];
+  for (const key of keys) {
+    const item = S.cfgItems.find((it) => it.key === key);
+    if (!item) continue;
+    const raw = S.cfgDraft[key];
+    /* 名单克隆为普通数组，既固定本次值，也避免 reactive 数组无法过 postMessage。 */
+    snapshot.push({ key, value: Array.isArray(raw) ? Array.from(raw) : raw, secret: item.secret });
+  }
+  const task = writeDraftSnapshot(snapshot);
+  draftSaveInFlight = task;
+  const release = () => { if (draftSaveInFlight === task) draftSaveInFlight = null; };
+  void task.then(release, release);
+  return task;
 }
 
 /** 丢掉全部全局参数草稿（「放弃更改并离开」用） */

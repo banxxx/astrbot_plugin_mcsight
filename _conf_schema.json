@@ -1,4 +1,16 @@
 {
+    "active_platform": {
+        "description": "本插件生效平台",
+        "type": "string",
+        "default": "onebot",
+        "hint": "onebot 或 qq_official。保存后重载插件生效；当前阶段 QQ 官方业务尚未开放，选中后将暂停本插件业务。"
+    },
+    "active_bot_instance": {
+        "description": "生效机器人实例 ID",
+        "type": "string",
+        "default": "",
+        "hint": "填写 AstrBot 机器人列表中的实例 ID。留空仅在所选平台恰有一个实例时自动选择；多实例时暂停业务。保存后需重载。"
+    },
     "enable_group_owner": {
         "description": "是否允许群主使用功能",
         "type": "bool",

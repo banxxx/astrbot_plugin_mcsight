@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "build:fonts": "python scripts/build-fonts.py",
     "build-only": "vite build",
     "watch": "vite build --watch --mode development",
     "typecheck": "vue-tsc --noEmit"

@@ -15,7 +15,7 @@ from astrbot.api import logger
 
 from ..config.server_config import is_hidden
 from ..config.whitelist_config import WhitelistManager
-from . import mod_http, stats_snapshot
+from . import mod_http, platform_activation, stats_snapshot
 from .plugin_paths import data_dir
 
 # 每天本地时间 04:37：避开整点，也和备份/其它服任务错开
@@ -52,6 +52,8 @@ def _server_endpoints() -> Dict[str, Tuple[str, int]]:
 
 async def sample_once() -> None:
     """跑一轮采样。异常只在内部消化，绝不让它冒到定时器外面。"""
+    if not platform_activation.onebot_business_enabled():
+        return
     roster = stats_snapshot.list_sampled()
     if not roster:
         logger.info("[采样] 快照表里还没有人，本轮跳过")
@@ -64,6 +66,8 @@ async def sample_once() -> None:
     started = time.monotonic()
     ok = no_data = failed = skipped = 0
     for idx, (player, server) in enumerate(roster):
+        if not platform_activation.onebot_business_enabled():
+            return
         if idx >= MAX_TARGETS:
             skipped += len(roster) - idx
             logger.warning(f"[采样] 超出单轮人数上限 {MAX_TARGETS}，剩余 {skipped} 个目标本轮放弃")

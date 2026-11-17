@@ -1,7 +1,5 @@
 <script setup lang="ts">
-withDefaults(defineProps<{ tone?: "neutral" | "off" | "ok" | "warn" | "port" }>(), {
-  tone: "neutral",
-});
+withDefaults(defineProps<{ tone?: "neutral" | "off" | "ok" | "warn" | "port" | "bad" }>(), { tone: "neutral" });
 </script>
 
 <template>

@@ -1,221 +1,158 @@
-/* 表格列宽与响应式档位：基准是 .page 容器宽度（面板 iframe 的可用宽度），不是视口。
-   宽档＝画布全列；中档＝次要列并入主列；窄档＝一行一卡。 */
-
-.page {
-  container-type: inline-size;
-  container-name: page;
+/* Reference pages share the canvas grid; server rows are scoped in SrvPage. */
+.ref-page {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 20px;
 }
-
-.cols {
+.ref-table, .ref-mobile-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--bd);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.ref-grid {
+  display: grid;
+  align-items: center;
+  min-width: 0;
+  padding-right: 20px;
+  padding-left: 20px;
+}
+.ref-map .ref-grid { grid-template-columns: minmax(0, 252fr) minmax(0, 430fr) minmax(0, 454fr); }
+.ref-help .ref-grid { grid-template-columns: minmax(0, 400fr) minmax(0, 350fr) minmax(0, 240fr) minmax(0, 146fr); }
+.ref-constants .ref-grid { grid-template-columns: minmax(0, 230fr) minmax(0, 290fr) minmax(0, 140fr) minmax(0, 476fr); }
+.ref-grid > * { min-width: 0; overflow-wrap: anywhere; }
+.ref-grid > :not(:last-child) { padding-right: 16px; }
+.ref-table-head {
+  min-height: 44px;
+  background: var(--table-head, #f7f9fc);
+  color: var(--ink3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ref-group { background: var(--table-group, #f0f3f8); }
+.ref-group-content {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  min-height: 40px;
+  padding: 8px 20px;
+}
+.ref-group-content h2, .ref-mobile-heading h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.ref-group-content > span, .ref-mobile-heading > span {
+  color: var(--ink3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ref-table-row {
+  min-height: 44px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--row);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ref-constants .ref-table-row { min-height: 60px; }
+.ref-command, .ref-alias, .ref-constant, .ref-source {
+  display: block;
+  margin: 0;
+  font-family: var(--fm);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.ref-command { color: var(--ac); }
+.ref-alias { color: var(--ink3); font-size: 11px; }
+.ref-note, .ref-constant, .ref-source {
+  margin: 0;
+  color: var(--ink3);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.ref-value {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.ref-muted { color: var(--ink3); }
+.ref-table-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 12px 20px;
+  color: var(--ink3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ref-footer-note { display: inline-flex; align-items: center; gap: 8px; }
+.ref-footer-note > svg { flex: none; }
+.ref-empty {
+  margin: 0;
+  padding: 24px 20px;
+  color: var(--ink3);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ref-mobile-heading {
   display: flex;
   align-items: center;
   gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid var(--row);
+}
+.ref-mobile-heading h2 { flex: 1 1 auto; min-width: 0; font-size: 16px; }
+.ref-mobile-heading > span { flex: none; }
+.ref-mobile-item {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px;
+  border-bottom: 1px solid var(--row);
+}
+.ref-mobile-item:last-child { border-bottom: 0; }
+.ref-mobile-item h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.ref-mobile-item h3.ref-command { color: var(--ac); font-size: 12px; font-weight: 500; }
+.ref-mobile-title {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
   width: 100%;
-  min-width: 0;
 }
-
-.c-name {
-  /* 名字后面要挂「已隐藏」牌，不开 flex 牌会被 .ell 顶到下一行 */
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 150px;
+.ref-mobile-title h3 { flex: 1 1 auto; min-width: 0; }
+.ref-mobile-title .ref-value { max-width: 45%; }
+.ref-mobile-meta {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  width: 100%;
 }
-
-.c-name .nm {
-  flex: 0 1 auto;
-}
-
-.c-name .bdg {
-  flex: none;
-}
-
-.c-host {
-  /* 富余宽度只给地址与备注这两列（页面里唯一会变更长的文本），
-     按 2:1 分：地址整条域名带端口，比备注吃宽得多。
-     grow 必须配显式 basis：写成 auto 的话表头那格（几个字）与行里那格（长地址）
-     基长不同，同一列在两行里分到的宽度就不一样。 */
-  flex: 2 1 268px;
-}
-
-.c-port {
-  flex: 0 0 80px;
-}
-
-.c-rmk {
-  /* 来源牌在前、文本紧跟其后同行：.row .ell 是 display:block，
-     不在这里开 flex 的话牌子会被顶到文本上一行。 */
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1 1 168px;
-}
-
-/* 名称/地址/备注是可变的长文本：列宽锁死后必须自己裁掉，
-   否则 inline 子元素会直接画到下一列上去。 */
-.c-name,
-.c-host,
-.c-rmk {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.row .ell {
-  display: block;
-  min-width: 0;
-}
-
-/* 备注列内各子项的伸缩：牌不缩、文本吃掉剩余宽度并自己截断 */
-.c-rmk .bdg {
-  flex: none;
-}
-
-.c-rmk .cell-label {
-  flex: none;
-}
-
-.c-rmk .ell {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.c-tk {
-  flex: 0 0 78px;
-}
-
-.c-mod {
-  flex: 0 0 82px;
-}
-
-.c-wl {
-  flex: 0 0 60px;
-}
-
-.c-op {
-  /* 宽度锁死＝表头那格与行里那格实测同宽（152 是五颗按钮的实量值，留 2 余量）。
-     这里一旦回到 auto，表头「操作」两字与行里那排按钮就会差出 130px，
-     之前靠 margin-left:auto 贴右只是把这段差值藏进了列尾的空隙里，
-     代价是「登录开关」与「操作」之间裂出一大块空白、而地址与端口挤在一起。 */
-  flex: 0 0 154px;
-}
-
-.c-t1 {
-  flex: 0 0 300px;
-}
-
-.c-t2 {
-  flex: 0 0 300px;
-}
-
-.c-t3 {
-  flex: 0 0 200px;
-}
-
-.c-t4 {
-  flex: 1 1 auto;
-  min-width: 200px;
-}
-
-.c-m1 {
-  flex: 0 0 260px;
-}
-
-.c-m2 {
-  flex: 0 0 380px;
-}
-
-.c-m3 {
-  flex: 1 1 auto;
-  min-width: 340px;
-}
-
-.c-h1 {
-  flex: 0 0 300px;
-}
-
-.c-h2 {
-  flex: 0 0 560px;
-}
-
-.c-h3 {
-  flex: 0 0 224px;
-}
-
-/* 中档：合并次要列。
-   阈值取 1240 = 宽档全列所需内容宽（固定列 1038 + 7×12 gap = 1122）再加够一段余量。
-   原先定 1040 是想让画布那套全列布局在 1440 窗口（面板约 1120）里可见，
-   但 1120 < 1152 本来就装不下全列：1041~1152 这段既不降级又溢出，
-   外层 .card 的 overflow:hidden 会把「操作」列裁掉、按钮点不到。 */
-@container page (max-width: 1240px) {
-  .c-host {
-    /* 也必须锁死基长：只要还留一个伸缩列，表头那格（几个字）与行里那格（长地址）
-       就会把富余宽度分掉不同的 92px，右边所有列跟着整体错位 */
-    flex: 2 1 180px;
-  }
-
-  .c-rmk {
-    flex: 1 1 120px;
-  }
-
-  .c-h2 {
-    flex: 1 1 320px;
-  }
-
-  .c-m3 {
-    /* min-width 也得一起松掉：只改 flex-basis 不改下限，伸缩列仍按 340 顶住，
-       1041px 的容器照样溢出（实测 c-t4 越出卡片右 12px）。 */
-    flex: 1 1 220px;
-    min-width: 220px;
-  }
-
-  .c-t4 {
-    flex: 1 1 140px;
-    min-width: 140px;
-  }
-}
-
-/* 窄档：一行一卡，字段竖排。
-   阈值取 1040 = 中档所需内容宽（固定列 902 + 84 gap = 986）+ 卡片左右内边距 34 的余量；
-   再往下放就让每行自己竖排，比把八列硬压进 900px 好读。
-   「操作」列在 861~1040 这段以前是会溢出卡片右边界的（按钮点不到），现在改走卡片布局。 */
-@container page (max-width: 1040px) {
-  .th {
-    display: none;
-  }
-
-  .row {
-    height: auto;
-    align-items: flex-start;
-    flex-wrap: wrap;
-    gap: 4px 12px;
-    padding: 10px var(--pad-card);
-  }
-
-  .row > .cols {
-    flex-wrap: wrap;
-    gap: 4px 12px;
-  }
-
-  .row [class^="c-"] {
-    flex: 0 0 auto;
-    min-width: 0;
-  }
-
-  .c-op {
-    flex: 1 1 100%;
-  }
-
-  .cell-label {
-    display: inline;
-    margin-right: 6px;
-    color: var(--ink4);
-    font-size: 11px;
-  }
-}
-
-/* 与窄档同边界：竖排时字段名要跟值同行显示，横排时靠表头就够 */
-@container page (min-width: 1041px) {
-  .cell-label {
-    display: none;
-  }
-}
+.ref-mobile-meta > .bdg { justify-self: start; }
+.ref-meta-label, .ref-mobile-foot { color: var(--ink3); font-size: 12px; line-height: 1.5; }
+.ref-mobile-foot { margin: 0; }

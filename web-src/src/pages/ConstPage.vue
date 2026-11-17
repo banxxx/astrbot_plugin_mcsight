@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
+import UiBadge from "../components/UiBadge.vue";
 import UiIcon from "../components/UiIcon.vue";
 import UiNotice from "../components/UiNotice.vue";
 import { S, fail, loadConstants, loading } from "../store";
@@ -7,167 +8,65 @@ import { useIsMobile } from "../lib/useMediaQuery";
 import type { ConstRow } from "../lib/types";
 
 const isMobile = useIsMobile();
+onMounted(() => { void loadConstants().catch(fail); });
 
-onMounted(() => {
-  loadConstants().catch(fail);
-});
-
-/* 画布把常量按来源分带；后端只给扁平 rows，这里按源文件名归带，同带的连续行合并成一段。 */
-const BANDS: Record<string, string> = {
-  "mod_http.py": "模组 HTTP 与在线探测",
-  "checker.py": "模组 HTTP 与在线探测",
-  "debounce.py": "命令防抖与绑定链路",
-  "bind_guard.py": "命令防抖与绑定链路",
-  "bind_route.py": "命令防抖与绑定链路",
-  "bind.py": "命令防抖与绑定链路",
-  "console.py": "命令防抖与绑定链路",
-  "management.py": "命令防抖与绑定链路",
-  "server_config.py": "配置与文件落点",
-  "whitelist_config.py": "配置与文件落点",
-  "stats_sampler.py": "采样与出图",
-  "stats_snapshot.py": "采样与出图",
-  "image_generator.py": "采样与出图",
-  "bind_check.py": "采样与出图",
-  "nickname_check.py": "采样与出图",
-  "controller.py": "采样与出图",
-  "common.py": "采样与出图",
-};
-
-function bandOf(row: ConstRow): string {
-  const base = row.source.split("/").pop() || "";
-  return BANDS[base] || "其他";
+const GROUP_ORDER = ["模组连接", "服务器与命令", "绑定与权限", "采样与快照", "名单输出", "状态卡片与出图", "其他"];
+function groupOf(row: ConstRow): string {
+  const source = row.source.replaceAll("\\", "/");
+  const base = (source.split("/").pop() || "").split(":")[0];
+  if (["mod_http.py", "checker.py", "controller.py"].includes(base)) return "模组连接";
+  if (["server_config.py", "console.py", "management.py", "debounce.py", "common.py"].includes(base)) return "服务器与命令";
+  if (["whitelist_config.py", "bind_guard.py", "bind_route.py", "bind.py"].includes(base)) return "绑定与权限";
+  if (["stats_sampler.py", "stats_snapshot.py"].includes(base)) return "采样与快照";
+  if (source.includes("bindcheck_image/") || ["bind_check.py", "nickname_check.py"].includes(base)) return "名单输出";
+  if (base === "image_generator.py" || source.includes("features/")) return "状态卡片与出图";
+  return "其他";
 }
-
 const groups = computed(() => {
-  const out: { title: string; rows: ConstRow[] }[] = [];
-  for (const row of S.constRows) {
-    const title = bandOf(row);
-    const last = out[out.length - 1];
-    if (last && last.title === title) last.rows.push(row);
-    else out.push({ title, rows: [row] });
-  }
-  return out;
+  const result = new Map<string, ConstRow[]>(GROUP_ORDER.map((title) => [title, []]));
+  for (const row of S.constRows) result.get(groupOf(row))!.push(row);
+  return Array.from(result, ([title, rows]) => ({ title, rows })).filter((group) => group.rows.length);
 });
+function displayValue(row: ConstRow): string {
+  return row.unit ? row.value + " " + row.unit : row.value;
+}
 </script>
 
 <template>
-  <div class="page">
-    <section class="ph">
-      <div class="ph-t">
-        <h1>代码常量</h1>
-        <p>{{ S.constRows.length }} 个运行期参数 · 写死在源码里 · 本页不提供输入框</p>
-      </div>
-      <span class="tag"><UiIcon name="lock" :size="12" />只读 · 改源码 + 重载插件才生效</span>
+  <div class="page ref-page">
+    <section class="page-heading">
+      <div><h1>代码常量</h1><p>查看插件的固定限制、时间参数和来源位置。</p></div>
+      <UiBadge tone="neutral">只读</UiBadge>
     </section>
-
-    <UiNotice tone="info">
-      唯一配置读入口：whitelist_config 的 _get_config_value / _get_config_list。
-    </UiNotice>
+    <UiNotice>这些参数写在源码中。需要调整时，应修改对应代码并更新插件。</UiNotice>
 
     <template v-if="isMobile">
-      <section v-for="grp in groups" :key="grp.title" class="m-card">
-        <div class="m-card-h">
-          <span class="bar" />
-          <h2>{{ grp.title }}</h2>
-          <span class="m-count">{{ grp.rows.length }} 项</span>
-        </div>
-        <div v-for="r in grp.rows" :key="r.name" class="m-const">
-          <div class="m-const-h">
-            <b>{{ r.title }}</b>
-            <span class="mono">{{ r.value }}{{ r.unit }}</span>
-          </div>
-          <div class="m-const-kv"><span>常量名</span><code class="mono">{{ r.name }}</code></div>
-          <div class="m-const-kv"><span>源码</span><code class="mono">{{ r.source }}</code></div>
-        </div>
+      <section v-for="group in groups" :key="group.title" class="ref-mobile-card">
+        <header class="ref-mobile-heading"><h2>{{ group.title }}</h2><span>{{ group.rows.length }} 项</span></header>
+        <article v-for="(row, index) in group.rows" :key="row.source + row.name + index" class="ref-mobile-item">
+          <div class="ref-mobile-title"><h3>{{ row.title }}</h3><span class="ref-value">{{ displayValue(row) }}</span></div>
+          <div class="ref-mobile-meta"><span class="ref-meta-label">常量</span><code class="ref-constant">{{ row.name }}</code></div>
+          <div class="ref-mobile-meta"><span class="ref-meta-label">源码</span><code class="ref-source">{{ row.source }}</code></div>
+        </article>
       </section>
-      <div v-if="loading && !S.constRows.length" class="m-empty">读取中…</div>
-      <div v-else class="m-foot">共 {{ S.constRows.length }} 项</div>
+      <p v-if="!S.constRows.length" class="ref-empty" role="status">{{ loading ? '正在读取代码常量…' : '暂无代码常量' }}</p>
+      <p v-else class="ref-mobile-foot">共 {{ S.constRows.length }} 项 / 只读查看</p>
     </template>
 
-    <section v-else class="card">
-      <div class="th">
-        <div class="cols">
-          <span class="c-t1">参数含义</span><span class="c-t2">常量名</span><span class="c-t3">当前值</span><span
-            class="c-t4">源码位置</span>
+    <section v-else class="ref-table ref-constants" role="table" aria-label="代码常量">
+      <div class="ref-grid ref-table-head" role="row"><span role="columnheader">含义</span><span role="columnheader">常量名称</span><span role="columnheader">数值 / 单位</span><span role="columnheader">源码位置</span></div>
+      <div v-for="group in groups" :key="group.title" role="rowgroup">
+        <div class="ref-group" role="row"><div class="ref-group-content" role="cell" aria-colspan="4"><h2>{{ group.title }}</h2></div></div>
+        <div v-for="(row, index) in group.rows" :key="row.source + row.name + index" class="ref-grid ref-table-row" role="row">
+          <span class="ref-label" role="cell">{{ row.title }}</span>
+          <code class="ref-constant" role="cell">{{ row.name }}</code>
+          <span class="ref-value" role="cell">{{ displayValue(row) }}</span>
+          <code class="ref-source" role="cell">{{ row.source }}</code>
         </div>
       </div>
-
-      <template v-for="grp in groups" :key="grp.title">
-        <div class="band"><span class="bar" /><b>{{ grp.title }}</b><i>{{ grp.rows.length }} 项</i></div>
-        <div v-for="r in grp.rows" :key="r.name" class="row dense">
-          <div class="cols">
-            <span class="c-t1"><b class="t-title ell">{{ r.title }}</b></span>
-            <span class="c-t2"><span class="cname mono ell">{{ r.name }}</span></span>
-            <span class="c-t3"><b class="cval mono">{{ r.value }}{{ r.unit }}</b></span>
-            <span class="c-t4"><span class="csrc mono ell">{{ r.source }}</span></span>
-          </div>
-        </div>
-      </template>
-
-      <div class="tf">
-        <span v-if="loading && !S.constRows.length">读取中…</span>
-        <span v-else>共 {{ S.constRows.length }} 项</span>
-      </div>
+      <div v-if="!S.constRows.length" class="ref-empty" role="status">{{ loading ? '正在读取代码常量…' : '暂无代码常量' }}</div>
+      <footer class="ref-table-foot"><span class="ref-footer-note"><UiIcon name="lock" :size="15" />数值由插件源码提供，此页面不支持直接编辑。</span><span>共 {{ S.constRows.length }} 项</span></footer>
     </section>
-
-    <UiNotice v-if="S.error" tone="bad" class="errline">{{ S.error }}</UiNotice>
+    <UiNotice v-if="S.error" tone="bad">{{ S.error }}</UiNotice>
   </div>
 </template>
-
-<style scoped>
-.page {
-  display: flex;
-  flex-direction: column;
-  gap: var(--gap-card);
-}
-
-.ph {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.ph-t h1 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.ph-t p {
-  margin: 5px 0 0;
-  font-size: 12px;
-  color: var(--ink3);
-}
-
-.tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--bd);
-  border-radius: var(--r-ctl);
-  background: var(--thead);
-  color: var(--ink2);
-  font-size: 11px;
-  line-height: 26px;
-  white-space: nowrap;
-}
-
-.cname {
-  font-size: 12px;
-  color: var(--ink2);
-}
-
-.cval {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.csrc {
-  font-size: 11px;
-  color: var(--ink3);
-}
-</style>

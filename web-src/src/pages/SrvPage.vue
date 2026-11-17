@@ -7,6 +7,8 @@ import UiSwitch from "../components/UiSwitch.vue";
 import UiInput from "../components/UiInput.vue";
 import UiModal from "../components/UiModal.vue";
 import UiNotice from "../components/UiNotice.vue";
+import UiSelect from "../components/UiSelect.vue";
+import UiMenu from "../components/UiMenu.vue";
 import GroupPicker from "../components/GroupPicker.vue";
 import { S, api, currentGroup, loadGroup, loading, openDialog, run, setWhitelist, setHidden, toast } from "../store";
 import { useIsMobile } from "../lib/useMediaQuery";
@@ -19,15 +21,33 @@ const modCount = computed(() => g.value?.mod_count ?? 0);
 const tokenCount = computed(() => g.value?.token_count ?? 0);
 const groupCount = computed(() => S.groups.length);
 const ignoreCount = computed(() => g.value?.nickname_check_ignore_ids.length ?? 0);
-const noPortCount = computed(() => servers.value.filter((s) => s.api_port === null).length);
-
-const sub = computed(() => {
-  /* 读还没回来时别说「还没有群配置文件」——那会把「不知道」说成「没有」 */
-  if (loading.value && !g.value) return "读取中…";
-  return g.value
-    ? `${g.value.gid} · ${servers.value.length} 台 · 已装模组 ${modCount.value} · 未配端口 ${noPortCount.value}`
-    : "还没有群配置文件";
-});
+const atServerLimit = computed(() => servers.value.length >= S.maxServers);
+const batchItems = computed(() => [
+  { value: "batch-add", label: "批量添加", icon: "plus", disabled: !g.value || atServerLimit.value },
+  { value: "batch-del", label: "批量删除", icon: "trash", danger: true, disabled: !servers.value.length },
+]);
+const groupItems = computed(() => [
+  ...(isMobile.value ? [
+    { value: "add-group", label: "新增群", icon: "plus" },
+    { value: "json-group", label: "查看 JSON", icon: "braces", disabled: !g.value },
+    ...batchItems.value,
+  ] : []),
+  { value: "del-group", label: "删除群配置", icon: "trash", danger: true, disabled: !g.value },
+]);
+function groupAction(value: string) { openDialog(value); }
+function serverItems(index: number) {
+  return [
+    { value: "up", label: "上移", icon: "arrow-up", disabled: index === 0 },
+    { value: "down", label: "下移", icon: "arrow-down", disabled: index === servers.value.length - 1 },
+    { value: "token", label: "命令 Token", icon: "key" },
+    { value: "delete", label: "删除服务器", icon: "trash", danger: true },
+  ];
+}
+function serverAction(value: string, server: ServerEntry, index: number) {
+  if (value === "up" || value === "down") void move(server, value === "up" ? -1 : 1);
+  else if (value === "delete") openDialog("del-server", { server });
+  else if (value === "token") openDialog("edit-server", { server, index, focus: "token" });
+}
 
 /** 该服的模组状态读数：undefined＝这一台还没回；reachable=false＝连不上；enabled=null＝旧版模组没这字段 */
 function modState(s: ServerEntry): ModState | undefined {
@@ -39,8 +59,8 @@ function modBadge(s: ServerEntry): { tone: "port" | "off" | "ok" | "warn"; text:
   const st = modState(s);
   if (!st) return { tone: "off", text: S.modStateLoading ? "读取中…" : "未读取", title: modTitle(s) };
   if (!st.reachable) return { tone: "warn", text: "不可达", title: st.reason || "连不上该服的模组 API" };
-  if (st.enabled === null) return { tone: "warn", text: "已装·旧版", title: st.reason || "模组版本没有登录开关字段" };
-  return { tone: "ok", text: "已装模组", title: "模组 API 已连通" };
+  if (st.enabled === null) return { tone: "warn", text: "旧版不支持", title: st.reason || "模组版本没有登录开关字段" };
+  return { tone: "ok", text: "已连通", title: "模组 API 已连通" };
 }
 
 async function toggleFlag(key: "last_online_enabled" | "nickname_check_enabled" | "bind_require_nickname", value: boolean) {
@@ -55,6 +75,17 @@ async function toggleFlag(key: "last_online_enabled" | "nickname_check_enabled" 
 const bindRule = ref<BindRule>("paren");
 const bindTemplate = ref("");
 const showBindHelp = ref(false);
+const bindOptions = [
+  { value: "paren", label: "括号内的游戏 ID", description: "玩家（Steve）" },
+  { value: "equals", label: "完全等于游戏 ID", description: "Steve" },
+  { value: "contains", label: "包含游戏 ID", description: "玩家Steve" },
+  { value: "template", label: "自定义模板", description: "MC:{gameId}" },
+];
+function changeBindRule(value: string) {
+  if (!bindOptions.some((option) => option.value === value)) return;
+  bindRule.value = value as BindRule;
+  void saveBindRule();
+}
 watch(
   () => g.value,
   (v) => {
@@ -153,17 +184,11 @@ function modNote(s: ServerEntry): string {
   return "";
 }
 
-function tokenNote(s: ServerEntry): string {
-  if (!s.has_token) return "/执行 对该服不可用";
-  if (s.api_port === null) return "该服未配模组端口，/执行 发不出去";
-  return "";
-}
-
 function modShort(s: ServerEntry): string {
-  if (s.api_port === null) return "不可用";
+  if (s.api_port === null) return "未知";
   const state = S.modStates[s.name];
-  if (!state) return S.modStateLoading ? "读取中…" : "不可用";
-  if (state.enabled === null) return "不可用";
+  if (!state) return S.modStateLoading ? "读取中…" : "未知";
+  if (state.enabled === null) return "未知";
   return state.enabled ? "已开启" : "已关闭";
 }
 
@@ -180,951 +205,259 @@ async function move(srv: ServerEntry, dir: -1 | 1) {
 </script>
 
 <template>
-  <div class="page">
-    <section v-if="isMobile" class="m-groupbar">
-      <div class="m-groupbar-top">
-        <label>当前群</label>
-        <GroupPicker />
-      </div>
-      <div class="m-groupbar-acts">
-        <UiButton kind="ghost" @click="openDialog('add-group')"><UiIcon name="plus" :size="14" />新增群</UiButton>
-        <UiButton kind="danger-light" :disabled="!g" @click="openDialog('del-group')">删除群配置</UiButton>
-      </div>
-    </section>
-    <section v-else class="gbar">
-      <span class="bar" />
-      <label>当前群</label>
-      <GroupPicker />
-      <div class="right">
-        <UiButton kind="ghost" @click="openDialog('add-group')"><UiIcon name="plus" :size="13" />新增群</UiButton>
-        <UiButton kind="danger-light" :disabled="!g" @click="openDialog('del-group')">{{ "删除群配置" }}</UiButton>
+  <div class="srv-page" :class="{ 'is-mobile': isMobile }">
+    <header class="srv-heading">
+      <div><h1>群与服务器</h1><p>{{ isMobile ? "本群操作即时保存" : "按群管理服务器、显示方式与绑定规则。" }}</p></div>
+      <UiBadge v-if="!isMobile" tone="ok">即时保存</UiBadge>
+    </header>
+
+    <section class="srv-groupbar" aria-label="当前群配置">
+      <template v-if="!isMobile"><UiIcon name="users" :size="18" /><span class="srv-group-label">当前群</span></template>
+      <GroupPicker class="srv-group-picker" />
+      <div class="srv-group-actions">
+        <UiButton v-if="!isMobile" kind="sec" @click="openDialog('add-group')"><UiIcon name="plus" :size="16" />新增群</UiButton>
+        <UiMenu :items="groupItems" :label="isMobile ? undefined : '更多群操作'" @select="groupAction" />
       </div>
     </section>
 
-    <section class="ph">
-      <div class="ph-t">
-        <h1>群与服务器</h1>
-        <p>{{ sub }}</p>
-      </div>
-    </section>
+    <div v-if="!isMobile" class="srv-summary" aria-label="本群概况">
+      <span>已配置 {{ groupCount }} 个群</span><span>本群服务器 {{ servers.length }} / {{ S.maxServers }}</span>
+      <span>已配模组端口 {{ modCount }} 台</span><span>命令 Token 已设置 {{ tokenCount }} 台</span>
+    </div>
 
-    <section v-if="isMobile" class="m-stats">
-      <div class="m-stat"><label>群组配置文件</label><b>{{ groupCount }}</b><em>servers_&lt;群号&gt;.json</em></div>
-      <div class="m-stat"><label>服务器条目</label><b>{{ servers.length }} / {{ S.maxServers }}</b></div>
-      <div class="m-stat">
-        <label>已装模组</label><b>{{ modCount }} / {{ servers.length }}</b>
-        <span class="cap"><i :style="{ width: servers.length ? (modCount / servers.length) * 100 + '%' : '0%' }" /></span>
-      </div>
-      <div class="m-stat">
-        <label>已配命令 Token</label><b>{{ tokenCount }} / {{ servers.length }}</b>
-        <span class="cap warn"><i :style="{ width: servers.length ? (tokenCount / servers.length) * 100 + '%' : '0%' }" /></span>
-      </div>
-    </section>
-    <section v-else class="stats">
-      <div class="st"><label>群组配置文件</label><b>{{ groupCount }}</b><em>servers_&lt;群号&gt;.json</em></div>
-      <span class="sp" />
-      <div class="st"><label>服务器条目 / 本群</label><b>{{ servers.length }} / {{ S.maxServers }}</b></div>
-      <span class="sp" />
-      <div class="st">
-        <label>已装模组</label><b>{{ modCount }} / {{ servers.length }}</b>
-        <span class="cap"><i :style="{ width: servers.length ? (modCount / servers.length) * 100 + '%' : '0%' }" /></span>
-      </div>
-      <span class="sp" />
-      <div class="st">
-        <label>已配命令 Token</label><b>{{ tokenCount }} / {{ servers.length }}</b>
-        <span class="cap warn"><i :style="{ width: servers.length ? (tokenCount / servers.length) * 100 + '%' : '0%' }" /></span>
-      </div>
-    </section>
-
-    <template v-if="isMobile">
-      <section class="m-sec">
-        <div class="m-sec-h">
-          <span class="bar" />
-          <h2>服务器条目</h2>
-          <span class="m-count">{{ servers.length }} / {{ S.maxServers }}</span>
+    <section class="srv-list" :class="{ 'srv-list--mobile': isMobile }" aria-label="服务器列表">
+      <div class="srv-list-toolbar">
+        <h2 v-if="!isMobile">服务器列表</h2><span v-else class="srv-mobile-count">{{ servers.length }} / {{ S.maxServers }} 台服务器</span>
+        <div class="srv-toolbar-actions">
+          <template v-if="!isMobile">
+            <UiButton kind="sec" :disabled="!g" @click="openDialog('json-group')"><UiIcon name="braces" :size="16" />查看 JSON</UiButton>
+            <UiMenu :items="batchItems" label="批量管理" icon="list-checks" @select="groupAction" />
+          </template>
+          <UiButton kind="pri" :disabled="!g || atServerLimit" :title="atServerLimit ? '每群最多 ' + S.maxServers + ' 台服务器' : undefined" @click="openDialog('add-server')"><UiIcon name="plus" :size="16" />{{ isMobile ? "添加" : "添加服务器" }}</UiButton>
         </div>
-        <div class="m-tools">
-          <UiButton kind="tool" :disabled="!g" @click="openDialog('json-group')">查看 JSON</UiButton>
-          <UiButton kind="tool" :disabled="servers.length === 0" @click="openDialog('batch-del')">批量删除</UiButton>
-          <UiButton kind="tool" :disabled="!g" @click="openDialog('batch-add')">批量添加</UiButton>
-          <UiButton kind="pri" :disabled="!g" @click="openDialog('add-server')"><UiIcon name="plus" :size="15" />添加服务器</UiButton>
-        </div>
-      </section>
+      </div>
 
-      <div v-if="servers.length" class="m-list">
-        <article v-for="(s, i) in servers" :key="s.name" class="srv-card" :class="{ hid: s.hidden }">
-          <div class="srv-h">
-            <b class="srv-name">{{ s.name }}</b>
-            <UiBadge v-if="s.hidden" tone="off">已隐藏</UiBadge>
+      <div v-if="!isMobile" class="srv-table-scroll">
+        <div class="srv-table" role="table" aria-label="当前群服务器">
+          <div class="srv-table-head srv-grid" role="row">
+            <span class="srv-cell--name" role="columnheader">服务器 / 备注</span>
+            <span class="srv-cell--address" role="columnheader">主机地址 / 模组端口</span>
+            <span role="columnheader">模组状态</span><span role="columnheader">登录限制</span>
+            <span role="columnheader">命令 Token</span><span class="srv-cell--actions" role="columnheader">操作</span>
           </div>
-          <dl class="srv-kv">
-            <div><dt>地址</dt><dd>{{ s.host }}</dd></div>
-            <div><dt>API 端口</dt><dd :class="{ dash: s.api_port === null }">{{ s.api_port ?? "—" }}</dd></div>
-            <div>
-              <dt>备注</dt>
-              <dd>
-                <UiBadge v-if="s.remark_src === 'motd' && s.remark_motd" tone="neutral">MOTD</UiBadge>
-                <span :class="{ dash: !s.remark_display }">{{ s.remark_display || "—" }}</span>
-              </dd>
+          <div v-for="(server, index) in servers" :key="server.name" class="srv-table-row srv-grid" :class="{ 'is-hidden': server.hidden }" role="row">
+            <div class="srv-name-cell srv-cell--name" role="cell">
+              <b class="srv-server-name">{{ server.name }}</b>
+              <div class="srv-remark-line">
+                <UiBadge v-if="server.hidden" tone="off">隐藏</UiBadge>
+                <UiBadge v-if="server.remark_src === 'motd' && server.remark_motd" tone="neutral">MOTD</UiBadge>
+                <span :title="remarkTitle(server)">{{ server.remark_display || "暂无备注" }}</span>
+              </div>
             </div>
-            <div>
-              <dt>命令 Token</dt>
-              <dd>
-                <UiBadge :tone="s.has_token ? 'neutral' : 'off'">{{ s.has_token ? "已配置" : "未设置" }}</UiBadge>
-                <span v-if="tokenNote(s)" class="mnote">{{ tokenNote(s) }}</span>
-              </dd>
+            <div class="srv-address-cell srv-cell--address" role="cell"><span class="srv-host">{{ server.host }}</span><span class="srv-secondary">API {{ server.api_port ?? "未配置" }}</span></div>
+            <div class="srv-state-cell" role="cell">
+              <UiBadge :tone="modBadge(server).tone" :title="modBadge(server).title">{{ modBadge(server).text }}</UiBadge>
+              <span v-if="server.api_port !== null && modState(server) && !modState(server)?.reachable" class="srv-mod-error" :title="modNote(server)">连接失败</span>
             </div>
-            <div>
-              <dt>模组状态</dt>
-              <dd>
-                <UiBadge :tone="modBadge(s).tone">{{ modBadge(s).text }}</UiBadge>
-                <span v-if="modNote(s)" class="mnote">{{ modNote(s) }}</span>
-              </dd>
+            <div class="srv-login-cell" role="cell" :title="modTitle(server)"><UiSwitch :on="modOn(server)" :disabled="!modKnown(server)" :aria-label="server.name + '登录限制'" @toggle="setWhitelist(server.name, !modOn(server))" /><span>{{ modShort(server) }}</span></div>
+            <div role="cell"><UiBadge :tone="server.has_token ? 'neutral' : 'off'" :title="tokTitle(server)">{{ server.has_token ? "已设置" : "未设置" }}</UiBadge></div>
+            <div class="srv-row-actions" role="cell">
+              <button class="srv-action srv-action--edit" type="button" @click="openDialog('edit-server', { server, index })">编辑</button>
+              <button class="srv-action" type="button" :title="server.hidden ? '恢复在 /在线 中展示与采集' : '从 /在线 撤下并停止采集，保留绑定与 Token'" @click="setHidden(server.name, !server.hidden)">{{ server.hidden ? "显示" : "隐藏" }}</button>
+              <UiMenu :items="serverItems(index)" @select="(value) => serverAction(value, server, index)">
+                <template #trigger="{ attrs, toggle }"><button v-bind="attrs" class="srv-action srv-action--more" type="button" :aria-label="server.name + '更多操作'" @click="toggle"><UiIcon name="more-horizontal" :size="16" /></button></template>
+              </UiMenu>
             </div>
-            <div class="srv-sw">
-              <dt>登录开关</dt>
-              <dd>
-                <UiSwitch
-                  :on="modOn(s)"
-                  :disabled="!modKnown(s)"
-                  :title="modTitle(s)"
-                  @toggle="setWhitelist(s.name, !modOn(s))"
-                />
-                <span class="mnote">{{ modShort(s) }}</span>
-              </dd>
-            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="servers.length" class="srv-mobile-list">
+        <article v-for="(server, index) in servers" :key="server.name" class="srv-mobile-card" :class="{ 'is-hidden': server.hidden }">
+          <div class="srv-mobile-card-title"><b class="srv-server-name">{{ server.name }}</b><UiBadge :tone="modBadge(server).tone" :title="modBadge(server).title">{{ modBadge(server).text }}</UiBadge></div>
+          <div class="srv-host">{{ server.host }}</div>
+          <div class="srv-remark-line"><UiBadge v-if="server.hidden" tone="off">隐藏</UiBadge><UiBadge v-if="server.remark_src === 'motd' && server.remark_motd" tone="neutral">MOTD</UiBadge><span :title="remarkTitle(server)">{{ server.remark_display || "暂无备注" }}</span></div>
+          <dl class="srv-mobile-details">
+            <div><dt>模组 API 端口</dt><dd>{{ server.api_port ?? "未配置" }}</dd></div>
+            <div><dt>命令 Token</dt><dd><UiBadge :tone="server.has_token ? 'neutral' : 'off'" :title="tokTitle(server)">{{ server.has_token ? "已设置" : "未设置" }}</UiBadge></dd></div>
+            <div class="srv-mobile-login"><dt>登录限制</dt><dd :title="modTitle(server)"><span>{{ modShort(server) }}</span><UiSwitch :on="modOn(server)" :disabled="!modKnown(server)" :aria-label="server.name + '登录限制'" @toggle="setWhitelist(server.name, !modOn(server))" /></dd></div>
           </dl>
-          <div class="srv-acts">
-            <button class="mact" type="button" @click="openDialog('edit-server', { server: s, index: i })">编辑</button>
-            <button class="mact" type="button" @click="setHidden(s.name, !s.hidden)">{{ s.hidden ? "显示" : "隐藏" }}</button>
-            <button class="mact" type="button" title="上移" aria-label="上移" :disabled="i === 0" @click="move(s, -1)"><UiIcon name="arrow-up" :size="15" /></button>
-            <button class="mact" type="button" title="下移" aria-label="下移" :disabled="i === servers.length - 1" @click="move(s, 1)"><UiIcon name="arrow-down" :size="15" /></button>
-            <button class="mact danger" type="button" @click="openDialog('del-server', { server: s })">删除</button>
+          <p v-if="modNote(server)" class="srv-mobile-status-note">{{ modNote(server) }}</p>
+          <div class="srv-mobile-actions">
+            <UiButton kind="sec" @click="openDialog('edit-server', { server, index })"><UiIcon name="pencil" :size="16" />编辑</UiButton>
+            <UiButton kind="sec" @click="setHidden(server.name, !server.hidden)"><UiIcon :name="server.hidden ? 'eye' : 'eye-off'" :size="16" />{{ server.hidden ? "显示" : "隐藏" }}</UiButton>
+            <UiMenu :items="serverItems(index)" label="更多" @select="(value) => serverAction(value, server, index)" />
           </div>
         </article>
       </div>
-      <div v-else-if="loading && !servers.length" class="m-empty">读取中…</div>
-      <div v-else-if="g" class="m-empty">本群还没有服务器条目，点上方「添加服务器」建第一条。</div>
-      <div v-else class="m-empty">还没有群配置文件</div>
 
-      <div class="m-foot">共 {{ servers.length }} 条 · 每群上限 {{ S.maxServers }} 台（代码常量 MAX_SERVERS_PER_GROUP）</div>
-
-      <section class="m-card">
-        <div class="m-card-h">
-          <span class="bar" />
-          <h2>本群开关</h2>
-          <span class="m-count">servers_&lt;群号&gt;.json</span>
-        </div>
-        <div class="m-swrow">
-          <div class="m-swrow-t">
-            <b>上次在线显示</b>
-            <span>开启后 /在线 会显示服务器最后活动时间</span>
-            <em>/上次在线 开|关</em>
-          </div>
-          <UiSwitch :on="!!g?.last_online_enabled" :disabled="!g" @toggle="toggleFlag('last_online_enabled', !g?.last_online_enabled)" />
-        </div>
-        <div class="m-swrow">
-          <div class="m-swrow-t">
-            <b>绑定校验群名片</b>
-            <span>开启后，/绑定 按下面的规则核对群昵称</span>
-            <em>默认开启</em>
-          </div>
-          <UiSwitch :on="!!g?.bind_require_nickname" :disabled="!g" @toggle="toggleFlag('bind_require_nickname', !g?.bind_require_nickname)" />
-        </div>
-        <div class="m-rule-row" :class="{ off: !g?.bind_require_nickname }">
-          <button class="help-btn" type="button" title="规则说明" aria-label="规则说明" @click="showBindHelp = true">?</button>
-          <div class="m-rule-line">
-            <span class="rl">匹配方式</span>
-            <div class="sel-wrap">
-              <select v-model="bindRule" class="sel" :disabled="!g?.bind_require_nickname" @change="saveBindRule">
-                <option value="paren">括号内（默认）</option>
-                <option value="equals">完全等于游戏ID</option>
-                <option value="contains">包含游戏ID</option>
-                <option value="template">自定义模板</option>
-              </select>
-            </div>
-          </div>
-          <div class="m-rule-line">
-            <span class="rl">模板</span>
-            <div class="rule-inp" @focusout="saveBindRule">
-              <UiInput
-                v-model="bindTemplate"
-                placeholder="如 MC:{gameId}"
-                mono
-                :disabled="!g?.bind_require_nickname || bindRule !== 'template'"
-                @enter="saveBindRule"
-              />
-            </div>
-          </div>
-          <div class="rule-ex" :class="{ bad: bindTemplateInvalid }">
-            <template v-if="bindTemplateInvalid">模板里要有一个 {gameId}（只能用一次）</template>
-            <template v-else>昵称示例：{{ bindExample }}</template>
-          </div>
-        </div>
-        <div class="m-swrow">
-          <div class="m-swrow-t">
-            <b>昵称检测</b>
-            <span>开启后本群可使用 /检测昵称</span>
-            <em>/mc nicknamecheck 开|关</em>
-          </div>
-          <UiSwitch :on="!!g?.nickname_check_enabled" :disabled="!g" @toggle="toggleFlag('nickname_check_enabled', !g?.nickname_check_enabled)" />
-        </div>
-        <div class="m-swrow">
-          <div class="m-swrow-t">
-            <b>昵称检测忽略名单</b>
-            <span>名单内的 QQ 不参与名片校验</span>
-            <em>/mc nicknamecheck 忽略|取消忽略 &lt;QQ&gt;</em>
-          </div>
-          <div class="m-swrow-r">
-            <span class="m-count">名单内 {{ ignoreCount }} 个 QQ</span>
-            <UiButton kind="line" :disabled="!g" @click="openDialog('ignore-list')"><UiIcon name="list" :size="14" />管理名单</UiButton>
-          </div>
-        </div>
-      </section>
-    </template>
-
-    <template v-else>
-      <section class="card">
-        <div class="ch">
-          <span class="bar" />
-          <h2>服务器条目</h2>
-          <div class="acts">
-            <UiButton kind="tool" :disabled="!g" @click="openDialog('json-group')">查看 JSON</UiButton>
-            <UiButton kind="tool" :disabled="servers.length === 0" @click="openDialog('batch-del')">批量删除</UiButton>
-            <UiButton kind="tool" :disabled="!g" @click="openDialog('batch-add')">批量添加</UiButton>
-            <UiButton kind="pri" :disabled="!g" @click="openDialog('add-server')"><UiIcon name="plus" :size="14" />添加服务器</UiButton>
-          </div>
-        </div>
-
-        <div class="th">
-          <div class="cols">
-            <span class="c-name">名称</span><span class="c-host">主机地址</span><span class="c-port">API 端口</span>
-            <span class="c-rmk">备注</span><span class="c-tk">命令 Token</span><span class="c-mod">模组状态</span>
-            <span class="c-wl">登录开关</span><span class="c-op">操作</span>
-          </div>
-        </div>
-
-        <div v-for="(s, i) in servers" :key="s.name" class="row" :class="{ hid: s.hidden }">
-          <div class="cols">
-            <span class="c-name"><span class="cell-label">名称</span><b class="nm ell">{{ s.name }}</b><UiBadge v-if="s.hidden" tone="off">已隐藏</UiBadge></span>
-            <span class="c-host"><span class="cell-label">地址</span><span class="ell">{{ s.host }}</span></span>
-            <span class="c-port"><span class="cell-label">端口</span><span :class="{ dash: s.api_port === null }">{{ s.api_port ?? "—" }}</span></span>
-            <span class="c-rmk"><span class="cell-label">备注</span><UiBadge v-if="s.remark_src === 'motd' && s.remark_motd" tone="neutral" title="该值来自服务端 motd">MOTD</UiBadge><span class="ell" :class="{ dash: !s.remark_display }" :title="remarkTitle(s)">{{ s.remark_display || "—" }}</span></span>
-            <span class="c-tk"><UiBadge :tone="s.has_token ? 'neutral' : 'off'" :title="tokTitle(s)">{{ s.has_token ? "已配置" : "未设置" }}</UiBadge></span>
-            <span class="c-mod">
-              <UiBadge :tone="modBadge(s).tone" :title="modBadge(s).title">{{ modBadge(s).text }}</UiBadge>
-            </span>
-            <span class="c-wl">
-              <span class="cell-label">登录开关</span>
-              <UiSwitch
-                :on="modOn(s)"
-                :disabled="!modKnown(s)"
-                :title="modTitle(s)"
-                @toggle="setWhitelist(s.name, !modOn(s))"
-              />
-            </span>
-            <span class="c-op ops">
-              <button class="lnk" type="button" @click="openDialog('edit-server', { server: s, index: i })">编辑</button>
-              <button class="lnk" type="button" :title="s.hidden ? '取消隐藏：/在线 会重新采集并出这张卡' : '隐藏：/在线 不再采集这台，也不出卡片'" @click="setHidden(s.name, !s.hidden)">{{ s.hidden ? "显示" : "隐藏" }}</button>
-              <button class="arw" type="button" title="上移" :disabled="i === 0" @click="move(s, -1)"><UiIcon name="arrow-up" :size="12" /></button>
-              <button class="arw" type="button" title="下移" :disabled="i === servers.length - 1" @click="move(s, 1)"><UiIcon name="arrow-down" :size="12" /></button>
-              <button class="lnk bad" type="button" @click="openDialog('del-server', { server: s })">删除</button>
-            </span>
-          </div>
-        </div>
-
-        <div v-if="g && !servers.length" class="empty">本群还没有服务器条目，点右上「添加服务器」建第一条。</div>
-
-        <div class="tf">
-          <span v-if="loading && !servers.length">读取中…</span>
-          <span v-else>共 {{ servers.length }} 条 · 每群上限 {{ S.maxServers }} 台（代码常量 MAX_SERVERS_PER_GROUP）</span>
-          <span class="tip"><UiIcon name="arrow-up-down" :size="12" />对应 /mc move（位置序号从 0 开始）</span>
-        </div>
-      </section>
-
-      <section class="card swc">
-        <div class="ch">
-          <span class="bar" />
-          <h2>本群开关</h2>
-          <span class="hint">与服务器条目同文件（servers_&lt;群号&gt;.json）</span>
-        </div>
-
-        <div class="swrow">
-          <div class="sl">
-            <b>上次在线显示</b>
-            <span>开启后 /在线 会显示服务器最后活动时间</span>
-            <em>/上次在线 开|关</em>
-          </div>
-          <UiSwitch :on="!!g?.last_online_enabled" :disabled="!g" @toggle="toggleFlag('last_online_enabled', !g?.last_online_enabled)" />
-        </div>
-
-        <div class="swrow">
-          <div class="sl">
-            <b>绑定校验群名片</b>
-            <span>开启后，/绑定 按下面的规则核对群昵称</span>
-            <em>默认开启</em>
-          </div>
-          <UiSwitch :on="!!g?.bind_require_nickname" :disabled="!g" @toggle="toggleFlag('bind_require_nickname', !g?.bind_require_nickname)" />
-        </div>
-
-        <div class="rule-row" :class="{ off: !g?.bind_require_nickname }">
-          <button class="help-btn" type="button" title="规则说明" aria-label="规则说明" @click="showBindHelp = true">?</button>
-          <div class="rule-line">
-            <span class="rl">匹配方式</span>
-            <div class="sel-wrap">
-              <select v-model="bindRule" class="sel" :disabled="!g?.bind_require_nickname" @change="saveBindRule">
-                <option value="paren">括号内（默认）</option>
-                <option value="equals">完全等于游戏ID</option>
-                <option value="contains">包含游戏ID</option>
-                <option value="template">自定义模板</option>
-              </select>
-            </div>
-          </div>
-          <div class="rule-line">
-            <span class="rl">模板</span>
-            <div class="rule-inp" @focusout="saveBindRule">
-              <UiInput
-                v-model="bindTemplate"
-                placeholder="如 MC:{gameId}"
-                mono
-                :disabled="!g?.bind_require_nickname || bindRule !== 'template'"
-                @enter="saveBindRule"
-              />
-            </div>
-          </div>
-          <div class="rule-ex" :class="{ bad: bindTemplateInvalid }">
-            <template v-if="bindTemplateInvalid">模板里要有一个 {gameId}（只能用一次）</template>
-            <template v-else>昵称示例：{{ bindExample }}</template>
-          </div>
-        </div>
-
-        <div class="swrow">
-          <div class="sl">
-            <b>昵称检测</b>
-            <span>开启后本群可使用 /检测昵称</span>
-            <em>/mc nicknamecheck 开|关</em>
-          </div>
-          <UiSwitch :on="!!g?.nickname_check_enabled" :disabled="!g" @toggle="toggleFlag('nickname_check_enabled', !g?.nickname_check_enabled)" />
-        </div>
-
-        <div class="swrow">
-          <div class="sl">
-            <b>昵称检测忽略名单</b>
-            <span>名单内的 QQ 不参与名片校验</span>
-            <em>/mc nicknamecheck 忽略|取消忽略 &lt;QQ&gt;</em>
-          </div>
-          <div class="sr">
-            <span class="cnt">名单内 {{ ignoreCount }} 个 QQ</span>
-            <UiButton kind="line" :disabled="!g" @click="openDialog('ignore-list')"><UiIcon name="list" :size="13" />管理名单</UiButton>
-          </div>
-        </div>
-      </section>
-    </template>
-
-    <UiNotice v-if="S.error" tone="bad" class="errline">{{ S.error }}</UiNotice>
-
-    <UiModal
-      v-if="showBindHelp"
-      cls="m-help"
-      title="绑定名片规则说明"
-      sub="仅在「绑定校验群名片」开启时生效；游戏ID 始终以游戏里登录的为准"
-      subNote
-      @close="showBindHelp = false"
-    >
-      <p class="help-lead">这里决定 /绑定 时，你的群昵称要写成什么样才算通过。游戏ID 以你在游戏里登录的名字为准，下面统一用 <b>Steve</b> 举例。</p>
-      <div class="help-sec">
-        <h4>四种写法</h4>
-        <div class="help-item">
-          <div class="help-name">括号内（默认）</div>
-          <p>昵称里用括号写上游戏ID，括号里的字要和游戏ID一模一样；括号前面写什么都可以。</p>
-          <p class="help-eg"><span class="ok">能过</span>玩家（Steve）、Steve(Steve)、大佬（Steve）</p>
-          <p class="help-eg"><span class="no">过不了</span>Steve（没括号）、玩家（Steve2）、玩家（steve）</p>
-        </div>
-        <div class="help-item">
-          <div class="help-name">完全等于游戏ID</div>
-          <p>群昵称只写游戏ID，不加任何字；前后多几个空格没关系。</p>
-          <p class="help-eg"><span class="ok">能过</span>Steve</p>
-          <p class="help-eg"><span class="no">过不了</span>玩家Steve、Steve大佬</p>
-        </div>
-        <div class="help-item">
-          <div class="help-name">包含游戏ID</div>
-          <p>昵称里只要有游戏ID就行，但它不能是另一个更长ID的一部分。</p>
-          <p class="help-eg"><span class="ok">能过</span>玩家Steve、Steve大佬、大Steve</p>
-          <p class="help-eg"><span class="no">过不了</span>Steve2（那是另一个ID）、My_Steve（下划线连着的也算另一个ID）、steve（大小写不同）</p>
-        </div>
-        <div class="help-item">
-          <div class="help-name">自定义模板</div>
-          <p>你自己定格式，用 <code>{gameId}</code> 代表游戏ID，填进去以后要一字不差。</p>
-          <p class="help-eg"><span class="ok">能过</span>模板写 <code>MC:{gameId}</code>，昵称就写 MC:Steve</p>
-          <p class="help-eg"><span class="no">过不了</span>MC:steve（大小写不同）、XMC:Steve（前面多了字）</p>
-        </div>
+      <div v-if="!servers.length" class="srv-empty" role="status">
+        <template v-if="loading"><UiIcon name="refresh" :size="24" /><b>正在读取配置</b><span>加载完成后展示服务器状态。</span></template>
+        <template v-else-if="g"><UiIcon name="server" :size="24" /><b>本群还没有服务器</b><span>添加第一台服务器，开始配置状态查询。</span><UiButton kind="pri" @click="openDialog('add-server')"><UiIcon name="plus" :size="16" />添加服务器</UiButton></template>
+        <template v-else><UiIcon name="users" :size="24" /><b>还没有群配置</b><span>先新增一个群，再添加服务器。</span><UiButton kind="pri" @click="openDialog('add-group')"><UiIcon name="plus" :size="16" />新增群</UiButton></template>
       </div>
-      <div class="help-sec">
-        <h4>怎么选</h4>
-        <ul>
-          <li>大多数群用默认的「括号内」就行。</li>
-          <li>群里习惯直接拿游戏ID当昵称，选「完全等于游戏ID」。</li>
-          <li>昵称里还带称呼或头衔，选「包含游戏ID」。</li>
-          <li>群里有一套固定格式（比如 MC:Steve），选「自定义模板」。</li>
-        </ul>
+      <div v-if="!isMobile" class="srv-table-foot"><UiIcon name="info" :size="15" /><span>隐藏后从 /在线 撤下并停止采集；绑定与 Token 保留。更多菜单可调整顺序、管理 Token 或删除。</span></div>
+    </section>
+
+    <section class="srv-rules" aria-label="本群规则">
+      <header class="srv-section-heading"><h2>本群规则</h2><span v-if="!isMobile">仅应用于当前群</span></header>
+      <div class="srv-rule-row">
+        <div class="srv-rule-copy"><b>显示上次在线时间</b><span>{{ isMobile ? "展示最后活动时间。" : "在 /在线 卡片中显示服务器最后活动时间。" }}</span></div>
+        <UiSwitch :on="!!g?.last_online_enabled" :disabled="!g" aria-label="显示上次在线时间" @toggle="toggleFlag('last_online_enabled', !g?.last_online_enabled)" />
       </div>
-      <div class="help-sec">
-        <h4>还要注意</h4>
-        <ul>
-          <li>大小写要一模一样：Steve 和 steve 不算同一个。</li>
-          <li>自定义模板里必须有一个 <code>{gameId}</code>，只能用一次，最多 64 个字。</li>
-          <li>模板写错时不会保存；配置文件里的规则坏了会自动按「括号内」处理，不会把绑定卡死。</li>
-          <li>关掉「绑定校验群名片」后，这些规则都不生效，绑定只看绑定码。</li>
-          <li>改上面的选择时，下面的「昵称示例」会跟着变，照着写就行。</li>
-        </ul>
+      <div class="srv-rule-row">
+        <div class="srv-rule-copy"><b>绑定时校验群名片</b><span>{{ isMobile ? "按匹配规则检查名片。" : "玩家绑定前，按下面的匹配规则核对群名片。" }}</span></div>
+        <UiSwitch :on="!!g?.bind_require_nickname" :disabled="!g" aria-label="绑定时校验群名片" @toggle="toggleFlag('bind_require_nickname', !g?.bind_require_nickname)" />
       </div>
-      <template #foot>
-        <UiButton kind="pri" @click="showBindHelp = false">知道了</UiButton>
-      </template>
+      <div class="srv-bind-rule" :class="{ 'is-disabled': !g?.bind_require_nickname }">
+        <div class="srv-rule-select"><label v-if="!isMobile">匹配方式</label><UiSelect :model-value="bindRule" :options="bindOptions" :disabled="!g?.bind_require_nickname" aria-label="群名片匹配方式" @change="changeBindRule" /></div>
+        <div class="srv-rule-preview"><span v-if="!isMobile">符合规则的名片</span><div class="srv-preview-value" :class="{ 'is-invalid': bindTemplateInvalid }"><UiIcon v-if="!isMobile" name="check" :size="15" /><span>{{ isMobile ? "昵称示例：" : "" }}{{ bindExample }}</span></div></div>
+        <button class="srv-help-link" type="button" @click="showBindHelp = true">规则说明</button>
+        <div v-if="bindRule === 'template'" class="srv-template-field" @focusout="saveBindRule"><label>名片模板</label><UiInput v-model="bindTemplate" placeholder="MC:{gameId}" :disabled="!g?.bind_require_nickname" mono @enter="saveBindRule" /><span :class="{ 'is-invalid': bindTemplateInvalid }">必须且只能包含一个 {gameId}，最多 64 个字符。</span></div>
+      </div>
+      <div class="srv-rule-row">
+        <div class="srv-rule-copy"><b>启用昵称检测</b><span>{{ isMobile ? "允许检测成员群名片。" : "允许本群使用 /检测昵称 检查成员群名片。" }}</span></div>
+        <UiSwitch :on="!!g?.nickname_check_enabled" :disabled="!g" aria-label="启用昵称检测" @toggle="toggleFlag('nickname_check_enabled', !g?.nickname_check_enabled)" />
+      </div>
+      <div class="srv-rule-row">
+        <div class="srv-rule-copy"><b>{{ isMobile ? "忽略名单" : "昵称检测忽略名单" }}</b><span>{{ isMobile ? ignoreCount + " 位成员" : "名单内成员不参与名片校验。" }}</span></div>
+        <div class="srv-ignore-actions"><UiBadge v-if="!isMobile" tone="neutral">{{ ignoreCount }} 位成员</UiBadge><UiButton kind="sec" :disabled="!g" @click="openDialog('ignore-list')"><UiIcon v-if="!isMobile" name="users" :size="16" />{{ isMobile ? "管理" : "管理名单" }}</UiButton></div>
+      </div>
+    </section>
+
+    <div class="srv-save-note"><UiIcon name="circle-check" :size="16" /><span>本群更改即时保存</span></div>
+    <UiNotice v-if="S.error" tone="bad" class="srv-error">{{ S.error }}</UiNotice>
+
+    <UiModal v-if="showBindHelp" cls="m-help" title="群名片匹配规则" sub="绑定前校验群名片；修改后即时保存。" subNote @close="showBindHelp = false">
+      <div class="srv-help-field"><label>匹配方式</label><UiSelect :model-value="bindRule" :options="bindOptions" :disabled="!g?.bind_require_nickname" aria-label="群名片匹配方式" @change="changeBindRule" /></div>
+      <div v-if="bindRule === 'template'" class="srv-help-field" @focusout="saveBindRule"><label>名片模板</label><UiInput v-model="bindTemplate" placeholder="MC:{gameId}" :disabled="!g?.bind_require_nickname" mono @enter="saveBindRule" /><span :class="{ 'is-invalid': bindTemplateInvalid }">必须且只能包含一个 {gameId}，最多 64 个字符。</span></div>
+      <UiNotice :tone="bindTemplateInvalid ? 'bad' : 'info'">{{ bindTemplateInvalid ? "模板必须且只能包含一个 {gameId}，最多 64 个字符。" : "昵称示例：" + bindExample }}</UiNotice>
+      <div class="srv-rule-examples"><div class="srv-rule-examples-heading"><span>匹配方式</span><span>名片示例</span></div><div><b>括号内（默认）</b><span>玩家（Steve）</span></div><div><b>完全等于游戏 ID</b><span>Steve</span></div><div><b>包含游戏 ID</b><span>玩家Steve</span></div><div><b>自定义模板</b><span>MC:Steve</span></div></div>
+      <details class="srv-rule-details"><summary>匹配细节与注意事项</summary><ul><li>游戏 ID 以游戏中登录的名字为准，大小写必须一致。</li><li>括号内：括号里的游戏 ID 必须完全一致，括号前的称呼可以不同。</li><li>完全等于：群名片只写游戏 ID，允许前后空格。</li><li>包含游戏 ID：不能是另一个更长 ID 的一部分，例如 Steve2、My_Steve 都不匹配 Steve。</li><li>自定义模板：替换 {gameId} 后，名片必须与结果完全一致。</li><li>关闭绑定校验后，上述规则不生效，绑定仍需使用绑定码。</li><li>模板无效时不会保存；配置中的规则损坏时会退回括号规则。</li></ul></details>
+      <template #foot><UiButton kind="sec" @click="showBindHelp = false">关闭说明</UiButton></template>
     </UiModal>
   </div>
 </template>
 
 <style scoped>
-.page {
-  display: flex;
-  flex-direction: column;
-  gap: var(--gap-card);
-}
-
-.gbar,
-.stats {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 44px;
-  padding: 0 var(--pad-card);
-  border: 1px solid var(--bd);
-  border-radius: var(--r-card);
-  background: var(--surface);
-}
-
-.gbar .bar,
-.ch .bar {
-  width: 3px;
-  height: 18px;
-  border-radius: 1.5px;
-  background: var(--ac);
-  flex: none;
-}
-
-.gbar label {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--ink2);
-}
-
-.gbar .right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.ph {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.ph-t h1 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.ph-t p {
-  margin: 5px 0 0;
-  font-size: 12px;
-  color: var(--ink3);
-}
-
-.stats {
-  gap: 16px;
-}
-
-.st {
-  display: flex;
-  flex: 1 1 0;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  white-space: nowrap;
-}
-
-.st label {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--ink3);
-}
-
-.st b {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.st em {
-  font-size: 10px;
-  font-style: normal;
-  color: var(--ink4);
-}
-
-.st .cap {
-  width: 60px;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--row);
-  overflow: hidden;
-}
-
-.st .cap i {
-  display: block;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--ac);
-}
-
-.st .cap.warn i {
-  background: var(--warn);
-}
-
-.sp {
-  width: 1px;
-  height: 18px;
-  background: var(--row);
-  flex: none;
-}
-
-.ch {
-  border-bottom: 1px solid var(--row);
-}
-
-.ch h2 {
-  border-bottom: none;
-}
-
-.ch .acts {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.nm {
-  font-weight: 600;
-  color: var(--ink);
-}
-
-/* 隐藏中的条目：铺一层 1px 斜线纹，不铺纯色——整块底色会把「暂时不上 /在线」
-   说成「这条废了」；名字转灰＋名字后挂「已隐藏」牌（牌给竖排卡片档兜底）。
-   线的深浅只由 --hatch 一个令牌控制。 */
-.row.hid {
-  background-image: repeating-linear-gradient(135deg, var(--hatch) 0 1px, transparent 1px 7px);
-}
-
-.row.hid .nm {
-  color: var(--ink3);
-  font-weight: 500;
-}
-
-.c-host,
-.c-port {
-  color: var(--ink2);
-}
-
-.c-rmk {
-  font-size: 12px;
-  color: var(--ink3);
-}
-
-.dash {
-  color: var(--ink5);
-}
-
-.ops {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.lnk {
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--ac);
-  font-family: var(--ff);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.lnk.bad {
-  color: var(--bad);
-}
-
-.lnk:hover {
-  text-decoration: underline;
-}
-
-.arw {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--ink2);
-  font-family: var(--ff);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.arw:hover:not(:disabled) {
-  color: var(--ac);
-}
-
-.arw:disabled {
-  color: var(--ink5);
-  cursor: not-allowed;
-}
-
-.swc .ch {
-  border-bottom: 1px solid var(--row);
-}
-
-/* 画布 sc-h 里说明文字紧跟标题左排，不像参数页那样推到右端 */
-.swc .ch .hint {
-  margin-left: 0;
-}
-
-.swrow {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 64px;
-  padding: 0 var(--pad-card);
-  border-bottom: 1px solid var(--row);
-}
-
-.swrow:last-child {
-  border-bottom: none;
-}
-
-.sl {
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.sl b {
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 16px;
-  color: var(--ink);
-}
-
-.sl span {
-  font-size: 11px;
-  line-height: 14px;
-  color: var(--ink3);
-}
-
-.sl em {
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 500;
-  line-height: 14px;
-  color: var(--ac);
-}
-
-/* 绑定匹配规则：常驻一行，主开关关闭时整行置灰 */
-.rule-row {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px var(--pad-card) 14px;
-  border-bottom: 1px solid var(--row);
-}
-
-.rule-row.off .rule-line,
-.rule-row.off .rule-ex {
-  opacity: 0.55;
-}
-
-.help-btn {
-  position: absolute;
-  top: 9px;
-  right: var(--pad-card);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 1px solid var(--bd);
-  border-radius: 50%;
-  background: var(--surface);
-  color: var(--ink3);
-  font-family: var(--ff);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.help-btn:hover {
-  border-color: var(--ac);
-  color: var(--ac);
-}
-
-.rule-line {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.rule-line .rl {
-  width: 64px;
-  flex: none;
-  font-size: 11px;
-  color: var(--ink3);
-}
-
-.sel-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
-.sel-wrap::after {
-  content: "";
-  position: absolute;
-  right: 11px;
-  top: 50%;
-  width: 6px;
-  height: 6px;
-  border-right: 1.5px solid var(--ink3);
-  border-bottom: 1.5px solid var(--ink3);
-  transform: translateY(-70%) rotate(45deg);
-  pointer-events: none;
-}
-
-.sel {
-  appearance: none;
-  color-scheme: dark;
-  height: 32px;
-  min-width: 180px;
-  padding: 0 30px 0 10px;
-  border: 1px solid var(--bd);
-  border-radius: var(--r-ctl);
-  background: var(--surface);
-  color: var(--ink);
-  font-family: var(--ff);
-  font-size: 13px;
-}
-
-.sel:disabled {
-  cursor: not-allowed;
-}
-
-.rule-inp {
-  flex: 1 1 auto;
-  min-width: 0;
-  max-width: 360px;
-}
-
-.rule-ex {
-  padding-left: 74px;
-  font-size: 11px;
-  color: var(--ink4);
-}
-
-.rule-ex.bad {
-  color: var(--bad);
-}
-
-.m-rule-row {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--row);
-}
-
-.m-rule-row.off .m-rule-line,
-.m-rule-row.off .rule-ex {
-  opacity: 0.55;
-}
-
-.m-rule-line {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.m-rule-line .rl {
-  font-size: 11px;
-  color: var(--ink3);
-}
-
-.m-rule-row .sel {
-  width: 100%;
-  min-width: 0;
-}
-
-.m-rule-row .rule-inp {
-  max-width: none;
-}
-
-.m-rule-row .rule-ex {
-  padding-left: 0;
-}
-
-/* 规则说明弹窗内容 */
-.help-lead {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--ink3);
-}
-
-.help-lead b {
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.help-sec {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.help-sec h4 {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink2);
-}
-
-.help-sec p {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--ink3);
-}
-
-.help-sec ul {
-  margin: 0;
-  padding-left: 18px;
-  display: grid;
-  gap: 5px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--ink3);
-}
-
-.help-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 9px 10px;
-  border: 1px solid var(--row);
-  border-radius: 6px;
-}
-
-.help-name {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.help-sec .help-eg {
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--ink4);
-}
-
-.help-eg .ok {
-  margin-right: 4px;
-  color: var(--ok);
-  font-weight: 600;
-}
-
-.help-eg .no {
-  margin: 0 6px;
-  color: var(--bad);
-  font-weight: 600;
-}
-
-.help-sec code {
-  font-family: var(--fm);
-  color: var(--ac);
-}
-
-.sr {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: none;
-}
-
-.cnt {
-  font-size: 11px;
-  color: var(--ink4);
-}
-
-@container page (max-width: 1040px) {
-  .stats {
-    height: auto;
-    flex-wrap: wrap;
-    gap: 10px 16px;
-    padding: 10px var(--pad-card);
-  }
-
-  .sp {
-    display: none;
-  }
-
-  .st {
-    flex: 0 0 auto;
-  }
-}
-
-@container page (max-width: 980px) {
-  .gbar {
-    height: auto;
-    flex-wrap: wrap;
-    padding: 8px var(--pad-card);
-  }
-
-  .gbar .right {
-    margin-left: 0;
-    flex-wrap: wrap;
-  }
-
-  .ch {
-    height: auto;
-    flex-wrap: wrap;
-    padding: 8px var(--pad-card);
-  }
-
-  .ch .acts {
-    margin-left: 0;
-    flex-wrap: wrap;
-  }
+.srv-page { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.srv-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; order: 0; }
+.srv-heading h1 { margin: 0; color: var(--ink); font-size: 26px; font-weight: 600; line-height: 1.5; }
+.srv-heading p { margin: 6px 0 0; color: var(--ink3); font-size: 13px; line-height: 1.5; }
+.srv-groupbar { order: 1; display: flex; align-items: center; gap: 12px; min-width: 0; padding: 14px 18px; border: 1px solid var(--bd); border-radius: 12px; background: var(--surface); color: var(--ink3); }
+.srv-group-label { flex: none; font-size: 13px; }
+.srv-group-picker { flex: 0 1 280px; min-width: 0; width: 280px; }
+.srv-group-actions, .srv-toolbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.srv-summary { order: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 24px; color: var(--ink3); font-size: 13px; line-height: 1.5; }
+.srv-list { order: 3; min-width: 0; border: 1px solid var(--bd); border-radius: 12px; background: var(--surface); }
+.srv-list-toolbar { display: flex; align-items: center; gap: 8px; padding: 16px 20px; }
+.srv-list-toolbar h2, .srv-section-heading h2 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.5; }
+.srv-table-scroll { overflow-x: auto; }
+.srv-table { min-width: 1080px; }
+/* Canvas inner columns: 304 / 292 / 128 / 136 / 116 / 160px at 1136px. */
+.srv-grid { display: grid; grid-template-columns: minmax(0, 304fr) minmax(0, 292fr) minmax(0, 128fr) minmax(0, 136fr) minmax(0, 116fr) 160px; align-items: center; padding: 0 20px; }
+.srv-grid > * { min-width: 0; }
+.srv-table-head { min-height: 44px; background: var(--thead); color: var(--ink3); font-size: 12px; line-height: 1.5; }
+.srv-table-row { padding-top: 17px; padding-bottom: 17px; border-bottom: 1px solid var(--row); }
+.srv-table-row.is-hidden { background: var(--hidden-bg, #f8f9fb); }
+.srv-table-row:hover { background: var(--row-hover, #f8f9ff); }
+.srv-cell--name { padding-right: 20px; }
+.srv-cell--address { padding-right: 16px; }
+.srv-cell--actions { text-align: right; }
+.srv-name-cell, .srv-address-cell, .srv-state-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.srv-name-cell { align-items: stretch; }
+.srv-table-row.is-hidden .srv-name-cell { gap: 6px; }
+.srv-server-name { display: block; min-width: 0; width: 100%; color: var(--ink); font-size: 14px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.srv-remark-line { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--ink3); font-size: 12px; line-height: 1.5; }
+.srv-remark-line > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.srv-remark-line :deep(.bdg) { flex: none; }
+.srv-host { max-width: 100%; font-family: var(--fm); font-size: 12px; line-height: 1.5; color: var(--ink); overflow-wrap: anywhere; }
+.srv-address-cell { gap: 5px; }
+.srv-secondary { color: var(--ink3); font-size: 12px; line-height: 1.5; }
+.srv-mod-error { color: var(--warn); font-size: 11px; line-height: 1.5; }
+.srv-login-cell { display: flex; align-items: center; gap: 8px; color: var(--ink3); font-size: 12px; white-space: nowrap; }
+.srv-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.srv-action { display: inline-flex; align-items: center; justify-content: center; flex: none; gap: 6px; height: 32px; padding: 0 10px; border: 0; border-radius: 7px; background: var(--quiet-bg, #f6f8fb); color: var(--ink3); font: 500 13px/1.5 var(--ff); cursor: pointer; transition: background-color 140ms ease, color 140ms ease; }
+.srv-action--edit { background: var(--quiet-accent-bg, #f1f3fd); color: var(--ac); }
+.srv-action--more { width: 32px; padding: 0 8px; }
+.srv-action:hover { background: var(--ac-soft); color: var(--ac); }
+.srv-action:focus-visible, .srv-help-link:focus-visible { outline: 3px solid var(--focus-ring, #bbc3f7); outline-offset: 2px; }
+.srv-table-foot { display: flex; align-items: center; gap: 8px; padding: 12px 20px; color: var(--ink3); font-size: 12px; line-height: 1.5; }
+.srv-table-foot > svg { flex: none; }
+.srv-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 40px 24px; color: var(--ink3); text-align: center; }
+.srv-empty b { color: var(--ink); font-size: 15px; font-weight: 600; }
+.srv-empty span { font-size: 13px; }
+.srv-rules { order: 4; border: 1px solid var(--bd); border-radius: 12px; background: var(--surface); }
+.srv-section-heading { display: flex; align-items: center; gap: 12px; padding: 16px 22px; border-bottom: 1px solid var(--row); }
+.srv-section-heading > span { color: var(--ink3); font-size: 12px; }
+.srv-rule-row { display: flex; align-items: center; gap: 16px; padding: 13px 20px; border-bottom: 1px solid var(--row); }
+.srv-rule-row:last-child { border-bottom: 0; }
+.srv-rule-copy { display: flex; flex: 1 1 auto; flex-direction: column; gap: 3px; min-width: 0; }
+.srv-rule-copy b { color: var(--ink); font-size: 14px; font-weight: 500; line-height: 1.5; }
+.srv-rule-copy > span { color: var(--ink3); font-size: 12px; line-height: 1.5; }
+.srv-bind-rule { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 20px; padding: 16px 20px; background: var(--subtle-bg, #fafbfd); border-bottom: 1px solid var(--row); }
+.srv-rule-select { display: flex; flex: 0 0 280px; flex-direction: column; gap: 7px; min-width: 0; }
+.srv-rule-select > label, .srv-rule-preview > span, .srv-template-field > label { color: var(--ink3); font-size: 12px; line-height: 1.5; }
+.srv-rule-preview { display: flex; flex: 1 1 180px; flex-direction: column; gap: 7px; min-width: 0; }
+.srv-preview-value { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 12px; border-radius: 6px; background: var(--ac-soft); color: var(--ac); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.srv-preview-value > svg { flex: none; }
+.srv-help-link { flex: 0 0 100px; margin-top: 30px; padding: 0; border: 0; background: transparent; color: var(--ac); font: 400 13px/1.5 var(--ff); text-align: left; cursor: pointer; }
+.srv-help-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.srv-template-field { display: flex; flex: 0 0 100%; flex-direction: column; gap: 7px; min-width: 0; }
+.srv-template-field > span { font-size: 12px; color: var(--ink3); }
+.srv-bind-rule.is-disabled .srv-rule-preview { opacity: 0.6; }
+.srv-ignore-actions { display: flex; flex: none; align-items: center; gap: 16px; }
+.srv-save-note { order: 5; display: flex; align-items: center; gap: 8px; color: var(--ok); font-size: 12px; line-height: 1.5; }
+.srv-error { order: 6; }
+.srv-help-field { display: flex; flex-direction: column; gap: 7px; }
+.srv-help-field > label { font-size: 13px; font-weight: 500; color: var(--ink); }
+.srv-help-field > span { color: var(--ink3); font-size: 12px; }
+.srv-rule-examples { display: flex; flex-direction: column; }
+.srv-rule-examples > div { display: flex; justify-content: space-between; gap: 20px; padding: 10px 0; border-bottom: 1px solid var(--row); color: var(--ink3); font-size: 13px; }
+.srv-rule-examples > div > b { color: var(--ink); font-weight: 400; }
+.srv-rule-examples .srv-rule-examples-heading { font-size: 12px; }
+.srv-rule-details { font-size: 12px; line-height: 1.7; color: var(--ink3); }
+.srv-rule-details summary { color: var(--ac); cursor: pointer; }
+.srv-rule-details ul { display: grid; gap: 5px; margin: 12px 0 0; padding-left: 20px; }
+.is-invalid { color: var(--bad) !important; }
+
+.srv-page.is-mobile { gap: 16px; }
+.srv-page.is-mobile .srv-groupbar { order: -1; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.srv-page.is-mobile .srv-group-picker { flex: 1 1 auto; width: auto; }
+.srv-page.is-mobile .srv-group-actions { margin-left: 0; }
+.srv-page.is-mobile .srv-heading h1 { font-size: 22px; }
+.srv-page.is-mobile .srv-heading p { font-size: 12px; }
+.srv-list--mobile { border: 0; background: transparent; }
+.srv-list--mobile .srv-list-toolbar { padding: 0 0 16px; }
+.srv-mobile-count { font-size: 12px; color: var(--ink3); }
+.srv-mobile-list { display: flex; flex-direction: column; gap: 16px; }
+.srv-mobile-card { display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--bd); border-radius: 12px; background: var(--surface); }
+.srv-mobile-card.is-hidden { background: var(--hidden-bg, #f8f9fb); }
+.srv-mobile-card-title { display: flex; align-items: center; gap: 8px; }
+.srv-mobile-card-title .srv-server-name { flex: 1 1 auto; width: auto; font-size: 16px; }
+.srv-mobile-card-title :deep(.bdg) { flex: none; }
+.srv-mobile-details { display: flex; flex-direction: column; gap: 3px; margin: 0; }
+.srv-mobile-details > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
+.srv-mobile-details dt { font-size: 12px; color: var(--ink3); }
+.srv-mobile-details dd { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--ink); }
+.srv-mobile-details .srv-mobile-login { min-height: 36px; }
+.srv-mobile-login dt { font-size: 13px; color: var(--ink); }
+.srv-mobile-login dd { color: var(--ink3); font-size: 12px; }
+.srv-mobile-status-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ink3); overflow-wrap: anywhere; }
+.srv-mobile-actions { display: flex; align-items: center; gap: 8px; }
+.srv-page.is-mobile .srv-section-heading { padding: 16px; }
+.srv-page.is-mobile .srv-rule-row { padding: 14px 16px; gap: 12px; }
+.srv-page.is-mobile .srv-rule-copy { gap: 4px; }
+.srv-page.is-mobile .srv-bind-rule { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 12px 16px; }
+.srv-page.is-mobile .srv-rule-select { grid-column: 1 / -1; }
+.srv-page.is-mobile .srv-rule-preview { min-width: 0; }
+.srv-page.is-mobile .srv-preview-value { min-height: 0; padding: 0; background: transparent; font-size: 12px; }
+.srv-page.is-mobile .srv-help-link { width: auto; margin: 0; font-size: 12px; }
+.srv-page.is-mobile .srv-template-field { grid-column: 1 / -1; }
+.srv-page.is-mobile .srv-ignore-actions { gap: 8px; }
+.srv-page.is-mobile .srv-empty { border: 1px solid var(--bd); border-radius: 12px; background: var(--surface); }
+
+@media (prefers-reduced-motion: reduce) {
+  .srv-action { transition: none; }
 }
 </style>

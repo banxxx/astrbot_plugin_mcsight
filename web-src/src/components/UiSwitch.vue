@@ -1,5 +1,5 @@
 <script setup lang="ts">
-defineProps<{ on?: boolean; disabled?: boolean }>();
+defineProps<{ on?: boolean; disabled?: boolean; label?: string }>();
 const emit = defineEmits<{ (e: "toggle"): void }>();
 </script>
 
@@ -10,16 +10,8 @@ const emit = defineEmits<{ (e: "toggle"): void }>();
     :disabled="disabled"
     type="button"
     role="switch"
-    :aria-checked="on"
+    :aria-checked="!!on"
+    :aria-label="label"
     @click="emit('toggle')"
-  >
-    <i />
-  </button>
+  ><i aria-hidden="true" /></button>
 </template>
-
-<style scoped>
-.sw:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-</style>

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-/* 弹窗按画布的原型实现：确认 / 表单（含命令 Token）/ 名单管理 / 宽表 JSON。
-   规矩：遮罩与 Esc 都不关闭；删除类必须二次确认；弹窗内的「移除」不再叠确认；密钥的清除即时生效。
-   注意：具名插槽必须是组件的直接子节点，所以页脚统一放在一个 #foot 里按弹窗分支。 */
-import { computed, reactive, ref, watch } from "vue";
+/* 与 Pen 的表单、名单、确认及 JSON 预览共用同一套弹窗。
+   服务器与本群名单即时保存；全局名单只在确认后应用到全局草稿。 */
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import UiBadge from "./UiBadge.vue";
 import UiButton from "./UiButton.vue";
 import UiField from "./UiField.vue";
 import UiIcon from "./UiIcon.vue";
@@ -19,6 +19,7 @@ import {
   discardDrafts,
   loadGroup,
   loadSummary,
+  reloadPlugin,
   run,
   saveDrafts,
   servers,
@@ -43,19 +44,25 @@ const f = reactive<Record<string, string>>({});
 const selected = reactive<Record<string, boolean>>({});
 const batchResult = reactive({ message: "", failed: [] as string[] });
 const jsonText = reactive({ file: "", text: "", error: "" });
+const jsonPreview = ref<HTMLElement | null>(null);
+const jsonCopied = ref(false);
+const jsonCopying = ref(false);
+const jsonCopyError = ref("");
+let copyTimer: number | undefined;
+const busy = ref(false);
+const clearTokenConfirm = ref(false);
+const listDraft = ref<string[]>([]);
+const fieldErrors = reactive<Record<string, string>>({});
 /* 添加服务器时的 MOTD 预取：只回显，不落盘；提交时随创建请求一起写入缓存 */
 const motdPreview = reactive({ text: "", error: "", loading: false });
 let previewSeq = 0;
 
 const FORMS = ["add-server", "edit-server"];
-const CONFIRMS = ["del-server", "del-group", "leave-cfg"];
+const CONFIRMS = ["del-server", "del-group", "leave-cfg", "reload-plugin"];
 const LISTS = ["ignore-list", "list-manage"];
 const JSONS = ["json-group", "json-config"];
-/* 画布上「等价命令 / 文件操作」副标题是等宽主色，说明行是正体灰；只有 JSON 弹窗标题用等宽 */
-const NOTE_SUBS = ["add-group", "json-group", "json-config"];
-
 const modalCls = computed(() => {
-  /* 删除群配置要多一个「输入确认词」的输入框，桌面固定高度得比普通确认弹窗高一档 */
+  if (clearTokenConfirm.value) return "m-confirm";
   if (name.value === "del-group") return "m-confirm-typed";
   if (CONFIRMS.includes(name.value)) return "m-confirm";
   if (JSONS.includes(name.value) || name.value === "batch-add") return "m-json";
@@ -64,11 +71,12 @@ const modalCls = computed(() => {
 });
 
 const title = computed(() => {
+  if (clearTokenConfirm.value) return "清除命令 Token";
   switch (name.value) {
     case "add-server":
       return "添加服务器";
     case "edit-server":
-      return `编辑「${srv.value?.name ?? ""}」`;
+      return "编辑服务器";
     case "add-group":
       return "新增群";
     case "del-server":
@@ -76,79 +84,89 @@ const title = computed(() => {
     case "del-group":
       return "删除群配置";
     case "batch-add":
-      return "批量添加";
+      return "批量添加服务器";
     case "batch-del":
-      return "批量删除";
+      return "批量删除服务器";
     case "json-group":
-      return `servers_${S.gid}.json`;
     case "json-config":
-      return jsonText.file || "插件配置";
+      return "查看 JSON";
     case "ignore-list":
-      return `忽略名单 · ${S.gid}`;
-    case "list-manage":
-      return `${String(payload.value.label ?? "")}名单`;
+      return "昵称检测忽略名单";
+    case "list-manage": {
+      const label = String(payload.value.label ?? "成员");
+      return label.endsWith("名单") ? label : `${label}名单`;
+    }
     case "leave-cfg":
-      return "有未保存的更改";
+      return "还有更改未保存";
+    case "reload-plugin":
+      return "重载插件";
     default:
       return "";
   }
 });
 
 const sub = computed(() => {
+  if (clearTokenConfirm.value) return srv.value?.name ?? "";
   switch (name.value) {
     case "add-server":
-      return "等价命令 /mc add <名称> <地址> [端口] · /mc token 名称 <口令>";
+      return `当前群 ${S.gid} / 保存后立即更新本群列表`;
     case "edit-server":
-      return "等价命令 /mc edit 名称 name|host|port|remark · /mc token 名称 <口令>|清除";
+      return `当前群 ${S.gid} / ${srv.value?.name ?? ""}`;
     case "del-server":
-      return `等价命令 /mc remove ${srv.value?.name ?? ""}`;
+      return srv.value?.name ?? "";
     case "del-group":
-      return `文件操作 · servers_${S.gid}.json`;
+      return `当前群 ${S.gid}`;
     case "batch-add":
-      return "等价命令 /mc batchadd 名:IP[:端口],名:IP…";
+      return "每行一条，或使用逗号分隔；名称与主机之间使用冒号。";
     case "batch-del":
-      return "等价命令 /mc batchremove 名,名";
+      return "从当前群移除所选服务器条目及其 Token。";
     case "ignore-list":
-      return "等价命令 /mc nicknamecheck 忽略|取消忽略 <QQ>";
+      return "名单内成员不参与名片校验，添加与移除即时保存。";
     case "list-manage":
-      return `写 _conf_schema.json 的 ${(payload.value.item as ConfigItem | undefined)?.key ?? ""} · 增删只改草稿`;
+      return "本次编辑加入全局草稿，返回全局参数页后统一保存。";
     case "leave-cfg":
-      return `全局参数 · ${dirtyCount.value} 项待保存`;
+      return "离开全局参数页前，请先处理当前草稿。";
+    case "add-group":
+      return "先建立群配置，再添加这个群的服务器。";
+    case "json-group":
+      return "当前群配置 / 只读预览";
+    case "json-config":
+      return "全局配置 / 只读预览";
+    case "reload-plugin":
+      return "已保存的全局配置将在重载后生效。";
     default:
       return "";
   }
 });
 
 const isForm = computed(() => FORMS.includes(name.value));
-const footInfo = computed(() => {
-  if (name.value === "add-server") return `当前 ${servers.value.length} / ${S.maxServers} 台 · 每群上限`;
-  if (name.value === "edit-server") return "改地址不影响已有绑定";
-  return "";
-});
 const listNote = computed(() =>
   name.value === "ignore-list"
-    ? `名单内 ${listItems.value.length} 个 QQ · 添加与移除即时写入 servers_<群号>.json`
-    : `名单内 ${listItems.value.length} 个 · 增删只改草稿，回页面点「保存更改」才落盘`,
+    ? `名单内 ${listItems.value.length} 位成员；添加与移除即时保存。`
+    : `名单内 ${listItems.value.length} 位成员；修改后需保存全局参数才能生效。`,
 );
 const confirmWarn = computed(() => {
-  if (name.value === "del-server") return `将从 servers_${S.gid}.json 移除「${srv.value?.name ?? ""}」，其命令 Token 一并删除。`;
+  if (name.value === "del-server") return `从当前群移除「${srv.value?.name ?? ""}」，其命令 Token 一并删除。`;
   if (name.value === "leave-cfg") {
-    return `「全局参数」里还有 ${dirtyCount.value} 项改动没有保存，切走之后这些改动会丢掉。`;
+    return `全局参数还有 ${dirtyCount.value} 项更改未保存。`;
   }
-  return `该群还有 ${servers.value.length} 台服务器条目，删除后 /在线 /绑定 /查询 在这个群全部失效，且不会自动恢复。`;
+  return "本群的服务器条目、开关与忽略名单将被删除。";
 });
 const confirmNote = computed(() => {
   if (name.value === "del-server") return "绑定记录不受影响。";
-  if (name.value === "leave-cfg") return "可以先「保存并离开」，或回去点右上角的「保存更改」。";
-  return "本群开关与忽略名单一并随文件删除。绑定记录不在此文件内，不受影响。";
+  if (name.value === "leave-cfg") return "保存失败时会保留未保存的草稿，并停留在当前页面。";
+  return "本群相关查询与绑定功能将不可用，直到重新创建群配置。已有绑定记录保留。";
 });
-const confirmVerb = computed(() => (name.value === "del-server" ? "确认删除" : "确认删除文件"));
+const confirmVerb = computed(() => (name.value === "del-server" ? "删除服务器" : "删除群配置"));
 /* 删除群配置必须手打「确认删除」才放行，防的是弹窗一开随手回车/连点把群配置删掉 */
 const delGroupReady = computed(() => (f.confirm ?? "").trim() === "确认删除");
 const footerDisabled = computed(
   () =>
+    busy.value ||
     (name.value === "batch-del" && !selectedNames.value.length) ||
-    (name.value === "del-group" && !delGroupReady.value),
+    (name.value === "del-group" && !delGroupReady.value) ||
+    (name.value === "add-server" && servers.value.length >= S.maxServers) ||
+    (name.value === "reload-plugin" && dirtyCount.value > 0),
 );
 const footAction = computed(() => {
   switch (name.value) {
@@ -166,19 +184,38 @@ const footAction = computed(() => {
       return submitBatchAdd;
     case "batch-del":
       return submitBatchDel;
+    case "reload-plugin":
+      return submitReload;
     default:
       return null;
   }
 });
 const footVerb = computed(() => {
+  if (name.value === "reload-plugin") return "重载插件";
   if (CONFIRMS.includes(name.value)) return confirmVerb.value;
-  if (name.value === "add-server" || name.value === "batch-add") return "添加";
-  if (name.value === "add-group") return "创建";
-  if (name.value === "batch-del") return "删除所选";
-  return "保存";
+  if (name.value === "add-server" || name.value === "batch-add") return "添加服务器";
+  if (name.value === "add-group") return "创建群配置";
+  if (name.value === "batch-del") return `删除 ${selectedNames.value.length} 台服务器`;
+  return "保存服务器";
 });
 const footKind = computed(() => (name.value === "del-server" || name.value === "del-group" || name.value === "batch-del" ? "danger" : "pri"));
-const footIcon = computed(() => (CONFIRMS.includes(name.value) || name.value === "batch-del" ? null : name.value === "edit-server" ? "check" : "plus"));
+const footIcon = computed(() => name.value === "reload-plugin" ? "refresh" : CONFIRMS.includes(name.value) || name.value === "batch-del" ? "trash" : name.value === "edit-server" ? "check" : "plus");
+
+function requestClose() {
+  if (busy.value || leaving.value) return;
+  if (clearTokenConfirm.value) clearTokenConfirm.value = false;
+  else closeDialog();
+}
+
+async function performAction() {
+  if (footerDisabled.value || !footAction.value) return;
+  busy.value = true;
+  try {
+    await footAction.value();
+  } finally {
+    busy.value = false;
+  }
+}
 
 /* 切页确认：只有保存成功才真的跳走；保存失败就留在弹窗里，草稿还在 */
 const leaving = ref(false);
@@ -194,23 +231,35 @@ async function saveThenLeave() {
   leaving.value = true;
   try {
     if (await saveDrafts() && S.dialog === dlg) {
-      closeDialog();
-      S.page = target;
+      if (dirtyCount.value === 0) {
+        closeDialog();
+        S.page = target;
+      } else {
+        toast("还有新的更改未保存，请再次保存后离开。");
+      }
     }
   } finally {
     leaving.value = false;
   }
 }
 function discardThenLeave() {
+  const target = leaveTarget();
   discardDrafts();
   closeDialog();
-  S.page = leaveTarget();
+  S.page = target;
 }
 
 watch(
   d,
   (cur) => {
     for (const k of Object.keys(f)) delete f[k];
+    for (const k of Object.keys(fieldErrors)) delete fieldErrors[k];
+    clearTokenConfirm.value = false;
+    listDraft.value = [];
+    jsonCopied.value = false;
+    jsonCopyError.value = "";
+    Object.assign(jsonText, { file: "", text: "", error: "" });
+    window.clearTimeout(copyTimer);
     batchResult.message = "";
     batchResult.failed = [];
     previewSeq += 1;
@@ -242,6 +291,7 @@ watch(
       for (const key of Object.keys(selected)) delete selected[key];
     } else if (cur.name === "ignore-list" || cur.name === "list-manage") {
       f.qq = "";
+      if (cur.name === "list-manage") listDraft.value = configList().slice();
     }
   },
   { immediate: true },
@@ -261,9 +311,74 @@ watch(d, async (cur) => {
       throw err;
     }
   });
+  if (S.dialog !== cur) return;
   if (r) Object.assign(jsonText, r);
   else jsonText.error = why || "读取失败";
 });
+
+function selectJsonText() {
+  const el = jsonPreview.value;
+  if (!el) return;
+  el.focus();
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function copyWithSelection(text: string): boolean {
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const input = document.createElement("textarea");
+  input.value = text;
+  input.readOnly = true;
+  input.setAttribute("aria-hidden", "true");
+  Object.assign(input.style, { position: "fixed", top: "0", left: "0", width: "1px", height: "1px", opacity: "0" });
+  document.body.appendChild(input);
+  try {
+    input.focus();
+    input.select();
+    input.setSelectionRange(0, text.length);
+    return document.execCommand("copy");
+  } finally {
+    input.remove();
+    previousFocus?.focus();
+  }
+}
+
+async function copyJson() {
+  if (!jsonText.text || jsonCopying.value || jsonText.error) return;
+  const dialog = S.dialog;
+  // Copy exactly the visible preview; the backend supplies redacted JSON.
+  const visibleText = jsonText.text;
+  jsonCopying.value = true;
+  jsonCopyError.value = "";
+  let copied = false;
+  try {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(visibleText);
+        copied = true;
+      }
+    } catch {
+      // The AstrBot iframe may disallow Clipboard API access.
+    }
+    if (!copied) copied = copyWithSelection(visibleText);
+    if (S.dialog !== dialog) return;
+    if (!copied) throw new Error("copy-not-available");
+    jsonCopied.value = true;
+    window.clearTimeout(copyTimer);
+    copyTimer = window.setTimeout(() => { jsonCopied.value = false; }, 2000);
+  } catch {
+    if (S.dialog !== dialog) return;
+    jsonCopyError.value = "复制失败，请选择文本手动复制。";
+    selectJsonText();
+  } finally {
+    jsonCopying.value = false;
+  }
+}
+
+onBeforeUnmount(() => window.clearTimeout(copyTimer));
 
 /* 地址/端口一改，之前取到的 MOTD 就作废：别让提交时把旧地址的值写进新服务器 */
 watch(
@@ -312,19 +427,24 @@ function commitConfigList(next: string[]) {
 function addConfigList() {
   const ids = f.qq.split(/[,，\s]+/).map((v) => v.trim()).filter(Boolean);
   if (!ids.length) return;
-  const next = configList().slice();
+  const next = listDraft.value.slice();
   for (const id of ids) if (!next.includes(id)) next.push(id);
-  commitConfigList(next);
+  listDraft.value = next;
   f.qq = "";
 }
 
 function removeConfigList(id: string) {
-  commitConfigList(configList().filter((v) => v !== id));
+  listDraft.value = listDraft.value.filter((v) => v !== id);
+}
+
+function applyConfigList() {
+  commitConfigList(listDraft.value.slice());
+  closeDialog();
 }
 
 const listItems = computed<string[]>(() => {
   if (name.value === "ignore-list") return S.group?.nickname_check_ignore_ids ?? [];
-  return configList();
+  return listDraft.value;
 });
 
 function addEntry() {
@@ -338,8 +458,29 @@ function removeEntry(id: string) {
 }
 
 const selectedNames = computed(() => servers.value.filter((s) => selected[s.name]).map((s) => s.name));
+const allSelected = computed(() => servers.value.length > 0 && selectedNames.value.length === servers.value.length);
+
+function toggleAll() {
+  const next = !allSelected.value;
+  for (const server of servers.value) selected[server.name] = next;
+}
+
+function validateServer(): boolean {
+  for (const key of Object.keys(fieldErrors)) delete fieldErrors[key];
+  const serverName = f.name?.trim() ?? "";
+  if (!serverName) fieldErrors.name = "请输入服务器名称。";
+  else if (Array.from(serverName).length > 20 || /[\[\]]/.test(serverName)) fieldErrors.name = "名称最多 20 个字符，不能包含方括号。";
+  if (!f.host?.trim()) fieldErrors.host = "请输入主机地址。";
+  if (f.port?.trim() && (!/^\d+$/.test(f.port.trim()) || Number(f.port) < 1 || Number(f.port) > 65535)) {
+    fieldErrors.port = "请输入 1–65535 之间的端口号。";
+  }
+  if (Array.from(f.remark ?? "").length > 50) fieldErrors.remark = "备注最多 50 个字符。";
+  if (f.token && (f.token.length < 16 || f.token.length > 128)) fieldErrors.token = "Token 长度应为 16–128 个字符。";
+  return !Object.keys(fieldErrors).length;
+}
 
 async function submitAddServer() {
+  if (!validateServer()) return;
   await run("add", async () => {
     const previewMotd = f.remark_src === "motd" ? motdPreview.text : "";
     const r = await api.serverCreate(S.gid, {
@@ -375,6 +516,7 @@ async function submitAddServer() {
 }
 
 async function submitEditServer() {
+  if (!validateServer()) return;
   await run("edit", async () => {
     const s = srv.value;
     if (!s) return;
@@ -400,15 +542,23 @@ async function submitEditServer() {
   });
 }
 
-/* 行内垃圾桶：即时清掉该服存量口令，不叠二次确认；弹窗留在原地，口令行自己退回「未设置」 */
+/* 清除需要单独确认；确认后即时保存，并返回原有编辑表单。 */
 async function clearToken() {
+  if (busy.value) return;
   const s = srv.value;
   if (!s) return;
-  await run("clear", async () => {
-    const r = await api.serverToken(S.gid, s.name, "");
-    await loadGroup();
-    toast(r.message);
-  });
+  busy.value = true;
+  try {
+    const cleared = await run("clear", async () => {
+      const r = await api.serverToken(S.gid, s.name, "");
+      await loadGroup();
+      toast(r.message);
+      return true;
+    });
+    if (cleared) clearTokenConfirm.value = false;
+  } finally {
+    busy.value = false;
+  }
 }
 
 /* 备注的 MOTD 值只走「立即同步」这条显式动作：它只写 remark_motd 缓存、不动手填值，
@@ -504,6 +654,11 @@ function motdValueText(): string {
 }
 
 async function submitAddGroup() {
+  if (!/^\d{5,12}$/.test(f.gid?.trim() ?? "")) {
+    fieldErrors.gid = "请输入 5–12 位数字群号。";
+    return;
+  }
+  delete fieldErrors.gid;
   await run("create", async () => {
     const r = await api.groupCreate(f.gid);
     /* 群列表来自 summary：不重读的话「当前群」下拉里看不到刚建的群，
@@ -574,6 +729,12 @@ async function removeIgnore(qq: string) {
     if (S.group) S.group.nickname_check_ignore_ids = r.nickname_check_ignore_ids;
   });
 }
+
+async function submitReload() {
+  const dialog = S.dialog;
+  await reloadPlugin();
+  if (S.dialog === dialog) closeDialog();
+}
 </script>
 
 <template>
@@ -581,95 +742,118 @@ async function removeIgnore(qq: string) {
     v-if="d"
     :cls="modalCls"
     :title="title"
-    :title-mono="JSONS.includes(name)"
     :sub="sub"
-    :sub-mono="!NOTE_SUBS.includes(name)"
-    :sub-note="NOTE_SUBS.includes(name)"
-    :info="footInfo"
-    @close="closeDialog"
+    @close="requestClose"
   >
-    <template v-if="isForm">
-      <UiField label="名称" required help="不能含方括号：/执行 用 [服务器名] 定界；最多20个字符">
-        <UiInput v-model="f.name" placeholder="一区" />
-      </UiField>
-      <UiField
-        label="主机地址"
-        required
-        :help="name === 'add-server' ? '一条地址字段；只写域名会自动跟随 SRV 记录，不写端口时回落 25565。冒号前后的空格和全角「：」会自动忽略；内网 / 回环地址仅超管可加' : '一条字段；可带 :游戏端口（写了端口就不再查 SRV）。冒号前后的空格和全角「：」会自动忽略'"
-      >
-        <UiInput
-          v-model="f.host"
-          :placeholder="name === 'add-server' ? 'mc-a1.example.net（推荐）或 play.example.net:25501' : undefined"
-          @blur="maybeFetchMotdOnBlur"
-        />
-      </UiField>
-      <UiField
-        label="模组 API 端口"
-        :help="name === 'add-server' ? '这是模组 API 端口，不是游戏端口；填了才会走模组 HTTP，留空时 /执行 与 /广播 不可用' : '这是模组 API 端口；清空并保存＝删掉 api_port，退回「未装模组」'"
-      >
-        <UiInput v-model="f.port" placeholder="留空则视为未装模组" @blur="maybeFetchMotdOnBlur" />
-      </UiField>
-      <UiField label="备注" help="手填的值；显示在 /在线 卡片服务器名下方；最多50个字符">
-        <UiInput v-model="f.remark" placeholder="整合包 A 3.4.0" />
-      </UiField>
-      <UiField label="备注用 MOTD" help="卡片改显示服务端 motd，手填的值仍留着">
-        <div class="rk">
-          <UiSwitch :on="f.remark_src === 'motd'" @toggle="setRemarkSrc(f.remark_src !== 'motd')" />
-          <UiButton v-if="name === 'edit-server'" kind="ghost" :disabled="syncing" @click="syncRemarkMotd">立即同步</UiButton>
-          <UiButton
-            v-else
-            kind="ghost"
-            :disabled="motdPreview.loading || !f.host.trim()"
-            @click="fetchMotdPreview"
-          >
-            <UiIcon v-if="!motdPreview.loading" name="refresh" :size="13" />{{ motdPreview.loading ? "获取中…" : "获取 MOTD" }}
-          </UiButton>
-          <span class="rk-t">{{ motdTimeText() }}</span>
-        </div>
-        <div
-          class="rk-v"
-          :class="{ off: f.remark_src !== 'motd', wrap: name === 'add-server', motd: hasMotdValue }"
-        >{{ motdValueText() }}</div>
-      </UiField>
-
-      <UiField
-        label="命令 Token"
-        :help="
-          name === 'add-server'
-            ? '该服 /执行 的口令，与模组端 consoleToken 逐字一致；留空＝不启用'
-            : '该服 /执行 的口令，与模组端 consoleToken 逐字一致；留空＝不改动'
-        "
-      >
-        <UiSecretInput
-          v-model="f.token"
-          :has-value="name === 'edit-server' && !!srv?.has_token"
-          :placeholder="name === 'edit-server' && srv?.has_token ? '留空则保持不变' : undefined"
-          :clearable="name === 'edit-server'"
-          clear-title="清除该服命令 Token"
-          @clear="clearToken"
-        />
-      </UiField>
-
-      <UiNotice v-if="name === 'edit-server' && srv && srv.api_port === null" tone="bad">
-        该服未配模组 API 端口，Token 写入后 /执行 仍不可用。
-      </UiNotice>
+    <template v-if="clearTokenConfirm">
+      <p class="dialog-copy">清除后，/执行 对这台服务器不可用。其他服务器不受影响。</p>
+      <UiNotice tone="warn">此操作会立即保存，关闭编辑弹窗不会撤销。</UiNotice>
     </template>
 
-    <template v-else-if="name === 'add-group'">
-      <UiField label="QQ 群号" required help="只接受 5-12 位数字。落点：servers_<群号>.json">
-        <UiInput v-model="f.gid" placeholder="例如 100000001" />
+    <div v-else-if="isForm" class="server-form">
+      <UiField for="server-name" label="服务器名称" required help="最多 20 个字符，不含方括号。" :err="fieldErrors.name">
+        <UiInput id="server-name" v-model="f.name" placeholder="请输入服务器名称" :error="!!fieldErrors.name" />
       </UiField>
+
+      <div class="connection-fields">
+        <UiField for="server-host" label="主机地址" required help="可包含 Minecraft 游戏端口。" :err="fieldErrors.host">
+          <UiInput
+            id="server-host"
+            v-model="f.host"
+            placeholder="survival.example.com:25565"
+            :error="!!fieldErrors.host"
+            @blur="maybeFetchMotdOnBlur"
+          />
+        </UiField>
+        <UiField for="server-api-port" label="模组 API 端口" help="与游戏端口不同。" :err="fieldErrors.port">
+          <UiInput
+            id="server-api-port"
+            v-model="f.port"
+            placeholder="留空不启用"
+            inputmode="numeric"
+            :error="!!fieldErrors.port"
+            @blur="maybeFetchMotdOnBlur"
+          />
+        </UiField>
+      </div>
+
+      <UiField for="server-remark" label="手填备注" help="最多 50 个字符，切换来源不会丢失。" :err="fieldErrors.remark">
+        <UiInput id="server-remark" v-model="f.remark" placeholder="请输入服务器备注" :error="!!fieldErrors.remark" />
+      </UiField>
+
+      <section class="motd-field" aria-label="备注来源">
+        <div class="switch-row">
+          <div class="switch-copy">
+            <label class="field-label">使用服务端 MOTD</label>
+            <p class="field-help">开启后，在线卡片使用服务端介绍作为备注。</p>
+          </div>
+          <UiSwitch :on="f.remark_src === 'motd'" aria-label="使用服务端 MOTD" @toggle="setRemarkSrc(f.remark_src !== 'motd')" />
+        </div>
+        <div class="motd-result">
+          <div class="motd-copy">
+            <p class="motd-value" :class="{ muted: !hasMotdValue || f.remark_src !== 'motd', error: !!motdPreview.error }">{{ motdValueText() }}</p>
+            <p class="field-help">{{ motdTimeText() }}</p>
+          </div>
+          <UiButton v-if="name === 'edit-server'" :disabled="syncing || busy" @click="syncRemarkMotd">
+            <UiIcon name="refresh" :size="16" :class="{ spinning: syncing }" />{{ syncing ? "同步中…" : "立即同步" }}
+          </UiButton>
+          <UiButton v-else :disabled="motdPreview.loading || !f.host.trim() || busy" @click="fetchMotdPreview">
+            <UiIcon name="refresh" :size="16" :class="{ spinning: motdPreview.loading }" />{{ motdPreview.loading ? "获取中…" : "获取 MOTD" }}
+          </UiButton>
+        </div>
+      </section>
+
+      <div class="token-field">
+        <div class="token-label-row">
+          <label class="field-label" for="server-token">命令 Token</label>
+          <UiBadge v-if="name === 'edit-server' && srv?.has_token">已设置</UiBadge>
+          <button
+            v-if="name === 'edit-server' && srv?.has_token"
+            class="clear-token"
+            type="button"
+            :disabled="!!f.token || busy"
+            :title="f.token ? '清空本次输入后，可清除已保存的 Token' : '清除现有 Token'"
+            @click="clearTokenConfirm = true"
+          >清除现有 Token</button>
+        </div>
+        <UiSecretInput
+          id="server-token"
+          v-model="f.token"
+          :has-value="name === 'edit-server' && !!srv?.has_token"
+          :placeholder="name === 'edit-server' ? '留空保留原 Token' : '留空不启用命令执行'"
+          :error="!!fieldErrors.token"
+        />
+        <p class="field-help">16–128 个字符。已保存的值不回显；{{ name === "edit-server" ? "清除操作需单独确认。" : "需与模组的 consoleToken 一致。" }}</p>
+        <p v-if="fieldErrors.token" class="field-error" role="alert">{{ fieldErrors.token }}</p>
+      </div>
+
+      <UiNotice v-if="name === 'edit-server' && srv && srv.api_port === null" tone="warn">
+        该服未配模组 API 端口，Token 写入后 /执行 仍不可用。
+      </UiNotice>
+      <UiNotice v-if="name === 'add-server' && servers.length >= S.maxServers" tone="warn">
+        本群已达到 {{ S.maxServers }} 台服务器上限，请先移除不再使用的条目。
+      </UiNotice>
+    </div>
+
+    <template v-else-if="name === 'add-group'">
+      <UiField for="group-id" label="群号" required help="只创建配置，不会自动加入或发送群消息。" :err="fieldErrors.gid">
+        <UiInput id="group-id" v-model="f.gid" inputmode="numeric" placeholder="请输入 5–12 位数字群号" :error="!!fieldErrors.gid" />
+      </UiField>
+    </template>
+
+    <template v-else-if="name === 'reload-plugin'">
+      <p class="dialog-copy">重载会重新建立插件连接。完成后自动刷新页面数据；期间请稍候。</p>
+      <UiNotice v-if="dirtyCount" tone="warn">还有 {{ dirtyCount }} 项全局更改未保存，请先保存再重载。</UiNotice>
+      <UiNotice v-else tone="ok">当前配置已保存。</UiNotice>
     </template>
 
     <template v-else-if="CONFIRMS.includes(name)">
-      <UiNotice tone="bad">{{ confirmWarn }}</UiNotice>
-      <div class="cnote">{{ confirmNote }}</div>
-      <UiField
-        v-if="name === 'del-group'"
-        label="输入「确认删除」以继续"
-        help="内容必须与上面四个字完全一致，下方删除按钮才会可用"
-      >
+      <UiNotice v-if="name !== 'leave-cfg'" tone="warn">{{ confirmWarn }}</UiNotice>
+      <p v-else class="dialog-copy">{{ confirmWarn }}</p>
+      <p class="dialog-copy">{{ confirmNote }}</p>
+      <UiField v-if="name === 'del-group'" for="delete-group-confirm" label="输入「确认删除」继续">
         <UiInput
+          id="delete-group-confirm"
           v-model="f.confirm"
           placeholder="确认删除"
           :error="!!f.confirm && !delGroupReady"
@@ -678,79 +862,122 @@ async function removeIgnore(qq: string) {
     </template>
 
     <template v-else-if="name === 'batch-add'">
-      <UiInput v-model="f.text" class="btext" :rows="4" mono placeholder="起床服:mc7.example.net:25566" />
-      <div class="bhelp">逗号或换行分隔；第三段不写（不要留空冒号）则该服视为未装模组（/执行、/广播 不可用）</div>
-      <div class="rlbl">回显与命令输出同格式</div>
-      <div v-if="batchResult.message" class="rbox mono">
-        <div>{{ batchResult.message }}</div>
-        <div v-for="(x, i) in batchResult.failed" :key="i">{{ x }}</div>
+      <div class="batch-input">
+        <label class="field-help" for="batch-server-input">格式：名称:主机[:模组API端口]</label>
+        <UiInput id="batch-server-input" v-model="f.text" class="batch-text" :rows="4" mono placeholder="生存主服:survival.example.com:8090&#10;创造世界:creative.example.com:8091" />
       </div>
-      <div class="bhelp">逐条校验：名称含方括号、非法/内网 host、端口越界、重名、超上限——各自计入失败列表，其余照常写入。</div>
+      <UiNotice v-if="batchResult.message" :tone="batchResult.failed.length ? 'warn' : 'ok'">
+        {{ batchResult.message }}
+      </UiNotice>
+      <div v-if="batchResult.failed.length" class="batch-failures" role="status">
+        <div v-for="(message, i) in batchResult.failed" :key="i" class="batch-failure">
+          <span class="failure-badge">失败</span>
+          <p>{{ message }}</p>
+        </div>
+      </div>
+      <p class="field-help">逐条校验，成功条目会保存。未填写第三段时，模组功能不启用。</p>
     </template>
 
     <template v-else-if="name === 'batch-del'">
+      <div class="pick-summary">
+        <button class="pick-all" type="button" role="checkbox" :aria-checked="allSelected" @click="toggleAll">
+          <span class="checkbox" :class="{ checked: allSelected }"><UiIcon v-if="allSelected" name="check" :size="13" /></span>
+          全选
+        </button>
+        <span>已选 {{ selectedNames.length }} / {{ servers.length }}</span>
+      </div>
       <div class="picks">
         <button
           v-for="s in servers"
           :key="s.name"
           class="pick"
-          :class="{ on: selected[s.name] }"
+          :class="{ selected: selected[s.name] }"
           type="button"
+          role="checkbox"
+          :aria-checked="!!selected[s.name]"
           @click="selected[s.name] = !selected[s.name]"
         >
-          <span class="cb"><UiIcon v-if="selected[s.name]" name="check" :size="11" /></span>
-          <b>{{ s.name }}</b><span class="mono">{{ s.host }}</span>
+          <span class="checkbox" :class="{ checked: selected[s.name] }"><UiIcon v-if="selected[s.name]" name="check" :size="13" /></span>
+          <span class="pick-name">{{ s.name }}</span>
+          <span class="pick-state">{{ s.hidden ? "已隐藏" : "显示中" }}</span>
         </button>
+        <p v-if="!servers.length" class="empty-list">本群还没有服务器。</p>
       </div>
-      <UiNotice tone="neutral">
-        已选 {{ selectedNames.length }} / {{ servers.length }} · 勾选即选中，未勾选的保持不动；确认后回显与命令输出同格式
-      </UiNotice>
+      <UiNotice tone="warn">绑定记录会保留。此操作保存后无法直接撤销。</UiNotice>
     </template>
 
     <template v-else-if="JSONS.includes(name)">
       <UiNotice v-if="jsonText.error" tone="bad">读取失败：{{ jsonText.error }}</UiNotice>
-      <pre v-else class="json mono">{{ jsonText.text || "读取中…" }}</pre>
+      <div v-else class="json-preview">
+        <div class="json-toolbar">
+          <span class="json-format">JSON</span>
+          <button class="json-copy" type="button" :disabled="!jsonText.text || jsonCopying" @click="copyJson">
+            <UiIcon :name="jsonCopied ? 'check' : 'copy'" :size="16" />
+            <span aria-live="polite">{{ jsonCopied ? "已复制" : "复制" }}</span>
+          </button>
+        </div>
+        <pre ref="jsonPreview" class="json-code" tabindex="0" aria-label="只读 JSON 预览">{{ jsonText.text || "读取中…" }}</pre>
+      </div>
+      <p v-if="jsonCopyError" class="field-error" role="status">{{ jsonCopyError }}</p>
+      <p class="field-help">所有敏感字段均以占位符呈现。</p>
     </template>
 
     <template v-else-if="LISTS.includes(name)">
       <div class="addrow">
         <UiInput
+          id="list-member-input"
           v-model="f.qq"
           :placeholder="name === 'ignore-list' ? '输入 QQ 号' : '输入 QQ 号，逗号可一次加多个'"
           class="grow"
           @enter="addEntry"
         />
-        <UiButton kind="pri" class="add" @click="addEntry"><UiIcon name="plus" :size="13" />添加</UiButton>
+        <UiButton :disabled="!f.qq?.trim() || busy" @click="addEntry"><UiIcon name="plus" :size="16" />添加</UiButton>
       </div>
-      <div class="rows">
-        <div v-for="q in listItems" :key="q" class="li">
-          <span class="mono">{{ q }}</span>
-          <button class="rm" type="button" @click="removeEntry(q)">移除</button>
+      <div class="member-list" role="list">
+        <div v-for="q in listItems" :key="q" class="member-row" role="listitem">
+          <UiIcon name="user" :size="16" />
+          <span class="member-id mono">{{ q }}</span>
+          <button class="remove-member" type="button" :aria-label="'移除 ' + q" title="移除成员" @click="removeEntry(q)">
+            <UiIcon name="x" :size="18" />
+          </button>
         </div>
-        <div v-if="!listItems.length" class="li empty">
-          {{ name === "ignore-list" ? "名单为空 · 添加后即时生效" : "名单为空 · 添加后回页面点「保存更改」" }}
-        </div>
+        <p v-if="!listItems.length" class="empty-list">名单为空，可在上方添加成员。</p>
       </div>
-      <UiNotice tone="neutral">{{ listNote }}</UiNotice>
+      <p class="field-help">{{ listNote }}</p>
     </template>
 
+    <UiNotice v-if="S.error && !jsonText.error" tone="bad">{{ S.error }}</UiNotice>
+
     <template #foot>
-      <template v-if="name === 'leave-cfg'">
-        <UiButton :disabled="leaving" @click="closeDialog">继续编辑</UiButton>
-        <UiButton kind="danger-light" :disabled="leaving" @click="discardThenLeave">放弃更改</UiButton>
-        <UiButton kind="pri" :disabled="leaving" @click="saveThenLeave">
-          <UiIcon v-if="!leaving" name="check" :size="14" />{{ leaving ? "保存中…" : "保存并离开" }}
+      <template v-if="clearTokenConfirm">
+        <UiButton :disabled="busy" @click="clearTokenConfirm = false">取消</UiButton>
+        <UiButton kind="danger" :disabled="busy" @click="clearToken">
+          <UiIcon :name="busy ? 'loader-circle' : 'trash'" :size="16" :class="{ spinning: busy }" />{{ busy ? "清除中…" : "确认清除" }}
         </UiButton>
       </template>
+      <template v-else-if="name === 'leave-cfg'">
+        <UiButton :disabled="leaving" @click="requestClose">继续编辑</UiButton>
+        <UiButton :disabled="leaving" @click="discardThenLeave">放弃更改</UiButton>
+        <UiButton kind="pri" :disabled="leaving" @click="saveThenLeave">
+          <UiIcon :name="leaving ? 'loader-circle' : 'check'" :size="16" :class="{ spinning: leaving }" />{{ leaving ? "保存中…" : "保存并离开" }}
+        </UiButton>
+      </template>
+      <template v-else-if="name === 'list-manage'">
+        <UiButton @click="requestClose">取消</UiButton>
+        <UiButton kind="pri" @click="applyConfigList"><UiIcon name="check" :size="16" />应用到草稿</UiButton>
+      </template>
+      <template v-else-if="name === 'ignore-list'">
+        <UiButton kind="pri" @click="requestClose"><UiIcon name="check" :size="16" />完成</UiButton>
+      </template>
       <template v-else>
-        <UiButton @click="closeDialog">{{ JSONS.includes(name) || LISTS.includes(name) ? "关闭" : "取消" }}</UiButton>
+        <UiButton :disabled="busy" @click="requestClose">{{ JSONS.includes(name) || name === "batch-add" ? "关闭" : name === "reload-plugin" ? "稍后重载" : "取消" }}</UiButton>
         <UiButton
           v-if="footAction"
           :kind="footKind"
-          :disabled="footerDisabled"
-          @click="footAction()"
+          :disabled="footerDisabled || (name === 'reload-plugin' && !!dirtyCount)"
+          @click="performAction"
         >
-          <UiIcon v-if="footIcon" :name="footIcon" :size="14" />{{ footVerb }}
+          <UiIcon :name="busy ? 'loader-circle' : footIcon" :size="16" :class="{ spinning: busy }" />{{ busy ? "处理中…" : footVerb }}
         </UiButton>
       </template>
     </template>
@@ -758,218 +985,383 @@ async function removeIgnore(qq: string) {
 </template>
 
 <style scoped>
-.cnote {
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--ink3);
-}
-
-/* 备注来源这一行：开关 + 同步 + 采集时间共用一行，别把它拆成两个字段撑破弹窗定高 */
-.rk {
+.server-form {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 20px;
 }
-
-.rk-t {
-  font-size: 11px;
-  color: var(--ink3);
+.connection-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  align-items: start;
+  gap: 16px;
 }
-
-/* 采到的值单独一行；开关关着＝这份值当前不上卡片，用灰阶和生效态区分 */
-.rk-v {
-  margin-top: 6px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 12px;
-  line-height: 18px;
+.field-label {
   color: var(--ink);
-  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
 }
-
-/* 添加弹窗里的预取值/失败原因可能比一行长，允许换行；编辑弹窗保持单行省略 */
-.rk-v.wrap {
-  overflow: visible;
-  white-space: normal;
+.field-help,
+.dialog-copy {
+  margin: 0;
+  color: var(--ink3);
+  font-size: 12px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
-
-.rk-v.off {
-  color: var(--ink4);
+.dialog-copy {
+  font-size: 13px;
 }
-
-/* 真正取到的 MOTD 用主题蓝突出；提示语、获取中、失败原因仍走灰阶。
-   开关没开时退回淡灰蓝：能看出已经取到，但不会和开启态抢注意力。 */
-.rk-v.motd {
-  color: var(--ac);
-  font-weight: 500;
-}
-
-.rk-v.motd.off {
-  color: var(--motd-idle);
-}
-
-.err {
-  font-size: 12px;
-  font-weight: 600;
+.field-error {
+  margin: 0;
   color: var(--bad);
-}
-
-/* 批量添加的条目文本域画布定 96 高 */
-.btext {
-  min-height: 96px;
   font-size: 12px;
-}
-
-.bhelp {
-  font-size: 11px;
   line-height: 1.5;
+}
+.switch-row,
+.token-label-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.switch-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.switch-copy .field-help {
+  margin-top: 4px;
+}
+.motd-field {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.motd-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px 12px;
+  padding: 14px;
+  border-radius: 6px;
+  background: var(--thead);
+}
+.motd-copy {
+  display: contents;
+}
+.motd-value {
+  grid-column: 1;
+  grid-row: 1;
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.motd-value.muted {
   color: var(--ink3);
 }
-
-.rlbl {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink);
+.motd-value.error {
+  color: var(--bad);
 }
-
-.rbox {
+.motd-result > .btn {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+.motd-copy .field-help {
+  grid-column: 1;
+  grid-row: 2;
+}
+.token-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 10px 12px;
-  border: 1px solid var(--bad-bd);
-  border-radius: var(--r-ctl);
-  background: var(--bad-bg);
-  color: var(--bad-deep);
-  font-size: 11px;
-  line-height: 1.5;
+  gap: 8px;
 }
-
-.picks {
+.token-label-row {
+  gap: 8px;
+}
+.clear-token {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--bad);
+  font-family: var(--ff);
+  font-size: 12px;
+  line-height: 24px;
+  cursor: pointer;
+}
+.clear-token:disabled {
+  color: var(--ink4);
+  cursor: not-allowed;
+}
+.batch-input {
   display: flex;
-  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+}
+.batch-text {
+  min-height: 112px;
+  padding: 14px;
+  font-size: 12px;
+}
+.batch-failures {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.batch-failure {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--thead);
+}
+.batch-failure p {
+  margin: 0;
+  color: var(--ink2);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.failure-badge {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: var(--bad-bg);
+  color: var(--bad);
+  font-size: 12px;
+  line-height: 18px;
+}
+.pick-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ink3);
+  font-size: 12px;
+}
+.pick-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 13px/1.5 var(--ff);
+  cursor: pointer;
+}
+.checkbox {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--bd-soft);
+  border-radius: 5px;
+  background: var(--surface);
+  color: #fff;
+}
+.checkbox.checked {
+  border-color: var(--ac);
+  background: var(--ac);
+}
+.picks,
+.member-list {
+  display: flex;
   min-height: 0;
   flex-direction: column;
-  overflow-y: auto;
+  gap: 8px;
 }
-
 .pick {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex: none;
-  height: 40px;
-  padding: 0 6px;
-  border: none;
-  border-bottom: 1px solid var(--row);
-  border-radius: var(--r-ctl);
-  background: none;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 14px;
+  border: 1px solid var(--row);
+  border-radius: 8px;
+  background: var(--thead);
   color: var(--ink);
   font-family: var(--ff);
-  font-size: 13px;
   text-align: left;
   cursor: pointer;
 }
-
-.pick b {
-  font-weight: 600;
+.pick.selected {
+  border-color: var(--ac-line);
+  background: var(--ac-soft);
 }
-
-.pick .mono {
+.pick-name {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.pick-state {
+  flex: none;
+  margin-left: auto;
+  color: var(--ink3);
   font-size: 12px;
-  color: var(--ink2);
 }
-
-.pick .cb {
+.json-preview {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 16px 16px;
+  border-radius: 10px;
+  background: var(--json-bg, #252e43);
+}
+.json-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  gap: 12px;
+  height: 34px;
+}
+.json-format {
+  color: var(--json-label, #aebbd2);
+  font-family: var(--fm);
+  font-size: 11px;
+  font-weight: 500;
+}
+.json-copy {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 16px;
-  height: 16px;
-  border: 1px solid var(--ac-line);
-  border-radius: 4px;
-  background: var(--surface);
-  color: #fff;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--json-button-border, #4a5874);
+  border-radius: 8px;
+  background: var(--json-button-bg, #35425c);
+  color: var(--json-button-text, #edf2ff);
+  font-family: var(--ff);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
 }
-
-.pick.on {
-  background: var(--bad-bg);
+.json-copy:hover:not(:disabled) {
+  background: var(--json-button-hover, #41506d);
 }
-
-.pick.on .cb {
-  border-color: var(--bad);
-  background: var(--bad);
+.json-copy:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
-
-.json {
-  flex: 1 1 auto;
+.json-code {
+  min-width: 0;
   min-height: 0;
+  max-height: 50vh;
   margin: 0;
-  padding: 12px 14px;
-  border: 1px solid var(--row);
-  border-radius: var(--r-ctl);
-  background: var(--thead);
-  color: var(--ink);
-  font-size: 11px;
-  line-height: 1.6;
   overflow: auto;
+  color: var(--json-text, #dde4f1);
+  font-family: var(--fm);
+  font-size: 12px;
+  line-height: 1.5;
+  tab-size: 2;
   white-space: pre;
 }
-
 .addrow {
   display: flex;
   gap: 8px;
 }
-
 .addrow .grow {
   flex: 1 1 auto;
   width: auto;
 }
-
-.addrow .add {
-  height: 34px;
-}
-
-.rows {
-  display: flex;
-  flex: 1 1 auto;
-  min-height: 0;
-  flex-direction: column;
-  overflow-y: auto;
-  border: 1px solid var(--bd);
-  border-radius: var(--r-ctl);
-}
-
-.li {
+.member-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
-  min-height: 36px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--row);
-  font-size: 12px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: var(--thead);
+  color: var(--ink3);
+}
+.member-id {
+  min-width: 0;
   color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
-
-.li:last-child {
-  border-bottom: none;
-}
-
-.li.empty {
-  justify-content: flex-start;
-  color: var(--ink4);
-}
-
-.rm {
+.remove-member {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
   padding: 0;
-  border: none;
-  background: none;
-  color: var(--bad);
-  font-family: var(--ff);
-  font-size: 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--icon-button-bg, #f6f8fc);
+  color: var(--ink3);
   cursor: pointer;
+}
+.remove-member:hover {
+  color: var(--bad);
+  background: var(--bad-bg);
+}
+.empty-list {
+  margin: 0;
+  padding: 18px 12px;
+  color: var(--ink3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.clear-token:focus-visible,
+.pick-all:focus-visible,
+.pick:focus-visible,
+.remove-member:focus-visible,
+.json-copy:focus-visible,
+.json-code:focus-visible {
+  outline: 2px solid var(--ac-line);
+  outline-offset: 2px;
+}
+.spinning {
+  animation: dialog-spin 1s linear infinite;
+}
+@keyframes dialog-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinning { animation: none; }
+}
+@media (max-width: 760px) {
+  .connection-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+  .motd-result {
+    padding: 12px;
+    gap: 8px;
+  }
+  .motd-value {
+    grid-column: 1 / -1;
+  }
+  .motd-result > .btn {
+    grid-row: 2;
+  }
+  .remove-member,
+  .json-copy {
+    min-width: 44px;
+    height: 44px;
+  }
+  .json-toolbar {
+    height: 44px;
+  }
+  .json-code {
+    max-height: none;
+  }
+  .clear-token {
+    min-height: 44px;
+  }
 }
 </style>

@@ -10,6 +10,7 @@ import json
 import os
 import re
 import time
+from functools import wraps
 
 from astrbot.api import logger
 
@@ -38,7 +39,7 @@ from ..config.server_config import (
 )
 from ..config.whitelist_config import WhitelistManager
 from ..features.player_status.checker import query_one
-from ..utils import mod_http
+from ..utils import mod_http, platform_activation
 from ..utils.bind_rule import validate as validate_bind_rule
 from ..utils.host_validator import normalize_host_input, validate_host
 from ..utils.plugin_paths import PLUGIN_NAME, sub_dir
@@ -76,6 +77,8 @@ REDACTED = "«已隐藏»"
 
 # 全局参数的分区展示：(分区名, 分区说明, 键)；键必须与 _conf_schema.json 一致，漏列的自动归「其他」
 SECTIONS = (
+    ("生效机器人", "本插件一次只处理一个机器人实例",
+     ("active_platform", "active_bot_instance")),
     ("状态与权限", "决定谁能用功能",
      ("enable_group_owner", "enable_group_admin",
       "super_admins", "whitelist_admins", "blacklist")),
@@ -813,6 +816,10 @@ def _normalize_list(value) -> list:
 
 
 def _coerce(kind: str, key: str, value):
+    if key == "active_platform" and value not in ("onebot", "qq_official"):
+        return None, "生效平台只允许 onebot 或 qq_official"
+    if key == "active_bot_instance" and not isinstance(value, str):
+        return None, "生效机器人实例 ID 必须是文本"
     """按 schema 声明的类型校验并转换，返回 (值, 错误原因)"""
     if kind == "bool":
         if not isinstance(value, bool):
@@ -864,7 +871,7 @@ def _config_item(key: str) -> dict:
         "value": value,
         "has_value": has_value,
         # 连接池只在插件加载时按当时的库参数建立（commands/common.py 的 _pool 全局量）
-        "restart_required": key.startswith("db_"),
+        "restart_required": key.startswith("db_") or key in platform_activation.ACTIVE_KEYS,
     }
 
 
@@ -881,6 +888,7 @@ async def view_config():
         "items": items,
         "extra_keys": sorted(extra),
         "sections": [{"title": t, "desc": d} for t, d, _ in SECTIONS],
+        "activation": platform_activation.status(),
     })
 
 
@@ -1023,7 +1031,28 @@ async def view_plugin_reload():
     return _ok({"reloading": True, "message": f"正在重载 {PLUGIN_NAME}…"})
 
 
+async def view_activation():
+    """只列出公开实例 ID 与运行状态，不读取机器人凭据或群配置。"""
+    return _ok(platform_activation.status())
+
+
+REMOTE_ROUTES = frozenset({
+    "server/whitelist", "server/motd_preview", "server/remark_sync",
+    "server/mod_state",
+})
+
+
+def _active_remote_handler(handler):
+    @wraps(handler)
+    async def guarded():
+        if not platform_activation.onebot_business_enabled():
+            return _err(platform_activation.status()["message"])
+        return await handler()
+    return guarded
+
+
 ROUTES = (
+    ("activation", view_activation, ["GET"], "读取生效机器人与实例列表"),
     ("summary", view_summary, ["GET"], "群与服务器总览"),
     ("group", view_group, ["GET"], "读取单个群的配置"),
     ("group/create", view_group_create, ["POST"], "创建群配置文件"),
@@ -1067,6 +1096,10 @@ def register_view_api(context, config=None) -> None:
     _plugin_config = config
     _schema = _load_schema()
     for name, handler, methods, desc in ROUTES:
+        registered_handler = (
+            _active_remote_handler(handler) if name in REMOTE_ROUTES else handler
+        )
         context.register_web_api(
-            f"{ROUTE_PREFIX}/{name}", handler, methods, f"MCSight 配置页 · {desc}")
+            f"{ROUTE_PREFIX}/{name}", registered_handler, methods,
+            f"MCSight 配置页 · {desc}")
     logger.info(f"[MCSight] 配置页接口已注册 {len(ROUTES)} 个")

@@ -1,213 +1,81 @@
 <script setup lang="ts">
-import UiIcon from "../components/UiIcon.vue";
+import UiBadge from "../components/UiBadge.vue";
 import UiNotice from "../components/UiNotice.vue";
 import { useIsMobile } from "../lib/useMediaQuery";
 
 const isMobile = useIsMobile();
-
-interface Row {
-  label: string;
-  cmd: string;
-  note: string;
-  isNew: boolean;
-}
-
-const GROUPS: { title: string; rows: Row[] }[] = [
-  {
-    title: "服务器条目卡",
-    rows: [
-      { label: "添加服务器", cmd: "/mc add 名称 IP [端口]", note: "追加进 servers 数组；未填端口则不写 api_port，视为未装模组", isNew: false },
-      { label: "批量添加", cmd: "/mc batchadd 名:IP[:端口],…", note: "逐条校验：失败项各自计入失败列表，其余照常写入", isNew: false },
-      { label: "批量删除", cmd: "/mc batchremove 名,名", note: "一次删多台，不逐台弹确认", isNew: false },
-      { label: "编辑 · 名称", cmd: "/mc edit 名称 name 新名", note: "名称不能含方括号：/执行 用 [服务器名] 定界", isNew: false },
-      { label: "编辑 · 主机地址", cmd: "/mc edit 名称 host 新地址", note: "一条地址字段；含 : 会被现行校验拒绝（utils/host_validator.py:52）", isNew: false },
-      { label: "编辑 · 模组端口", cmd: "/mc edit 名称 port 端口", note: "清空并保存＝删掉 api_port，该服退回「未装模组」", isNew: false },
-      { label: "编辑 · 备注", cmd: "/mc edit 名称 remark 备注", note: "显示在 /在线 卡片服务器名下方", isNew: false },
-      { label: "编辑 · 备注用 MOTD", cmd: "— 无对应命令", note: "卡片改显示服务端 motd；值由 /在线 采集或「立即同步」写入缓存，不覆盖手填的备注", isNew: true },
-      { label: "排序 ↑ ↓", cmd: "/mc move 名称 序号 · /mc swap 名1 名2", note: "序号从 0 开始；只改群内列表顺序", isNew: false },
-      { label: "写 / 清除 Token", cmd: "/mc token 名称 Token（或 清除）", note: "密钥：页面不回显内值，长度门 16-128 字符", isNew: false },
-      { label: "登录开关", cmd: "— 无对应命令", note: "下发该服模组的白名单校验开关并写回其配置文件；用模组 API Token 鉴权", isNew: true },
-      { label: "隐藏 / 显示条目", cmd: "— 无对应命令", note: "隐藏后 /在线 不再采集也不再出该卡；条目、绑定、Token 都原样保留", isNew: true },
-      { label: "删除服务器", cmd: "/mc remove 名称", note: "只删条目；绑定记录不受影响", isNew: false },
-    ],
-  },
-  {
-    title: "本群开关卡",
-    rows: [
-      { label: "上次在线 显示开关", cmd: "/上次在线 开 | 关", note: "写同一份群文件，群内下一条消息即生效", isNew: false },
-      { label: "昵称检测 开关", cmd: "/检测昵称 开 | 关", note: "英文别名 /mc nicknamecheck", isNew: false },
-      { label: "忽略名单 添加 / 移除", cmd: "/检测昵称 忽略 QQ · 取消忽略 QQ", note: "查看名单：/检测昵称 忽略列表", isNew: false },
-    ],
-  },
-  {
-    title: "文件操作",
-    rows: [
-      { label: "查看 JSON（本群文件）", cmd: "只读，不发命令", note: "展示文件原文；console_token 以占位符显示，不回显明文", isNew: false },
-      { label: "新增群", cmd: "— 无对应命令", note: "现在群文件由群内首次 /mc add 自动创建；页面把它显式化", isNew: true },
-      { label: "删除群", cmd: "— 无对应命令", note: "删掉 servers_<群号>.json：本群 /在线 /绑定 /查询 全部失效，不会自动恢复", isNew: true },
-    ],
-  },
-  {
-    title: "全局参数页",
-    rows: [
-      { label: "开关 / 输入框", cmd: "— 无对应命令", note: "写 data/config/<插件目录名>_config.json，与面板「插件设置」同一份文件", isNew: true },
-      { label: "名单类（管理员 / 黑名单）", cmd: "— 无对应命令", note: "整表覆盖：保存时一次写回整个列表", isNew: true },
-      { label: "模组 API 鉴权 Token", cmd: "— 无对应命令", note: "密钥：不回显；需与各服模组的 apiToken 逐字一致", isNew: true },
-      { label: "数据库参数（含密码）", cmd: "— 无对应命令", note: "改 db_* 之后要重载插件才会重建连接池", isNew: true },
-      { label: "保存更改", cmd: "— 无对应命令", note: "只写有改动的键；回执会说明是否需要重载", isNew: true },
-      { label: "查看 JSON（全局参数）", cmd: "只读，不发命令", note: "密钥字段以占位符显示，不回显明文", isNew: false },
-    ],
-  },
-  {
-    title: "顶栏",
-    rows: [
-      { label: "重载插件", cmd: "— 无对应命令", note: "走内核的插件重载，等同面板「插件列表」里那颗；完成后页面数据自动重读", isNew: true },
-    ],
-  },
+interface CommandMapping { label: string; cmd: string | null; note: string }
+const GROUPS: { title: string; rows: CommandMapping[] }[] = [
+  { title: "服务器操作", rows: [
+    { label: "添加服务器", cmd: "/mc add 名称 IP [端口]", note: "未填写模组端口时，该服按未安装模组处理。" },
+    { label: "批量添加", cmd: "/mc batchadd 名:IP[:端口],…", note: "逐条校验；成功项保存，失败项显示原因。" },
+    { label: "批量删除", cmd: "/mc batchremove 名,名", note: "删除所选条目，保留绑定记录。" },
+    { label: "编辑名称", cmd: "/mc edit 名称 name 新名", note: "名称不能包含方括号。" },
+    { label: "编辑主机地址", cmd: "/mc edit 名称 host 新地址", note: "填写服务器地址，可包含游戏端口。" },
+    { label: "编辑模组端口", cmd: "/mc edit 名称 port 端口", note: "清空端口后禁用该服务器的模组功能。" },
+    { label: "编辑手填备注", cmd: "/mc edit 名称 remark 备注", note: "显示在 /在线 卡片的服务器名称下方。" },
+    { label: "备注使用 MOTD", cmd: null, note: "使用采集的 MOTD，保留原有手填备注。" },
+    { label: "调整服务器顺序", cmd: "/mc move 名称 序号\n/mc swap 名1 名2", note: "序号从 0 开始，只改变当前群的显示顺序。" },
+    { label: "设置 / 清除命令 Token", cmd: "/mc token 名称 Token（或 清除）", note: "Token 不回显；输入长度为 16–128 字符。" },
+    { label: "登录限制开关", cmd: null, note: "控制该服务器模组的白名单校验。" },
+    { label: "隐藏 / 显示服务器", cmd: null, note: "隐藏后停止展示与采集，保留绑定和 Token。" },
+    { label: "删除服务器", cmd: "/mc remove 名称", note: "移除服务器条目与其 Token，保留绑定记录。" },
+  ] },
+  { title: "本群开关", rows: [
+    { label: "显示上次在线", cmd: "/上次在线 开 | 关", note: "控制在线卡片是否显示上次在线时间。" },
+    { label: "启用昵称检测", cmd: "/检测昵称 开 | 关", note: "英文别名：/mc nicknamecheck。" },
+    { label: "管理昵称忽略名单", cmd: "/检测昵称 忽略 QQ\n/检测昵称 取消忽略 QQ", note: "查看名单：/检测昵称 忽略列表。" },
+  ] },
+  { title: "群配置", rows: [
+    { label: "查看本群 JSON", cmd: "只读查看", note: "敏感字段显示占位符。" },
+    { label: "新增群", cmd: null, note: "显式创建群配置。" },
+    { label: "删除群配置", cmd: null, note: "移除本群服务器、开关与忽略名单。" },
+  ] },
+  { title: "全局参数", rows: [
+    { label: "开关与普通输入项", cmd: null, note: "与 AstrBot 原生插件表单共用配置。" },
+    { label: "管理员与黑名单", cmd: null, note: "编辑后加入草稿，返回全局页统一保存。" },
+    { label: "模组 API 鉴权 Token", cmd: null, note: "与服务器模组的 apiToken 保持一致。" },
+    { label: "数据库参数", cmd: null, note: "保存并重载后重建数据库连接。" },
+    { label: "保存更改", cmd: null, note: "保存有改动的字段，按回执提示重载。" },
+    { label: "查看全局 JSON", cmd: "只读查看", note: "密钥字段仅展示占位符。" },
+  ] },
+  { title: "插件操作", rows: [{ label: "重载插件", cmd: null, note: "与 AstrBot 插件列表中的重载操作一致。" }] },
 ];
-
-const TOTAL = GROUPS.reduce((n, g) => n + g.rows.length, 0);
-const NEW = GROUPS.reduce((n, g) => n + g.rows.filter((r) => r.isNew).length, 0);
+const total = GROUPS.reduce((count, group) => count + group.rows.length, 0);
 </script>
 
 <template>
-  <div class="page">
-    <section class="ph">
-      <div class="ph-t">
-        <h1>命令对照</h1>
-        <p>页面上每颗控件对应哪条现成命令 · {{ NEW }} 项标为页面新能力</p>
-      </div>
-      <span class="badge"><UiIcon name="lock" :size="12" />只映射，不新增语义</span>
+  <div class="page ref-page">
+    <section class="page-heading">
+      <div><h1>命令对照</h1><p>查找页面操作对应的 QQ 命令。</p></div>
+      <UiBadge tone="neutral">只读参考</UiBadge>
     </section>
-
-    <UiNotice tone="info">
-      标了「页面新能力」的行没有对应的 QQ 命令；其余每一项都能回到现有 QQ 命令。页面与命令写的是同一份文件，只是入口不同。
-    </UiNotice>
+    <UiNotice>标记“仅页面支持”的操作没有对应 QQ 命令。下方按页面区域整理。</UiNotice>
 
     <template v-if="isMobile">
-      <section v-for="grp in GROUPS" :key="grp.title" class="m-card">
-        <div class="m-card-h">
-          <span class="bar" />
-          <h2>{{ grp.title }}</h2>
-          <span class="m-count">{{ grp.rows.length }} 项</span>
-        </div>
-        <div v-for="r in grp.rows" :key="r.label" class="m-cmd" :class="{ isNew: r.isNew }">
-          <div class="m-cmd-h">
-            <b>{{ r.label }}</b>
-            <span v-if="r.isNew" class="tag-new">页面新能力</span>
-          </div>
-          <div class="m-cmd-cmd mono">{{ r.cmd }}</div>
-          <div class="m-cmd-note">{{ r.note }}</div>
-        </div>
+      <section v-for="group in GROUPS" :key="group.title" class="ref-mobile-card">
+        <header class="ref-mobile-heading"><h2>{{ group.title }}</h2><span>{{ group.rows.length }} 项</span></header>
+        <article v-for="row in group.rows" :key="row.label" class="ref-mobile-item">
+          <h3>{{ row.label }}</h3>
+          <UiBadge v-if="row.cmd === null" tone="neutral">仅页面支持</UiBadge>
+          <p v-else class="ref-command" :class="{ 'ref-muted': row.cmd === '只读查看' }">{{ row.cmd }}</p>
+          <p class="ref-note">{{ row.note }}</p>
+        </article>
       </section>
-      <div class="m-foot">共 {{ TOTAL }} 行 · 其中 {{ NEW }} 行标为页面新能力</div>
+      <p class="ref-mobile-foot">共 {{ total }} 项操作</p>
     </template>
 
-    <section v-else class="card">
-      <div class="th">
-        <div class="cols">
-          <span class="c-m1">页面控件</span><span class="c-m2 mono-th">等价命令</span><span class="c-m3">落点与约束</span>
+    <section v-else class="ref-table ref-map" role="table" aria-label="页面操作与命令对照">
+      <div class="ref-grid ref-table-head" role="row"><span role="columnheader">页面操作</span><span role="columnheader">对应 QQ 命令</span><span role="columnheader">使用说明</span></div>
+      <div v-for="group in GROUPS" :key="group.title" role="rowgroup">
+        <div class="ref-group" role="row"><div class="ref-group-content" role="cell" aria-colspan="3"><h2>{{ group.title }}</h2><span>{{ group.rows.length }} 项</span></div></div>
+        <div v-for="row in group.rows" :key="row.label" class="ref-grid ref-table-row" role="row">
+          <span class="ref-label" role="cell">{{ row.label }}</span>
+          <div role="cell"><UiBadge v-if="row.cmd === null" tone="neutral">仅页面支持</UiBadge><span v-else class="ref-command" :class="{ 'ref-muted': row.cmd === '只读查看' }">{{ row.cmd }}</span></div>
+          <span class="ref-note" role="cell">{{ row.note }}</span>
         </div>
       </div>
-
-      <template v-for="grp in GROUPS" :key="grp.title">
-        <div class="band"><span class="bar" /><b>{{ grp.title }}</b><i>{{ grp.rows.length }} 项</i></div>
-        <div v-for="r in grp.rows" :key="r.label" class="row dense" :class="{ isNew: r.isNew }">
-          <div class="cols">
-            <span class="c-m1">
-              <span class="t-title">{{ r.label }}</span>
-              <span v-if="r.isNew" class="tag-new">页面新能力</span>
-            </span>
-            <span class="c-m2 cmd ell">{{ r.cmd }}</span>
-            <span class="c-m3 t-sub ell">{{ r.note }}</span>
-          </div>
-        </div>
-      </template>
-
-      <div class="tf">
-        <span>共 {{ TOTAL }} 行 · 其中 {{ NEW }} 行标为页面新能力</span>
-        <span class="tip">开关类控件在页内点按与群内发命令写的是同一个字段</span>
-      </div>
+      <footer class="ref-table-foot"><span>共 {{ total }} 项操作</span><span>页面与命令共享同一功能逻辑</span></footer>
     </section>
   </div>
 </template>
-
-<style scoped>
-.page {
-  display: flex;
-  flex-direction: column;
-  gap: var(--gap-card);
-}
-
-.ph {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.ph-t h1 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.ph-t p {
-  margin: 5px 0 0;
-  font-size: 12px;
-  color: var(--ink3);
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--bd);
-  border-radius: var(--r-ctl);
-  background: var(--thead);
-  color: var(--ink2);
-  font-size: 11px;
-  line-height: 26px;
-  white-space: nowrap;
-}
-
-.mono-th {
-  font-family: var(--fm);
-}
-
-.c-m1 {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.c-m1 .t-title {
-  font-weight: 400;
-}
-
-.tag-new {
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 7px;
-  border: 1px solid var(--warn-badge-bd);
-  border-radius: var(--r-badge);
-  background: var(--warn-badge-bg);
-  color: var(--warn);
-  font-size: 10px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.cmd {
-  font-size: 12px;
-  font-family: var(--fm);
-  color: var(--ac);
-}
-
-.row.isNew {
-  background: var(--warn-bg);
-}
-</style>

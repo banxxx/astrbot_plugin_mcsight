@@ -1,169 +1,50 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
-import UiIcon from "../components/UiIcon.vue";
+import UiBadge from "../components/UiBadge.vue";
 import UiNotice from "../components/UiNotice.vue";
 import { S, fail, loadCommands, loading } from "../store";
 import { useIsMobile } from "../lib/useMediaQuery";
 
 const isMobile = useIsMobile();
-
-onMounted(() => {
-  loadCommands().catch(fail);
-});
+onMounted(() => { void loadCommands().catch(fail); });
 </script>
 
 <template>
-  <div class="page">
-    <section class="ph">
-      <div class="ph-t">
-        <h1>命令帮助</h1>
-        <p>{{ S.cmdTotal }} 条命令 · 与 /帮助 图片同源 · 本页只读</p>
-      </div>
-      <span class="tag"><UiIcon name="lock" :size="12" />只读 · 数据来自 /帮助 卡片结构</span>
+  <div class="page ref-page">
+    <section class="page-heading">
+      <div><h1>命令帮助</h1><p>查看命令用法、别名及使用权限。</p></div>
+      <UiBadge tone="neutral">只读</UiBadge>
     </section>
+    <UiNotice>命令说明与 /帮助 图片同源；管理权限以每条命令的标签为准。</UiNotice>
 
     <template v-if="isMobile">
-      <section v-for="sec in S.cmdSections" :key="sec.title" class="m-card">
-        <div class="m-card-h">
-          <span class="bar" />
-          <h2>{{ sec.title }}</h2>
-          <span class="m-count">{{ sec.rows.length }} 项</span>
-        </div>
-        <div v-if="sec.hint" class="m-card-hint">{{ sec.hint }}</div>
-        <div v-for="(r, i) in sec.rows" :key="`${sec.title}-${i}`" class="m-cmd">
-          <div class="m-cmd-h">
-            <b class="mono">{{ r.cmd }}</b>
-            <span v-if="r.tags" class="tg" :class="{ super: r.tags.indexOf('超管') >= 0 }">{{ r.tags }}</span>
-          </div>
-          <div class="m-cmd-note">{{ r.desc }}</div>
-          <div v-if="r.aliases" class="m-cmd-alias">别名：{{ r.aliases }}</div>
-        </div>
+      <section v-for="section in S.cmdSections" :key="section.title" class="ref-mobile-card">
+        <header class="ref-mobile-heading"><h2>{{ section.title }}</h2><span>{{ section.rows.length }} 条</span></header>
+        <article v-for="(row, index) in section.rows" :key="section.title + index" class="ref-mobile-item">
+          <h3 class="ref-command">{{ row.cmd }}</h3>
+          <p class="ref-note">{{ row.desc }}</p>
+          <div class="ref-mobile-meta"><span class="ref-meta-label">别名</span><span class="ref-alias">{{ row.aliases || '—' }}</span></div>
+          <div class="ref-mobile-meta"><span class="ref-meta-label">权限</span><UiBadge v-if="row.tags" :tone="row.tags.includes('超管') ? 'warn' : 'neutral'">{{ row.tags }}</UiBadge><span v-else class="ref-muted">—</span></div>
+        </article>
       </section>
-      <div v-if="loading && !S.cmdSections.length" class="m-empty">读取中…</div>
-      <div v-else class="m-foot">共 {{ S.cmdTotal }} 条 · {{ S.cmdSections.length }} 组</div>
+      <p v-if="!S.cmdSections.length" class="ref-empty" role="status">{{ loading ? '正在读取命令帮助…' : '暂无命令帮助内容' }}</p>
+      <p v-else class="ref-mobile-foot">{{ S.cmdTotal }} 条命令 / {{ S.cmdSections.length }} 个分组</p>
     </template>
 
-    <section v-else class="card">
-      <div class="th">
-        <div class="cols">
-          <span class="c-h1">命令</span><span class="c-h2">说明</span><span class="c-h3">别名 / 权限</span>
+    <section v-else class="ref-table ref-help" role="table" aria-label="命令帮助">
+      <div class="ref-grid ref-table-head" role="row"><span role="columnheader">命令</span><span role="columnheader">作用</span><span role="columnheader">别名</span><span role="columnheader">权限</span></div>
+      <div v-for="section in S.cmdSections" :key="section.title" role="rowgroup">
+        <div class="ref-group" role="row"><div class="ref-group-content" role="cell" aria-colspan="4"><h2>{{ section.title }}</h2><span>{{ section.rows.length }} 条</span></div></div>
+        <div v-for="(row, index) in section.rows" :key="section.title + index" class="ref-grid ref-table-row" role="row">
+          <span class="ref-command" role="cell">{{ row.cmd }}</span>
+          <span class="ref-note" role="cell">{{ row.desc }}</span>
+          <span class="ref-alias" role="cell">{{ row.aliases || '—' }}</span>
+          <div role="cell"><UiBadge v-if="row.tags" :tone="row.tags.includes('超管') ? 'warn' : 'neutral'">{{ row.tags }}</UiBadge><span v-else class="ref-muted">—</span></div>
         </div>
       </div>
-
-      <template v-for="sec in S.cmdSections" :key="sec.title">
-        <div class="band"><span class="bar" /><b>{{ sec.title }}</b><i>{{ sec.rows.length }} 项{{ sec.hint ? ` · ${sec.hint}` : "" }}</i></div>
-        <div v-for="(r, i) in sec.rows" :key="`${sec.title}-${i}`" class="row dense">
-          <div class="cols">
-            <span class="c-h1 cmd ell">{{ r.cmd }}</span>
-            <span class="c-h2 t-sub ell">{{ r.desc }}</span>
-            <span class="c-h3 alias-wrap">
-              <span v-if="r.aliases" class="al">{{ r.aliases }}</span>
-              <span v-else class="al dash">—</span>
-              <span v-if="r.tags" class="tg" :class="{ super: r.tags.indexOf('超管') >= 0 }">{{ r.tags }}</span>
-            </span>
-          </div>
-        </div>
-      </template>
-
-      <div class="tf">
-        <span v-if="loading && !S.cmdSections.length">读取中…</span>
-        <span v-else>共 {{ S.cmdTotal }} 条 · {{ S.cmdSections.length }} 组</span>
-        <span class="tip">群里发 /帮助 拿到的是同一批文案的图片版</span>
-      </div>
+      <div v-if="!S.cmdSections.length" class="ref-empty" role="status">{{ loading ? '正在读取命令帮助…' : '暂无命令帮助内容' }}</div>
+      <footer class="ref-table-foot"><span>{{ S.cmdTotal }} 条命令 / {{ S.cmdSections.length }} 个分组</span><span>与群内 /帮助 图片保持一致</span></footer>
     </section>
-
-    <UiNotice v-if="S.error" tone="bad" class="errline">{{ S.error }}</UiNotice>
+    <UiNotice v-if="S.error" tone="bad">{{ S.error }}</UiNotice>
   </div>
 </template>
-
-<style scoped>
-.page {
-  display: flex;
-  flex-direction: column;
-  gap: var(--gap-card);
-}
-
-.ph {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.ph-t h1 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.ph-t p {
-  margin: 5px 0 0;
-  font-size: 12px;
-  color: var(--ink3);
-}
-
-.tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--bd);
-  border-radius: var(--r-ctl);
-  background: var(--thead);
-  color: var(--ink2);
-  font-size: 11px;
-  line-height: 26px;
-  white-space: nowrap;
-}
-
-.cmd {
-  font-size: 12px;
-  font-family: var(--fm);
-  color: var(--ac-deep);
-}
-
-.al {
-  font-size: 11px;
-  font-family: var(--fm);
-  color: var(--ink3);
-  line-height: 15px;
-}
-
-/* 别名多的命令（/查绑定 三个别名）折行显示，不裁字 ⇒ 行高让给它长 */
-.row.dense {
-  height: auto;
-  min-height: 40px;
-  padding-top: 5px;
-  padding-bottom: 5px;
-}
-
-.al.dash {
-  color: var(--ink5);
-}
-
-.alias-wrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.tg {
-  display: inline-flex;
-  align-items: center;
-  height: 18px;
-  padding: 0 6px;
-  border-radius: var(--r-badge);
-  background: var(--warn-badge-bg);
-  color: var(--warn);
-  font-size: 10px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.tg.super {
-  background: var(--bad-bg);
-  color: var(--bad);
-}
-</style>

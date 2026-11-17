@@ -10,7 +10,7 @@ from ..config.server_config import ConfigManager
 from ..config.whitelist_config import WhitelistManager
 from ..utils.permission import (ADMIN_CMDS, check_permission, is_astrbot_super_admin,
                                 PERMISSION_REQUIRED, LEVEL_SUPER_ADMIN)
-from ..utils import debounce
+from ..utils import debounce, platform_activation
 
 # 导入拆分的处理函数
 from ..commands import (
@@ -25,6 +25,8 @@ from ..commands import (
 )
 
 async def handle_mc_command(event: AstrMessageEvent):
+    if not platform_activation.allows(event):
+        return
     group_id = event.get_group_id()
     if group_id:
         config = ConfigManager(group_id=group_id)
