@@ -7,7 +7,7 @@ import pymysql
 from dbutils.pooled_db import PooledDB
 from astrbot.api import logger
 from ..config.whitelist_config import WhitelistManager
-from ..utils import mod_http
+from ..utils import mod_http, platform_activation
 
 _pool = None
 _keepalive = {"thread": None, "stop": None}
@@ -96,6 +96,9 @@ def _keepalive_loop(stop_event):
     # 放在插件 __init__ 会把整个事件循环卡住
     step = 0
     while not stop_event.is_set():
+        if not platform_activation.onebot_business_enabled():
+            stop_event.wait(1.0)
+            continue
         try:
             _ping_pool()
             step = 0
@@ -111,12 +114,30 @@ def _keepalive_loop(stop_event):
         stop_event.wait(wait)
 
 
+def attach_db_keepalive_context(context):
+    """跨插件热重载保留旧线程的退出状态，防止旧请求未结束就启第二套。"""
+    global _keepalive
+    state = getattr(context, "_mcsight_db_keepalive_v1", None)
+    if isinstance(state, dict):
+        _keepalive = state
+    else:
+        setattr(context, "_mcsight_db_keepalive_v1", _keepalive)
+
+
 def start_db_keepalive():
     """启动预热+保活守护线程（幂等）"""
+    if not platform_activation.onebot_business_enabled():
+        return
+    thread = _keepalive.get("thread")
+    if thread is not None and thread.is_alive():
+        stop_event = _keepalive.get("stop")
+        # 旧实例的线程仍在运行且没有收到停止信号：当前实例的保活已经存在。
+        # 若它已收到停止信号（热重载时 15 秒内没退出），不能让它继续挡住
+        # 新实例，否则旧线程退出后新实例会永久失去保活。
+        if stop_event is None or not stop_event.is_set():
+            return
     wm = WhitelistManager()
     if not (wm.db_host and wm.db_user and wm.db_password):
-        return
-    if _keepalive["thread"] is not None and _keepalive["thread"].is_alive():
         return
     stop_event = threading.Event()
     thread = threading.Thread(target=_keepalive_loop, args=(stop_event,),
@@ -127,10 +148,14 @@ def start_db_keepalive():
     logger.info("[db] 连接池预热与保活已启动")
 
 
-def stop_db_keepalive():
-    stop_event = _keepalive["stop"]
+def stop_db_keepalive(wait=False):
+    stop_event = _keepalive.get("stop")
     if stop_event is not None:
         stop_event.set()
+    thread = _keepalive.get("thread")
+    if wait and thread is not None and thread is not threading.current_thread():
+        thread.join(timeout=15.0)
+    return thread is None or not thread.is_alive()
 
 
 def execute_sync_update(sql, params):

@@ -3,13 +3,13 @@
         "description": "本插件生效平台",
         "type": "string",
         "default": "onebot",
-        "hint": "onebot 或 qq_official。保存后重载插件生效；当前阶段 QQ 官方业务尚未开放，选中后将暂停本插件业务。"
+        "hint": "仅首次初始化兼容。已有选择后请到插件配置页的「生效机器人」区域统一保存，完整重启 AstrBot 后应用；当前 QQ 官方业务尚未开放。"
     },
     "active_bot_instance": {
         "description": "生效机器人实例 ID",
         "type": "string",
         "default": "",
-        "hint": "填写 AstrBot 机器人列表中的实例 ID。留空仅在所选平台恰有一个实例时自动选择；多实例时暂停业务。保存后需重载。"
+        "hint": "仅首次初始化兼容。OneBot 留空时等待框架加载完成且只有一个候选才持久选择；QQ 官方必须在插件配置页显式选择并确认应用。已有选择后本字段不再覆盖它。"
     },
     "enable_group_owner": {
         "description": "是否允许群主使用功能",

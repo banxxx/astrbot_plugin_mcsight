@@ -5,6 +5,7 @@ import UiButton from "./components/UiButton.vue";
 import DialogHost from "./components/DialogHost.vue";
 import SrvPage from "./pages/SrvPage.vue";
 import CfgPage from "./pages/CfgPage.vue";
+import OfficialPage from "./pages/OfficialPage.vue";
 import ConstPage from "./pages/ConstPage.vue";
 import MapPage from "./pages/MapPage.vue";
 import HelpPage from "./pages/HelpPage.vue";
@@ -16,6 +17,7 @@ const NAV: { group: string; items: { key: PageKey; label: string; icon: string }
   { group: "配置", items: [
     { key: "srv", label: "群与服务器", icon: "server" },
     { key: "cfg", label: "全局参数", icon: "sliders" },
+    { key: "official", label: "QQ 官方群", icon: "users" },
   ] },
   { group: "参考", items: [
     { key: "map", label: "命令对照", icon: "list-tree" },
@@ -23,7 +25,7 @@ const NAV: { group: string; items: { key: PageKey; label: string; icon: string }
     { key: "const", label: "代码常量", icon: "code" },
   ] },
 ];
-const PAGES = { srv: SrvPage, cfg: CfgPage, const: ConstPage, map: MapPage, help: HelpPage };
+const PAGES = { srv: SrvPage, cfg: CfgPage, official: OfficialPage, const: ConstPage, map: MapPage, help: HelpPage };
 const pageComp = computed(() => PAGES[S.page]);
 const isMobile = useIsMobile();
 const menuOpen = ref(false);

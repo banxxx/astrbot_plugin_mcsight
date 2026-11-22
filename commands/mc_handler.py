@@ -10,7 +10,7 @@ from ..config.server_config import ConfigManager
 from ..config.whitelist_config import WhitelistManager
 from ..utils.permission import (ADMIN_CMDS, check_permission, is_astrbot_super_admin,
                                 PERMISSION_REQUIRED, LEVEL_SUPER_ADMIN)
-from ..utils import debounce, platform_activation
+from ..utils import debounce, platform_activation, official_runtime
 
 # 导入拆分的处理函数
 from ..commands import (
@@ -25,7 +25,10 @@ from ..commands import (
 )
 
 async def handle_mc_command(event: AstrMessageEvent):
-    if not platform_activation.allows(event):
+    if not platform_activation.accepts(event):
+        return
+    if event.get_platform_name() in ("qq_official", "qq_official_webhook"):
+        await official_runtime.handle(event)
         return
     group_id = event.get_group_id()
     if group_id:

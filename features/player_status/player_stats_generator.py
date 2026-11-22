@@ -11,9 +11,10 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
-from ...utils.avatar_cache import _smart_resize
+from ..render_engine import smart_resize as _smart_resize
 from ...utils.text_renderer import draw_text_with_emoji, measure_text_with_emoji
-from ..help_image.image_generator import (
+from ...utils.stats_schema import ACT, FLOW, NOISE, CATEGORIES
+from ..render_engine import (
     WIDTH, PAD, SCALE,
     add_text, add_rect, add_ellipse,
     text_w, _font, build_image,
@@ -98,86 +99,6 @@ CATEGORY_COLORS = ['#b9c1ea', '#a9d8bc', '#ecd7ac', '#e9b9bd', '#b3d6de',
 #   ACT   主动操作次数 —— 能跨类比，但必须先除以游玩小时（次数天然差几个数量级）
 #   FLOW  流量型（米 / 伤害点）—— 只能算"每小时流量"，绝不参与计次
 #   NOISE 被动计数 —— 不进图（死亡次数多≠战斗强），明细里仍列原始值
-ACT, FLOW, NOISE = 'act', 'flow', 'noise'
-
-CATEGORIES = {
-    '探索': {
-        'items': [
-            ('步行距离', 'walkDistance', 'm', 3_000_000, FLOW),
-            ('疾跑距离', 'sprintDistance', 'm', 2_000_000, FLOW),
-            ('游泳距离', 'swimDistance', 'm', 200_000, FLOW),
-            ('攀爬距离', 'climbDistance', 'm', 150_000, FLOW),
-            ('骑马距离', 'horseDistance', 'm', 800_000, FLOW),
-            ('划船距离', 'boatDistance', 'm', 500_000, FLOW),
-            ('矿车距离', 'minecartDistance', 'm', 300_000, FLOW),
-            ('鞘翅滑行', 'elytraDistance', 'm', 2_000_000, FLOW)
-        ]
-    },
-    '战斗': {
-        'items': [
-            ('造成伤害', 'damageDealt', '点', 3_000_000, FLOW),
-            ('承受伤害', 'damageTaken', '点', 1_000_000, FLOW),
-            ('盾牌格挡', 'damageBlockedByShield', '点', 200_000, FLOW),
-            ('吸收伤害', 'damageAbsorbed', '点', 300_000, FLOW),
-            ('击杀生物', 'mobKills', '', 80_000, ACT),
-            ('击杀玩家', 'playerKills', '', 300, ACT),
-            ('死亡次数', 'deaths', '', 1_500, NOISE),
-            ('击中标靶', 'targetHit', '', 20_000, ACT)
-        ]
-    },
-    '工艺': {
-        'items': [
-            ('使用工作台', 'interactWithCraftingTable', '', 150_000, ACT),
-            ('使用切石机', 'interactWithStonecutter', '', 40_000, ACT),
-            ('使用熔炉', 'interactWithFurnace', '', 200_000, ACT),
-            ('使用高炉', 'interactWithBlastFurnace', '', 80_000, ACT),
-            ('使用烟熏炉', 'interactWithSmoker', '', 80_000, ACT),
-            ('使用酿造台', 'interactWithBrewingStand', '', 80_000, ACT),
-            ('使用铁砧', 'interactWithAnvil', '', 40_000, ACT),
-            ('使用砂轮', 'interactWithGrindstone', '', 40_000, ACT),
-            ('使用锻造台', 'interactWithSmithingTable', '', 20_000, ACT),
-            ('物品附魔', 'enchantItem', '', 15_000, ACT)
-        ]
-    },
-    '仓储': {
-        'items': [
-            ('打开箱子', 'openChest', '', 300_000, ACT),
-            ('打开木桶', 'openBarrel', '', 200_000, ACT),
-            ('打开末影箱', 'openEnderchest', '', 100_000, ACT),
-            ('打开潜影盒', 'openShulkerBox', '', 100_000, ACT),
-            ('查看漏斗', 'inspectHopper', '', 150_000, ACT),
-            ('查看投掷器', 'inspectDropper', '', 50_000, ACT),
-            ('查看发射器', 'inspectDispenser', '', 50_000, ACT),
-            ('触发陷阱箱', 'triggerTrappedChest', '', 20_000, ACT)
-        ]
-    },
-    '田园': {
-        'items': [
-            ('与村民对话', 'talkedToVillager', '', 30_000, ACT),
-            ('与村民交易', 'tradedWithVillager', '', 30_000, ACT),
-            ('繁殖动物', 'animalsBred', '', 30_000, ACT),
-            ('钓鱼次数', 'fishCaught', '', 15_000, ACT),
-            ('床上入眠', 'sleepInBed', '', 3_000, ACT),
-            ('使用营火', 'interactWithCampfire', '', 30_000, ACT),
-            ('吃蛋糕', 'eatCakeSlice', '', 2_000, ACT),
-            ('袭击胜利', 'raidWin', '', 250, ACT)
-        ]
-    },
-    '休闲': {
-        'items': [
-            ('播放唱片', 'playRecord', '', 1_000, ACT),
-            ('播放音符盒', 'playNoteblock', '', 15_000, ACT),
-            ('音符盒调音', 'tuneNoteblock', '', 40_000, ACT),
-            ('鸣钟', 'bellRing', '', 3_000, ACT),
-            ('使用织布机', 'interactWithLoom', '', 15_000, ACT),
-            ('使用制图台', 'interactWithCartographyTable', '', 15_000, ACT),
-            ('花盆种花', 'potFlower', '', 3_000, ACT),
-            ('填充炼药锅', 'fillCauldron', '', 5_000, ACT)
-        ]
-    }
-}
-
-
 VALUE_TIERS = ((1e12, 'T'), (1e9, 'B'), (1e6, 'M'), (1e3, 'K'))
 
 
@@ -311,14 +232,14 @@ def _career_plan(current, hist_scores, reason):
                       hist_scores, hist_scores, reason)
 
 
-def resolve_window(current, snapshots) -> WindowPlan:
+def resolve_window(current, snapshots, *, today=None) -> WindowPlan:
     """按日历天挑基线，决定这张图走本期增量还是生涯累计。
 
     快照由每日采样按日历落盘，所以"7 天"是真实历；挑中之后还要两段都够长，
     否则本期等于全部历史，画出来是自己跟自己重合，不如老实退回生涯。
     """
     hist_scores = calc_category_scores(current)
-    today = date.today()
+    today = today or date.today()
     target = today - timedelta(days=WINDOW_DAYS)
     floor = target - timedelta(days=BASELINE_TOLERANCE_DAYS)
 
@@ -1000,7 +921,8 @@ def draw_player_stats_image(
     is_online: bool = True,
     avatar_img: Optional[Image.Image] = None,
     show_server_label: bool = True,
-    snapshots: Optional[List[Tuple[str, Dict[str, float]]]] = None
+    snapshots: Optional[List[Tuple[str, Dict[str, float]]]] = None,
+    today: Optional[date] = None
 ) -> Image.Image:
     """生成玩家统计图片（雷达图+环形图+分类明细，2x 超采样）
 
@@ -1013,7 +935,7 @@ def draw_player_stats_image(
     category_names = list(CATEGORIES.keys())
     hours = play_hours(stats_data)
     tiny = hours < TINY_ACCOUNT_HOURS
-    plan = resolve_window(stats_data, snapshots or [])
+    plan = resolve_window(stats_data, snapshots or [], today=today)
     is_window = plan.mode == 'window'
     scores = plan.scores
     period = (f"{plan.day_from[5:]} ~ {plan.day_to[5:]} " if is_window else "")

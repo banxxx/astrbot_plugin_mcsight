@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "environment_id": "REPLACE_WITH_OFFICIAL_ENVIRONMENT_UUID",
+  "enabled": false,
+  "storage_mode": "local",
+  "server_modes": {},
+  "connection": null
+}

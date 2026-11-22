@@ -1,0 +1,6 @@
+{
+  "synthetic": true,
+  "scope": {"protocol_version": 2, "environment_id": "11111111-1111-4111-8111-111111111111", "group_id": "SYNTHETIC_GROUP_A", "server_id": "33333333-3333-4333-8333-333333333333"},
+  "request": {"operation_id": "66666666-6666-4666-8666-666666666666", "effects": [{"game_key": "player_a", "game_id": "Player_A", "user_id": "SYNTHETIC_USER_A", "state": "active", "revision": "1"}]},
+  "response": {"success": true, "code": "OK", "message": "OK", "data": {"protocol_version": 2, "operation_id": "66666666-6666-4666-8666-666666666666", "results": [{"game_key": "player_a", "result": "applied", "requested_revision": "1", "effective_revision": "1", "persisted": true, "whitelist": "PENDING", "online": "PENDING"}]}}
+}

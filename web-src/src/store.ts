@@ -2,6 +2,7 @@ import { computed, reactive, ref, watch } from "vue";
 import { api, requireBridge } from "./lib/api";
 import { ApiError } from "./lib/bridge";import type {
   ConfigItem,
+  ActivationStatus,
   ConfigSection,
   ConstRow,
   CommandSection,
@@ -11,9 +12,13 @@ import { ApiError } from "./lib/bridge";import type {
   ServerEntry,
 } from "./lib/types";
 
-export type PageKey = "srv" | "cfg" | "const" | "map" | "help";
+export type PageKey = "srv" | "cfg" | "official" | "const" | "map" | "help";
 
 export { api };
+
+// 官方页草稿不进入全局配置保存队列，切页前要求明确保存或放弃。
+export const officialDraftPending = ref(false);
+export const officialBusy = ref(false);
 
 export interface Dialog {
   name: string;
@@ -21,6 +26,7 @@ export interface Dialog {
 }
 
 interface State {
+  activation: ActivationStatus | null;
   ready: boolean;
   noBridge: boolean;
   /** 在飞的请求数，读与写都算。页面用它把「还没读到」和「真的没有数据」分开 */
@@ -47,6 +53,7 @@ interface State {
 }
 
 export const S = reactive<State>({
+  activation: null,
   ready: false,
   noBridge: false,
   pending: 0,
@@ -195,6 +202,7 @@ export async function loadConfig(force = false) {
   S.cfgItems = r.items;
   S.cfgSections = r.sections;
   S.cfgExtraKeys = r.extra_keys;
+  S.activation = r.activation;
 }
 
 interface DraftWrite {
@@ -285,6 +293,11 @@ export function discardDrafts() {
 /** 切页入口：在「全局参数」攒了草稿时先问一句，别让切 tab 把改动静默丢掉 */
 export function requestPage(key: PageKey) {
   if (key === S.page) return;
+  if (S.page === "official" && (officialDraftPending.value || officialBusy.value)) {
+    S.error = officialBusy.value ? "官方配置操作仍在进行，请等待完成后切换页面。"
+      : "官方群配置有未保存更改，请先保存，或点击「放弃草稿并刷新」后切换页面。";
+    return;
+  }
   if (S.page === "cfg" && dirtyCount.value > 0) {
     openDialog("leave-cfg", { to: key });
     return;

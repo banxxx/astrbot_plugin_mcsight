@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "environment_id": "REPLACE_WITH_OFFICIAL_ENVIRONMENT_UUID",
+  "enabled": false,
+  "storage_mode": "hybrid",
+  "server_modes": {},
+  "connection": {
+    "host": "REPLACE_WITH_DATABASE_HOST",
+    "port": 4000,
+    "user": "REPLACE_LOCALLY_WITH_DATABASE_USER",
+    "password": "REPLACE_LOCALLY_WITH_DATABASE_PASSWORD",
+    "database": "REPLACE_WITH_OFFICIAL_DATABASE_NAME",
+    "ssl_ca": "REPLACE_WITH_PUBLIC_CA_FILE_PATH"
+  }
+}

@@ -13,7 +13,6 @@ develop-eggs/
 dist/
 downloads/
 eggs/
-docs/
 .eggs/
 # 只锚根目录：前端源码里有 web-src/src/lib/，写成 lib/ 会把源文件一起吃掉
 /lib/
@@ -229,3 +228,20 @@ npm-debug.log*
 # 字体源文件只用于构建，成品已提交到 views/config/assets/。
 # 两者都入库会让仓库包多约 9.6MB，超过插件市场 16MB 上限并被自动下架。
 web-src/src/assets/fonts/
+
+# 本机开发过程记录；正式协议、部署说明、SQL 和占位示例仍入库。
+/.astrbot-plugin/
+/docs/qq-official-compat-plan.md
+/docs/QQ_OFFICIAL_EXECUTION_CHECKLIST.md
+/docs/QQ_OFFICIAL_SOURCE_EVIDENCE.md
+/docs/QQ_PLATFORM_COMPATIBILITY_PLAN.md
+/docs/QQ_PLATFORM_PREIMPLEMENTATION_AUDIT.md
+/docs/QQBINDMOD_OFFICIAL_COMPAT_REVIEW.md
+
+# 此次迁移的一次性生成/截图/交付核对和本机专用执行器。
+# 保留 test_*.py、离线 Vue 回归及其合成夹具，便于以后维护。
+/tests/run-isolated.ps1
+/tests/make_official_center_fixture.py
+/tests/render_official_statistics.py
+/tests/smoke_official_delivery.py
+/tests/delivery-wire-synthetic.json

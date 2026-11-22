@@ -6,12 +6,16 @@
 由主代理检查后运行：python -B -m unittest discover -s tests -v
 """
 import ast
+import asyncio
 import copy
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +33,7 @@ ALLOWED_AST_FILES = {
     "commands/mc_handler.py",
     "utils/stats_sampler.py",
     "web/api.py",
+    "commands/common.py",
 }
 
 
@@ -142,6 +147,21 @@ def configure_onebot():
         fake_context([onebot(), official()]),
         PublicSelectionOnly(active_platform="onebot"),
     )
+    activation.refresh(framework_loaded=True)
+
+
+def ready_controller(platform, instance_id, inventory):
+    """旧回归显式模拟框架已加载；官方测试先保存，再模拟完整启动。"""
+    controller = activation.ActivationController(platform, instance_id, inventory)
+    controller.initialize_selection(framework_loaded=True)
+    if platform == "qq_official" and instance_id:
+        controller.save_selection({
+            "platform": platform, "instance_id": instance_id,
+            "application_ref": "SYNTHETIC_APP", "confirm_application": True,
+            "expected_revision": 0,
+        })
+        controller = activation.ActivationController(platform, instance_id, inventory, store=controller.store)
+    return controller
 
 
 class SelectionTests(unittest.TestCase):
@@ -150,7 +170,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_unique_onebot_selected_with_official_present(self):
         entries = [onebot(), official()]
-        controller = activation.ActivationController("onebot", "", lambda: entries)
+        controller = ready_controller("onebot", "", lambda: entries)
         self.assertEqual(controller.status()["state"], "active")
         self.assertTrue(controller.allows(SyntheticEvent()))
         self.assertFalse(controller.allows(SyntheticEvent("qq_official", "official-a")))
@@ -158,21 +178,21 @@ class SelectionTests(unittest.TestCase):
 
     def test_multiple_onebot_instances_need_explicit_selection(self):
         entries = [onebot(), onebot("onebot-b"), official()]
-        controller = activation.ActivationController("onebot", "", lambda: entries)
+        controller = ready_controller("onebot", "", lambda: entries)
         self.assertEqual(controller.status()["state"], "ambiguous")
         self.assertFalse(controller.allows(SyntheticEvent()))
         self.assertEqual(controller.status()["selected_instance"], "")
 
     def test_explicit_selection_accepts_only_exact_instance(self):
         entries = [onebot(), onebot("onebot-b"), official()]
-        controller = activation.ActivationController(
+        controller = ready_controller(
             "onebot", "onebot-b", lambda: entries
         )
         self.assertTrue(controller.allows(SyntheticEvent("aiocqhttp", "onebot-b")))
         self.assertFalse(controller.allows(SyntheticEvent()))
 
     def test_missing_explicit_selection_does_not_fall_back(self):
-        controller = activation.ActivationController(
+        controller = ready_controller(
             "onebot", "missing", lambda: [onebot()]
         )
         self.assertEqual(controller.status()["state"], "missing")
@@ -180,40 +200,45 @@ class SelectionTests(unittest.TestCase):
 
     def test_removed_selected_instance_does_not_fail_over(self):
         entries = [onebot()]
-        controller = activation.ActivationController("onebot", "", lambda: entries)
+        controller = ready_controller("onebot", "", lambda: entries)
         self.assertTrue(controller.allows(SyntheticEvent()))
         entries[:] = [onebot("replacement")]
+        controller._invalidate_status()
         self.assertEqual(controller.status()["state"], "missing")
         self.assertEqual(controller.status()["selected_instance"], "onebot-a")
         self.assertFalse(controller.allows(SyntheticEvent("aiocqhttp", "replacement")))
         entries[:] = [onebot()]
+        controller._invalidate_status()
         self.assertTrue(controller.allows(SyntheticEvent()))
 
     def test_new_candidate_does_not_replace_latched_selection(self):
         entries = [onebot()]
-        controller = activation.ActivationController("onebot", "", lambda: entries)
+        controller = ready_controller("onebot", "", lambda: entries)
         self.assertTrue(controller.allows(SyntheticEvent()))
         entries.append(onebot("onebot-b"))
+        controller._invalidate_status()
         self.assertTrue(controller.allows(SyntheticEvent()))
         self.assertFalse(controller.allows(SyntheticEvent("aiocqhttp", "onebot-b")))
 
     def test_initial_empty_inventory_can_become_ready(self):
         entries = []
-        controller = activation.ActivationController("onebot", "", lambda: entries)
+        controller = ready_controller("onebot", "", lambda: entries)
         self.assertEqual(controller.status()["state"], "missing")
         entries.extend([onebot(), official()])
+        controller.initialize_selection()
         self.assertTrue(controller.allows(SyntheticEvent()))
 
     def test_unknown_platform_is_not_a_supported_candidate(self):
         entries = [activation.PlatformInstance("webchat", "webchat"), onebot()]
-        controller = activation.ActivationController("onebot", "", lambda: entries)
+        controller = ready_controller("onebot", "", lambda: entries)
         self.assertEqual(controller.status()["choices"], [
-            {"platform": "onebot", "instance_id": "onebot-a"}
+            {"platform": "onebot", "instance_id": "onebot-a",
+             "adapter": "aiocqhttp", "adapter_status": "unknown"}
         ])
         self.assertFalse(controller.allows(SyntheticEvent("webchat", "webchat")))
 
     def test_duplicate_instance_ids_fail_closed(self):
-        controller = activation.ActivationController(
+        controller = ready_controller(
             "onebot", "duplicate",
             lambda: [onebot("duplicate"), official("duplicate")],
         )
@@ -228,12 +253,12 @@ class SelectionTests(unittest.TestCase):
         ]
         for inventory in inventories:
             with self.subTest(inventory=inventory):
-                controller = activation.ActivationController("onebot", "", inventory)
+                controller = ready_controller("onebot", "", inventory)
                 self.assertEqual(controller.status()["state"], "unavailable")
                 self.assertFalse(controller.allows(SyntheticEvent()))
 
     def test_invalid_platform_does_not_enumerate_adapters(self):
-        controller = activation.ActivationController("unsupported", "", forbidden)
+        controller = ready_controller("unsupported", "", forbidden)
         self.assertEqual(controller.status()["state"], "invalid")
         self.assertFalse(controller.allows(SyntheticEvent()))
 
@@ -241,7 +266,7 @@ class SelectionTests(unittest.TestCase):
         self.assertNotIn("qq_official", activation.READY_PLATFORMS)
         for adapter in ("qq_official", "qq_official_webhook"):
             with self.subTest(adapter=adapter):
-                controller = activation.ActivationController(
+                controller = ready_controller(
                     "qq_official", "official-a",
                     lambda adapter=adapter: [official(adapter=adapter)],
                 )
@@ -251,7 +276,7 @@ class SelectionTests(unittest.TestCase):
                 )
 
     def test_bad_event_metadata_is_rejected(self):
-        controller = activation.ActivationController(
+        controller = ready_controller(
             "onebot", "", lambda: [onebot()]
         )
         self.assertFalse(controller.allows(ForbiddenObject()))
@@ -279,6 +304,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_default_configuration_and_shutdown(self):
         activation.configure(fake_context([onebot()]))
+        activation.refresh(framework_loaded=True)
         self.assertTrue(activation.onebot_business_enabled())
         activation.shutdown()
         self.assertFalse(activation.onebot_business_enabled())
@@ -294,7 +320,10 @@ def isolated_command_class(handler, config_manager):
     )
     command_names = [
         node.name for node in original.body
-        if isinstance(node, ast.AsyncFunctionDef) and node.decorator_list
+        if isinstance(node, ast.AsyncFunctionDef) and any(
+            isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
+            and d.func.attr in {"command", "regex"} for d in node.decorator_list
+        )
     ]
     command_class = copy.deepcopy(original)
     command_class.bases = []
@@ -440,6 +469,457 @@ class EntryIsolationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(await wrap_remote(handler)(), {"status": "ok"})
         self.assertEqual(calls, ["called"])
+
+
+class PersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="mcwatch-synthetic-")
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "activation.json"
+        self.entries = [onebot(), onebot("onebot-b"), official(), official("official-b")]
+        self.store = activation.SelectionStore(self.path)
+
+    def controller(self, *, runtime=None, platform="onebot", instance_id="onebot-a"):
+        return activation.ActivationController(platform, instance_id, lambda: self.entries,
+                                               store=self.store, runtime=runtime)
+
+    def start(self):
+        controller = self.controller()
+        controller.initialize_selection()
+        self.assertTrue(controller.allows(SyntheticEvent()))
+        return controller
+
+    def save_onebot(self, controller, instance_id="onebot-b", revision=1):
+        return controller.save_selection({"platform": "onebot", "instance_id": instance_id,
+                                          "expected_revision": revision})
+
+    def save_official(self, controller, **extra):
+        request = {"platform": "qq_official", "instance_id": "official-a",
+                   "application_ref": "SYNTHETIC_APP_A", "confirm_application": True,
+                   "expected_revision": 1}
+        request.update(extra)
+        return controller.save_selection(request)
+
+    def test_status_is_read_only_and_does_not_select_unique_candidate(self):
+        self.entries[:] = [onebot()]
+        controller = self.controller(instance_id="")
+        self.assertEqual(controller.status()["state"], "loading")
+        self.assertFalse(controller.allows(SyntheticEvent()))
+        self.assertFalse(self.path.exists())
+        controller.initialize_selection()
+        self.assertFalse(self.path.exists())
+        controller.initialize_selection(framework_loaded=True)
+        self.assertTrue(self.path.exists())
+        before = self.path.read_bytes()
+        controller.status()
+        controller.status()
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_startup_waits_for_all_adapters_instead_of_latching_first(self):
+        self.entries[:] = [onebot()]
+        controller = self.controller(instance_id="")
+        controller.initialize_selection()
+        self.entries.append(onebot("onebot-b"))
+        controller.initialize_selection(framework_loaded=True)
+        self.assertEqual(controller.status()["state"], "ambiguous")
+        self.assertFalse(self.path.exists())
+
+    def test_saved_selection_survives_process_restart_and_legacy_changes(self):
+        controller = self.start()
+        before = controller.status()["selection"]
+        self.entries.append(onebot("onebot-c"))
+        restarted = self.controller(instance_id="onebot-c", platform="qq_official")
+        self.assertEqual(restarted.status()["selection"], before)
+        self.assertTrue(restarted.allows(SyntheticEvent()))
+        self.assertFalse(restarted.allows(SyntheticEvent(instance_id="onebot-c")))
+
+    def test_pending_target_applies_only_on_fresh_runtime(self):
+        runtime = {}
+        controller = self.controller(runtime=runtime)
+        controller.initialize_selection()
+        status = self.save_onebot(controller)
+        self.assertEqual(status["selected_instance"], "onebot-a")
+        self.assertTrue(status["pending_restart"])
+        controller.stopped = True
+        reloaded = self.controller(runtime=runtime)
+        self.assertTrue(reloaded.allows(SyntheticEvent()))
+        self.assertFalse(reloaded.allows(SyntheticEvent(instance_id="onebot-b")))
+        restarted = self.controller()
+        self.assertFalse(restarted.status()["pending_restart"])
+        self.assertTrue(restarted.allows(SyntheticEvent(instance_id="onebot-b")))
+
+    def test_initial_explicit_ui_save_is_not_applied_by_later_lifecycle_hook(self):
+        controller = self.controller(instance_id="")
+        self.save_onebot(controller, revision=0)
+        controller.initialize_selection(framework_loaded=True)
+        self.assertEqual(controller.status()["state"], "pending_restart")
+        self.assertFalse(controller.allows(SyntheticEvent(instance_id="onebot-b")))
+
+    def test_missing_selected_instance_after_restart_does_not_choose_another(self):
+        self.start()
+        self.entries[:] = [onebot("onebot-b")]
+        restarted = self.controller()
+        restarted.initialize_selection(framework_loaded=True)
+        self.assertEqual(restarted.status()["state"], "missing")
+        self.assertFalse(restarted.allows(SyntheticEvent(instance_id="onebot-b")))
+        self.assertEqual(self.store.read()["selection"]["instance_id"], "onebot-a")
+
+    def test_registered_does_not_assert_online_and_stopped_adapter_blocks(self):
+        controller = self.start()
+        self.assertTrue(controller.status()["registered"])
+        self.assertEqual(controller.status()["online"], "unknown")
+        self.entries[0] = activation.PlatformInstance("aiocqhttp", "onebot-a", "stopped")
+        controller._invalidate_status()
+        self.assertEqual(controller.status()["state"], "offline")
+        self.assertFalse(controller.allows(SyntheticEvent()))
+
+    def test_failed_replace_preserves_previous_selection_and_removes_own_temp(self):
+        controller = self.start()
+        before = self.path.read_bytes()
+        with patch.object(activation.os, "replace", side_effect=OSError("synthetic failure")):
+            with self.assertRaises(activation.SelectionError):
+                self.save_onebot(controller)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(list(self.path.parent.glob(".activation-*.tmp")), [])
+        self.assertFalse(controller.status()["pending_restart"])
+
+    def test_failure_before_fsync_does_not_publish_selection(self):
+        controller = self.start()
+        before = self.path.read_bytes()
+        with patch.object(activation.os, "fsync", side_effect=OSError("synthetic failure")):
+            with self.assertRaises(activation.SelectionError):
+                self.save_onebot(controller)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_corrupt_record_cannot_be_overwritten_or_auto_initialized(self):
+        for raw in (b'{broken', b'{"schema_version":1,"schema_version":1}', b'[]'):
+            with self.subTest(raw=raw):
+                self.path.write_bytes(raw)
+                controller = self.controller()
+                controller.initialize_selection(framework_loaded=True)
+                self.assertEqual(controller.status()["state"], "storage_error")
+                with self.assertRaises(activation.SelectionError):
+                    self.save_onebot(controller, revision=0)
+                self.assertEqual(self.path.read_bytes(), raw)
+
+    def test_deleted_record_pauses_current_runtime(self):
+        controller = self.start()
+        self.path.unlink()
+        controller._invalidate_status()
+        self.assertEqual(controller.status()["state"], "storage_error")
+        self.assertFalse(controller.allows(SyntheticEvent()))
+
+    def test_save_failure_keeps_confirmed_unique_onebot_in_memory(self):
+        self.entries[:] = [onebot()]
+        runtime = {}
+
+        class FailingStore(activation.SelectionStore):
+            def save(self, data, expected_revision):
+                raise activation.SelectionError("synthetic save failure")
+
+        store = FailingStore(self.path)
+        controller = activation.ActivationController(
+            "onebot", "", lambda: self.entries, store=store, runtime=runtime)
+        controller.initialize_selection(framework_loaded=True)
+        status = controller.status()
+        self.assertEqual(status["state"], "active")
+        self.assertTrue(controller.allows(SyntheticEvent()))
+        self.assertFalse(status["pending_restart"])
+        self.assertIn("未能写入磁盘", status["message"])
+        self.assertFalse(self.path.exists())
+
+        # 热重载沿用同一运行快照：不能因为文件仍不可写就暂停业务。
+        controller.stopped = True
+        reloaded = activation.ActivationController(
+            "onebot", "", lambda: self.entries, store=store, runtime=runtime)
+        self.assertTrue(reloaded.allows(SyntheticEvent()))
+
+    def test_status_cache_avoids_repeat_inventory_and_invalidates_on_save(self):
+        self.entries[:] = [onebot(), onebot("onebot-b")]
+        calls = []
+
+        def inventory():
+            calls.append(1)
+            return self.entries
+
+        controller = activation.ActivationController(
+            "onebot", "onebot-a", inventory, store=self.store)
+        controller.initialize_selection(framework_loaded=True)
+        calls.clear()
+        self.assertEqual(controller.status()["state"], "active")
+        self.assertEqual(controller.status()["state"], "active")
+        self.assertEqual(len(calls), 1)
+        saved = controller.save_selection({
+            "platform": "onebot", "instance_id": "onebot-b", "expected_revision": 1})
+        self.assertTrue(saved["pending_restart"])
+        self.assertEqual(controller.status()["selected_instance"], "onebot-a")
+        self.assertGreaterEqual(len(calls), 2)
+        controller.stopped = True
+        self.assertEqual(controller.status()["state"], "unavailable")
+
+    def test_repaired_file_does_not_activate_on_hot_reload_after_failed_start(self):
+        runtime = {}
+        self.path.write_bytes(b"{broken")
+        broken = self.controller(runtime=runtime)
+        self.assertEqual(broken.status()["state"], "storage_error")
+        synthetic_store = activation.SelectionStore()
+        prepared = activation.ActivationController("onebot", "onebot-a", lambda: self.entries,
+                                                   store=synthetic_store)
+        prepared.initialize_selection()
+        self.path.write_text(activation.json.dumps(synthetic_store.read()), encoding="utf-8")
+        reloaded = self.controller(runtime=runtime)
+        self.assertEqual(reloaded.status()["state"], "pending_restart")
+        self.assertFalse(reloaded.allows(SyntheticEvent()))
+        self.assertTrue(self.controller().allows(SyntheticEvent()))
+
+    def test_two_writers_with_same_revision_cannot_both_succeed(self):
+        controller = self.start()
+        def save(instance_id):
+            try:
+                self.save_onebot(controller, instance_id=instance_id)
+                return True
+            except activation.SelectionError:
+                return False
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(save, ["onebot-a", "onebot-b"]))
+        self.assertEqual(sorted(results), [False, True])
+        self.assertEqual(self.store.read()["selection"]["config_revision"], 2)
+
+    def test_oversized_or_invalid_revision_does_not_touch_file(self):
+        controller = self.start()
+        before = self.path.read_bytes()
+        for revision in (True, -1, "1", None, 0):
+            with self.subTest(revision=revision), self.assertRaises(activation.SelectionError):
+                self.save_onebot(controller, revision=revision)
+        self.assertEqual(before, self.path.read_bytes())
+        self.path.write_bytes(b" " * (activation.MAX_STORE_BYTES + 1))
+        self.assertEqual(self.controller().status()["state"], "storage_error")
+
+    def test_official_never_auto_selects_even_when_it_is_unique(self):
+        self.entries[:] = [official()]
+        controller = self.controller(platform="qq_official", instance_id="")
+        controller.initialize_selection(framework_loaded=True)
+        self.assertEqual(controller.status()["state"], "selection_required")
+        self.assertFalse(self.path.exists())
+
+    def test_official_requires_application_confirmation_and_remains_closed(self):
+        controller = self.start()
+        with self.assertRaises(activation.SelectionError):
+            self.save_official(controller, confirm_application=False)
+        self.save_official(controller)
+        self.assertTrue(controller.allows(SyntheticEvent()))
+        restarted = self.controller()
+        self.assertEqual(restarted.status()["state"], "not_ready")
+        self.assertFalse(restarted.allows(SyntheticEvent("qq_official", "official-a")))
+
+    def test_application_change_cannot_reuse_previous_environment(self):
+        controller = self.start()
+        saved = self.save_official(controller)["saved_selection"]
+        with self.assertRaises(activation.SelectionError):
+            self.save_official(controller, expected_revision=2, application_ref="SYNTHETIC_APP_B",
+                               environment_id=saved["environment_id"])
+        changed = self.save_official(controller, expected_revision=2, application_ref="SYNTHETIC_APP_B")
+        self.assertNotEqual(changed["saved_selection"]["environment_id"], saved["environment_id"])
+
+    def test_instance_rename_preserves_confirmed_app_environment_and_reset_is_explicit(self):
+        controller = self.start()
+        saved = self.save_official(controller)["saved_selection"]
+        changed = self.save_official(controller, expected_revision=2, instance_id="official-b")
+        self.assertEqual(changed["saved_selection"]["environment_id"], saved["environment_id"])
+        reset = self.save_official(controller, expected_revision=3, new_environment=True)
+        self.assertNotEqual(reset["saved_selection"]["environment_id"], saved["environment_id"])
+
+    def test_failed_inventory_can_recover_at_next_lifecycle_notification(self):
+        available = False
+        def inventory():
+            if not available:
+                raise RuntimeError("synthetic inventory unavailable")
+            return [onebot()]
+        controller = activation.ActivationController("onebot", "", inventory, store=self.store)
+        controller.initialize_selection(framework_loaded=True)
+        self.assertEqual(controller.status()["state"], "unavailable")
+        available = True
+        controller.initialize_selection()
+        self.assertTrue(controller.allows(SyntheticEvent()))
+
+    def test_context_hot_reload_keeps_runtime_and_stale_shutdown_cannot_stop_new_controller(self):
+        context = fake_context(self.entries)
+        first = activation.configure(context, PublicSelectionOnly(active_bot_instance="onebot-a"), store=self.store)
+        self.save_onebot(first)
+        second = activation.configure(context, PublicSelectionOnly(active_bot_instance="onebot-b"), store=self.store)
+        activation.shutdown(first)
+        self.assertTrue(activation.allows(SyntheticEvent()))
+        self.assertEqual(second.status()["selected_instance"], "onebot-a")
+        activation.shutdown(second)
+
+
+class LifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def tearDown(self):
+        activation.shutdown()
+
+    async def test_framework_hook_waits_for_complete_inventory_and_starts_services(self):
+        entries = [onebot()]
+        activation.configure(fake_context(entries), PublicSelectionOnly())
+        source = source_tree("main.py")
+        original = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == "MCWatcher")
+        methods = [copy.deepcopy(n) for n in original.body
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                   and n.name in {"initialize", "_start_services", "_wait_for_implicit_selection",
+                                  "on_framework_loaded", "on_platform_loaded"}]
+        for method in methods:
+            method.decorator_list = []
+        cls = ast.ClassDef(name="Lifecycle", bases=[], keywords=[], body=methods, decorator_list=[])
+        calls = []
+        lifecycle = compile_definitions([cls], {
+            "platform_activation": activation, "start_db_keepalive": lambda: calls.append("keepalive"),
+            "stats_sampler": SimpleNamespace(start=lambda: calls.append("sampler")),
+            "official_runtime": SimpleNamespace(start_recovery=lambda: calls.append("official_recovery")),
+            "asyncio": asyncio, "_has_loaded_hook": lambda: True,
+        })["Lifecycle"]()
+        lifecycle._activation = activation._controller
+        lifecycle._startup_task = None
+        await lifecycle.initialize()
+        await lifecycle.on_platform_loaded()
+        self.assertNotIn("keepalive", calls)
+        self.assertEqual(activation.status()["state"], "loading")
+        await lifecycle.on_framework_loaded()
+        self.assertTrue(activation.allows(SyntheticEvent()))
+        self.assertIn("keepalive", calls)
+
+    def _lifecycle_class(self, *, loaded_hook, calls):
+        source = source_tree("main.py")
+        original = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == "MCWatcher")
+        methods = [copy.deepcopy(n) for n in original.body
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                   and n.name in {"initialize", "_start_services", "_wait_for_implicit_selection"}]
+        for method in methods:
+            method.decorator_list = []
+        cls = ast.ClassDef(name="Lifecycle", bases=[], keywords=[], body=methods, decorator_list=[])
+        return compile_definitions([cls], {
+            "platform_activation": activation,
+            "start_db_keepalive": lambda: calls.append("keepalive"),
+            "stats_sampler": SimpleNamespace(start=lambda: calls.append("sampler")),
+            "official_runtime": SimpleNamespace(start_recovery=lambda: calls.append("official_recovery")),
+            "asyncio": asyncio, "_has_loaded_hook": lambda: loaded_hook,
+        })["Lifecycle"]()
+
+    async def test_runtime_install_selects_unique_onebot_after_framework_hook(self):
+        from unittest.mock import AsyncMock
+        activation.configure(fake_context([onebot()]), PublicSelectionOnly())
+        calls = []
+        lifecycle = self._lifecycle_class(loaded_hook=True, calls=calls)
+        lifecycle._activation = activation._controller
+        lifecycle._startup_task = None
+        await lifecycle.initialize()
+        self.assertIsNotNone(lifecycle._startup_task)
+        with patch.object(asyncio, "sleep", new=AsyncMock()):
+            await lifecycle._startup_task
+        self.assertEqual(activation.status()["state"], "active")
+        self.assertEqual(calls[-3:], ["keepalive", "sampler", "official_recovery"])
+
+    async def test_old_framework_without_loaded_hook_waits_then_selects(self):
+        entries = []
+        activation.configure(fake_context(entries), PublicSelectionOnly())
+        calls = []
+        lifecycle = self._lifecycle_class(loaded_hook=False, calls=calls)
+        lifecycle._activation = activation._controller
+        lifecycle._startup_task = None
+        await lifecycle.initialize()
+
+        async def appear(delay):
+            if not entries:
+                entries.append(onebot())
+
+        with patch.object(asyncio, "sleep", side_effect=appear):
+            await lifecycle._startup_task
+        self.assertEqual(activation.status()["state"], "active")
+        self.assertIn("keepalive", calls)
+
+    async def test_keepalive_restarts_when_previous_thread_ignored_stop(self):
+        import threading
+        configure_onebot()
+        previous = SimpleNamespace(is_alive=lambda: True)
+        stopped = threading.Event()
+        stopped.set()
+        state = {"thread": previous, "stop": stopped}
+        handler = isolated_function(
+            "commands/common.py", "start_db_keepalive",
+            platform_activation=activation,
+            WhitelistManager=lambda: SimpleNamespace(
+                db_host="synthetic", db_user="synthetic", db_password="synthetic"),
+            _keepalive=state, threading=threading,
+            _keepalive_loop=lambda stop_event: None,
+            logger=SimpleNamespace(info=lambda *args, **kwargs: None),
+        )
+        handler()
+        replacement = state["thread"]
+        self.assertIsNot(replacement, previous)
+        replacement.join(2.0)
+        self.assertFalse(replacement.is_alive())
+
+    async def test_legacy_half_update_is_rejected_before_config_write(self):
+        async def body():
+            return {"key": "active_platform", "value": "qq_official"}, ""
+        handler = isolated_function("web/api.py", "view_config_update", _body=body,
+                                    _plugin_config=ForbiddenObject(), _err=lambda s: s,
+                                    platform_activation=activation)
+        self.assertIn("统一保存", await handler())
+
+    async def test_activation_endpoint_does_not_touch_general_config(self):
+        activation.configure(fake_context([onebot()]), PublicSelectionOnly(active_bot_instance="onebot-a"))
+        async def body():
+            return {"platform": "onebot", "instance_id": "onebot-a", "expected_revision": 1}, ""
+        handler = isolated_function("web/api.py", "view_activation_update", _body=body,
+                                    _plugin_config=ForbiddenObject(), _err=lambda s: {"error": s},
+                                    _ok=lambda data: data, platform_activation=activation)
+        result = await handler()
+        self.assertTrue(result["pending_restart"])
+        self.assertEqual(result["saved_selection"]["config_revision"], 2)
+
+    async def test_pending_selection_disallows_misleading_plugin_reload(self):
+        activation.configure(fake_context([onebot(), onebot("onebot-b")]), PublicSelectionOnly(active_bot_instance="onebot-a"))
+        activation.save_selection({"platform": "onebot", "instance_id": "onebot-b", "expected_revision": 1})
+        handler = isolated_function("web/api.py", "view_plugin_reload", platform_activation=activation,
+                                    _plugin_manager=forbidden, _err=lambda s: s)
+        self.assertIn("完整重启", await handler())
+
+    async def test_old_keepalive_blocks_new_worker_before_reading_credentials(self):
+        configure_onebot()
+        handler = isolated_function("commands/common.py", "start_db_keepalive",
+                                    platform_activation=activation, WhitelistManager=forbidden,
+                                    _keepalive={"thread": SimpleNamespace(is_alive=lambda: True)})
+        self.assertIsNone(handler())
+
+    async def test_inactive_keepalive_does_not_read_credentials(self):
+        activation.shutdown()
+        handler = isolated_function("commands/common.py", "start_db_keepalive",
+                                    platform_activation=activation, WhitelistManager=forbidden)
+        self.assertIsNone(handler())
+
+    async def test_optional_lifecycle_hook_does_not_break_old_framework_import(self):
+        decorator = isolated_function("main.py", "_lifecycle_hook", filter=SimpleNamespace())
+        async def handler():
+            return "synthetic"
+        self.assertIs(decorator("on_platform_loaded")(handler), handler)
+
+    async def test_explicit_instance_waits_without_selecting_another(self):
+        import asyncio
+        entries = [onebot("onebot-b")]
+        current = activation.configure(fake_context(entries), PublicSelectionOnly(active_bot_instance="onebot-a"))
+        tree = source_tree("main.py")
+        original = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MCWatcher")
+        method = next(copy.deepcopy(n) for n in original.body
+                      if isinstance(n, ast.AsyncFunctionDef) and n.name == "_wait_for_explicit_instance")
+        namespace = compile_definitions([method], {"platform_activation": activation, "asyncio": asyncio})
+        calls = []
+        worker = SimpleNamespace(_activation=current, _start_services=lambda: calls.append("started"))
+        async def appear(delay):
+            self.assertFalse(current.allows(SyntheticEvent(instance_id="onebot-b")))
+            entries.append(onebot())
+        with patch.object(asyncio, "sleep", side_effect=appear):
+            await namespace["_wait_for_explicit_instance"](worker)
+        self.assertEqual(calls, ["started"])
+        self.assertEqual(current.status()["selected_instance"], "onebot-a")
 
 
 if __name__ == "__main__":

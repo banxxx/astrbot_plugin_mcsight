@@ -1,0 +1,1542 @@
+{
+  "synthetic": true,
+  "schema_version": 1,
+  "scope": {
+    "protocol_version": 2,
+    "environment_id": "11111111-1111-4111-8111-111111111111",
+    "group_id": "SYNTHETIC_GROUP_A",
+    "server_id": "33333333-3333-4333-8333-333333333333"
+  },
+  "schema_spec": {
+    "bindings_qqofficial": {
+      "columns": {
+        "id": {
+          "data_type": "bigint",
+          "unsigned": true,
+          "nullable": false,
+          "char_length": null,
+          "collation_name": null,
+          "datetime_precision": null,
+          "auto_increment": true
+        },
+        "environment_id": {
+          "data_type": "char",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 36,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "group_id": {
+          "data_type": "varchar",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 64,
+          "collation_name": "utf8mb4_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "game_key": {
+          "data_type": "varchar",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 16,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "game_id": {
+          "data_type": "varchar",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 64,
+          "collation_name": "utf8mb4_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "qq": {
+          "data_type": "varchar",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 64,
+          "collation_name": "utf8mb4_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "state": {
+          "data_type": "varchar",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 16,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "revision": {
+          "data_type": "bigint",
+          "unsigned": true,
+          "nullable": false,
+          "char_length": null,
+          "collation_name": null,
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "last_operation_id": {
+          "data_type": "char",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 36,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "bind_time": {
+          "data_type": "datetime",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": null,
+          "collation_name": null,
+          "datetime_precision": 6,
+          "auto_increment": false
+        },
+        "updated_at": {
+          "data_type": "datetime",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": null,
+          "collation_name": null,
+          "datetime_precision": 6,
+          "auto_increment": false
+        }
+      },
+      "indexes": {
+        "PRIMARY": [
+          true,
+          [
+            "id"
+          ]
+        ],
+        "uq_official_game": [
+          true,
+          [
+            "environment_id",
+            "group_id",
+            "game_key"
+          ]
+        ],
+        "ix_official_user": [
+          false,
+          [
+            "environment_id",
+            "group_id",
+            "qq",
+            "state"
+          ]
+        ]
+      }
+    },
+    "bindings_qqofficial_ops": {
+      "columns": {
+        "operation_id": {
+          "data_type": "char",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 36,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "environment_id": {
+          "data_type": "char",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 36,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "group_id": {
+          "data_type": "varchar",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 64,
+          "collation_name": "utf8mb4_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "request_key": {
+          "data_type": "char",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 64,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "payload_hash": {
+          "data_type": "char",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 64,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "kind": {
+          "data_type": "varchar",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 16,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "actor_kind": {
+          "data_type": "varchar",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 16,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "actor_id": {
+          "data_type": "varchar",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 64,
+          "collation_name": "utf8mb4_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "target_user_id": {
+          "data_type": "varchar",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 64,
+          "collation_name": "utf8mb4_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "original_server_id": {
+          "data_type": "char",
+          "unsigned": false,
+          "nullable": true,
+          "char_length": 36,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "token_generation": {
+          "data_type": "char",
+          "unsigned": false,
+          "nullable": true,
+          "char_length": 36,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "reservation_id": {
+          "data_type": "char",
+          "unsigned": false,
+          "nullable": true,
+          "char_length": 36,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "policy_revision": {
+          "data_type": "bigint",
+          "unsigned": true,
+          "nullable": false,
+          "char_length": null,
+          "collation_name": null,
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "intent": {
+          "data_type": "json",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": null,
+          "collation_name": null,
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "nickname_basis": {
+          "data_type": "json",
+          "unsigned": false,
+          "nullable": true,
+          "char_length": null,
+          "collation_name": null,
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "state": {
+          "data_type": "varchar",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": 16,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "result_code": {
+          "data_type": "varchar",
+          "unsigned": false,
+          "nullable": true,
+          "char_length": 32,
+          "collation_name": "ascii_bin",
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "effects": {
+          "data_type": "json",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": null,
+          "collation_name": null,
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "followup": {
+          "data_type": "json",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": null,
+          "collation_name": null,
+          "datetime_precision": null,
+          "auto_increment": false
+        },
+        "next_attempt_at": {
+          "data_type": "datetime",
+          "unsigned": false,
+          "nullable": true,
+          "char_length": null,
+          "collation_name": null,
+          "datetime_precision": 6,
+          "auto_increment": false
+        },
+        "created_at": {
+          "data_type": "datetime",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": null,
+          "collation_name": null,
+          "datetime_precision": 6,
+          "auto_increment": false
+        },
+        "updated_at": {
+          "data_type": "datetime",
+          "unsigned": false,
+          "nullable": false,
+          "char_length": null,
+          "collation_name": null,
+          "datetime_precision": 6,
+          "auto_increment": false
+        }
+      },
+      "indexes": {
+        "PRIMARY": [
+          true,
+          [
+            "operation_id"
+          ]
+        ],
+        "uq_official_request": [
+          true,
+          [
+            "environment_id",
+            "request_key"
+          ]
+        ],
+        "uq_official_token": [
+          true,
+          [
+            "environment_id",
+            "original_server_id",
+            "token_generation"
+          ]
+        ],
+        "ix_official_pending": [
+          false,
+          [
+            "environment_id",
+            "state",
+            "next_attempt_at"
+          ]
+        ],
+        "ix_official_actor": [
+          false,
+          [
+            "environment_id",
+            "group_id",
+            "actor_id",
+            "created_at"
+          ]
+        ]
+      }
+    }
+  },
+  "metadata": {
+    "tables": [
+      {
+        "table_name": "bindings_qqofficial",
+        "table_type": "BASE TABLE",
+        "engine": "InnoDB",
+        "table_collation": "utf8mb4_bin"
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "table_type": "BASE TABLE",
+        "engine": "InnoDB",
+        "table_collation": "utf8mb4_bin"
+      }
+    ],
+    "columns": [
+      {
+        "table_name": "bindings_qqofficial",
+        "column_name": "id",
+        "data_type": "bigint",
+        "column_type": "bigint unsigned",
+        "is_nullable": "NO",
+        "char_length": null,
+        "collation_name": null,
+        "datetime_precision": null,
+        "extra": "auto_increment"
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "column_name": "environment_id",
+        "data_type": "char",
+        "column_type": "char",
+        "is_nullable": "NO",
+        "char_length": 36,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "column_name": "group_id",
+        "data_type": "varchar",
+        "column_type": "varchar",
+        "is_nullable": "NO",
+        "char_length": 64,
+        "collation_name": "utf8mb4_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "column_name": "game_key",
+        "data_type": "varchar",
+        "column_type": "varchar",
+        "is_nullable": "NO",
+        "char_length": 16,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "column_name": "game_id",
+        "data_type": "varchar",
+        "column_type": "varchar",
+        "is_nullable": "NO",
+        "char_length": 64,
+        "collation_name": "utf8mb4_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "column_name": "qq",
+        "data_type": "varchar",
+        "column_type": "varchar",
+        "is_nullable": "NO",
+        "char_length": 64,
+        "collation_name": "utf8mb4_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "column_name": "state",
+        "data_type": "varchar",
+        "column_type": "varchar",
+        "is_nullable": "NO",
+        "char_length": 16,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "column_name": "revision",
+        "data_type": "bigint",
+        "column_type": "bigint unsigned",
+        "is_nullable": "NO",
+        "char_length": null,
+        "collation_name": null,
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "column_name": "last_operation_id",
+        "data_type": "char",
+        "column_type": "char",
+        "is_nullable": "NO",
+        "char_length": 36,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "column_name": "bind_time",
+        "data_type": "datetime",
+        "column_type": "datetime",
+        "is_nullable": "NO",
+        "char_length": null,
+        "collation_name": null,
+        "datetime_precision": 6,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "column_name": "updated_at",
+        "data_type": "datetime",
+        "column_type": "datetime",
+        "is_nullable": "NO",
+        "char_length": null,
+        "collation_name": null,
+        "datetime_precision": 6,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "operation_id",
+        "data_type": "char",
+        "column_type": "char",
+        "is_nullable": "NO",
+        "char_length": 36,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "environment_id",
+        "data_type": "char",
+        "column_type": "char",
+        "is_nullable": "NO",
+        "char_length": 36,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "group_id",
+        "data_type": "varchar",
+        "column_type": "varchar",
+        "is_nullable": "NO",
+        "char_length": 64,
+        "collation_name": "utf8mb4_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "request_key",
+        "data_type": "char",
+        "column_type": "char",
+        "is_nullable": "NO",
+        "char_length": 64,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "payload_hash",
+        "data_type": "char",
+        "column_type": "char",
+        "is_nullable": "NO",
+        "char_length": 64,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "kind",
+        "data_type": "varchar",
+        "column_type": "varchar",
+        "is_nullable": "NO",
+        "char_length": 16,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "actor_kind",
+        "data_type": "varchar",
+        "column_type": "varchar",
+        "is_nullable": "NO",
+        "char_length": 16,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "actor_id",
+        "data_type": "varchar",
+        "column_type": "varchar",
+        "is_nullable": "NO",
+        "char_length": 64,
+        "collation_name": "utf8mb4_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "target_user_id",
+        "data_type": "varchar",
+        "column_type": "varchar",
+        "is_nullable": "NO",
+        "char_length": 64,
+        "collation_name": "utf8mb4_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "original_server_id",
+        "data_type": "char",
+        "column_type": "char",
+        "is_nullable": "YES",
+        "char_length": 36,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "token_generation",
+        "data_type": "char",
+        "column_type": "char",
+        "is_nullable": "YES",
+        "char_length": 36,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "reservation_id",
+        "data_type": "char",
+        "column_type": "char",
+        "is_nullable": "YES",
+        "char_length": 36,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "policy_revision",
+        "data_type": "bigint",
+        "column_type": "bigint unsigned",
+        "is_nullable": "NO",
+        "char_length": null,
+        "collation_name": null,
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "intent",
+        "data_type": "json",
+        "column_type": "json",
+        "is_nullable": "NO",
+        "char_length": null,
+        "collation_name": null,
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "nickname_basis",
+        "data_type": "json",
+        "column_type": "json",
+        "is_nullable": "YES",
+        "char_length": null,
+        "collation_name": null,
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "state",
+        "data_type": "varchar",
+        "column_type": "varchar",
+        "is_nullable": "NO",
+        "char_length": 16,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "result_code",
+        "data_type": "varchar",
+        "column_type": "varchar",
+        "is_nullable": "YES",
+        "char_length": 32,
+        "collation_name": "ascii_bin",
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "effects",
+        "data_type": "json",
+        "column_type": "json",
+        "is_nullable": "NO",
+        "char_length": null,
+        "collation_name": null,
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "followup",
+        "data_type": "json",
+        "column_type": "json",
+        "is_nullable": "NO",
+        "char_length": null,
+        "collation_name": null,
+        "datetime_precision": null,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "next_attempt_at",
+        "data_type": "datetime",
+        "column_type": "datetime",
+        "is_nullable": "YES",
+        "char_length": null,
+        "collation_name": null,
+        "datetime_precision": 6,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "created_at",
+        "data_type": "datetime",
+        "column_type": "datetime",
+        "is_nullable": "NO",
+        "char_length": null,
+        "collation_name": null,
+        "datetime_precision": 6,
+        "extra": ""
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "column_name": "updated_at",
+        "data_type": "datetime",
+        "column_type": "datetime",
+        "is_nullable": "NO",
+        "char_length": null,
+        "collation_name": null,
+        "datetime_precision": 6,
+        "extra": ""
+      }
+    ],
+    "indexes": [
+      {
+        "table_name": "bindings_qqofficial",
+        "index_name": "PRIMARY",
+        "non_unique": 0,
+        "seq_in_index": 1,
+        "column_name": "id",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "index_name": "uq_official_game",
+        "non_unique": 0,
+        "seq_in_index": 1,
+        "column_name": "environment_id",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "index_name": "uq_official_game",
+        "non_unique": 0,
+        "seq_in_index": 2,
+        "column_name": "group_id",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "index_name": "uq_official_game",
+        "non_unique": 0,
+        "seq_in_index": 3,
+        "column_name": "game_key",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "index_name": "ix_official_user",
+        "non_unique": 1,
+        "seq_in_index": 1,
+        "column_name": "environment_id",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "index_name": "ix_official_user",
+        "non_unique": 1,
+        "seq_in_index": 2,
+        "column_name": "group_id",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "index_name": "ix_official_user",
+        "non_unique": 1,
+        "seq_in_index": 3,
+        "column_name": "qq",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial",
+        "index_name": "ix_official_user",
+        "non_unique": 1,
+        "seq_in_index": 4,
+        "column_name": "state",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "index_name": "PRIMARY",
+        "non_unique": 0,
+        "seq_in_index": 1,
+        "column_name": "operation_id",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "index_name": "uq_official_request",
+        "non_unique": 0,
+        "seq_in_index": 1,
+        "column_name": "environment_id",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "index_name": "uq_official_request",
+        "non_unique": 0,
+        "seq_in_index": 2,
+        "column_name": "request_key",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "index_name": "uq_official_token",
+        "non_unique": 0,
+        "seq_in_index": 1,
+        "column_name": "environment_id",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "index_name": "uq_official_token",
+        "non_unique": 0,
+        "seq_in_index": 2,
+        "column_name": "original_server_id",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "index_name": "uq_official_token",
+        "non_unique": 0,
+        "seq_in_index": 3,
+        "column_name": "token_generation",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "index_name": "ix_official_pending",
+        "non_unique": 1,
+        "seq_in_index": 1,
+        "column_name": "environment_id",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "index_name": "ix_official_pending",
+        "non_unique": 1,
+        "seq_in_index": 2,
+        "column_name": "state",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "index_name": "ix_official_pending",
+        "non_unique": 1,
+        "seq_in_index": 3,
+        "column_name": "next_attempt_at",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "index_name": "ix_official_actor",
+        "non_unique": 1,
+        "seq_in_index": 1,
+        "column_name": "environment_id",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "index_name": "ix_official_actor",
+        "non_unique": 1,
+        "seq_in_index": 2,
+        "column_name": "group_id",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "index_name": "ix_official_actor",
+        "non_unique": 1,
+        "seq_in_index": 3,
+        "column_name": "actor_id",
+        "sub_part": null
+      },
+      {
+        "table_name": "bindings_qqofficial_ops",
+        "index_name": "ix_official_actor",
+        "non_unique": 1,
+        "seq_in_index": 4,
+        "column_name": "created_at",
+        "sub_part": null
+      }
+    ],
+    "session": {
+      "sql_mode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+      "time_zone": "+00:00",
+      "character_set_connection": "utf8mb4"
+    }
+  },
+  "canonical_cases": [
+    {
+      "name": "prepared",
+      "intent": {
+        "environment_id": "11111111-1111-4111-8111-111111111111",
+        "group_id": "SYNTHETIC_GROUP_A",
+        "actor_kind": "qq_member",
+        "actor_id": "SYNTHETIC_USER_A",
+        "user_id": "SYNTHETIC_USER_A",
+        "server_id": "33333333-3333-4333-8333-333333333333",
+        "token_generation": "44444444-4444-4444-8444-444444444444",
+        "policy_revision": "1",
+        "kind": "bind",
+        "intent": {
+          "authorization": {
+            "policy_revision": "1",
+            "scope": "self"
+          },
+          "game_id": "Player_A",
+          "game_key": "player_a",
+          "target_server_ids": [
+            "33333333-3333-4333-8333-333333333333"
+          ]
+        },
+        "nickname_basis": null
+      },
+      "canonical": "{\"actor_id\":\"SYNTHETIC_USER_A\",\"actor_kind\":\"qq_member\",\"environment_id\":\"11111111-1111-4111-8111-111111111111\",\"group_id\":\"SYNTHETIC_GROUP_A\",\"intent\":{\"authorization\":{\"policy_revision\":\"1\",\"scope\":\"self\"},\"game_id\":\"Player_A\",\"game_key\":\"player_a\",\"target_server_ids\":[\"33333333-3333-4333-8333-333333333333\"]},\"kind\":\"bind\",\"nickname_basis\":null,\"policy_revision\":\"1\",\"server_id\":\"33333333-3333-4333-8333-333333333333\",\"token_generation\":\"44444444-4444-4444-8444-444444444444\",\"user_id\":\"SYNTHETIC_USER_A\"}",
+      "payload_hash": "851de30c02c6ea63a513c658a871690dc6fe521279aa7c40259c7ab2d49de86b"
+    },
+    {
+      "name": "unbind_prepared",
+      "intent": {
+        "environment_id": "11111111-1111-4111-8111-111111111111",
+        "group_id": "SYNTHETIC_GROUP_A",
+        "actor_kind": "qq_member",
+        "actor_id": "SYNTHETIC_USER_A",
+        "user_id": "SYNTHETIC_USER_A",
+        "server_id": null,
+        "token_generation": null,
+        "policy_revision": "1",
+        "kind": "unbind_game",
+        "intent": {
+          "authorization": {
+            "policy_revision": "1",
+            "scope": "self"
+          },
+          "target_server_ids": [
+            "33333333-3333-4333-8333-333333333333"
+          ],
+          "targets": [
+            {
+              "expected_revision": "1",
+              "game_key": "player_a"
+            }
+          ]
+        },
+        "nickname_basis": null
+      },
+      "canonical": "{\"actor_id\":\"SYNTHETIC_USER_A\",\"actor_kind\":\"qq_member\",\"environment_id\":\"11111111-1111-4111-8111-111111111111\",\"group_id\":\"SYNTHETIC_GROUP_A\",\"intent\":{\"authorization\":{\"policy_revision\":\"1\",\"scope\":\"self\"},\"target_server_ids\":[\"33333333-3333-4333-8333-333333333333\"],\"targets\":[{\"expected_revision\":\"1\",\"game_key\":\"player_a\"}]},\"kind\":\"unbind_game\",\"nickname_basis\":null,\"policy_revision\":\"1\",\"server_id\":null,\"token_generation\":null,\"user_id\":\"SYNTHETIC_USER_A\"}",
+      "payload_hash": "6b69756eba44b9367c0d2498d1fb6ae2d45a7c7b3d3dc3517a98003f90b5d8c0"
+    },
+    {
+      "name": "unicode_and_max_revision",
+      "intent": {
+        "environment_id": "11111111-1111-4111-8111-111111111111",
+        "group_id": "SYNTHETIC_GROUP_A",
+        "actor_kind": "qq_member",
+        "actor_id": "SYNTHETIC_中文_💠_<>&",
+        "user_id": "SYNTHETIC_中文_💠_<>&",
+        "server_id": "33333333-3333-4333-8333-333333333333",
+        "token_generation": "44444444-4444-4444-8444-444444444444",
+        "policy_revision": "9223372036854775807",
+        "kind": "bind",
+        "intent": {
+          "authorization": {
+            "policy_revision": "9223372036854775807",
+            "scope": "self"
+          },
+          "game_id": "Player_A",
+          "game_key": "player_a",
+          "target_server_ids": [
+            "33333333-3333-4333-8333-333333333333"
+          ]
+        },
+        "nickname_basis": {
+          "game_key": "player_b",
+          "expected_revision": "9223372036854775807"
+        }
+      },
+      "canonical": "{\"actor_id\":\"SYNTHETIC_中文_💠_<>&\",\"actor_kind\":\"qq_member\",\"environment_id\":\"11111111-1111-4111-8111-111111111111\",\"group_id\":\"SYNTHETIC_GROUP_A\",\"intent\":{\"authorization\":{\"policy_revision\":\"9223372036854775807\",\"scope\":\"self\"},\"game_id\":\"Player_A\",\"game_key\":\"player_a\",\"target_server_ids\":[\"33333333-3333-4333-8333-333333333333\"]},\"kind\":\"bind\",\"nickname_basis\":{\"expected_revision\":\"9223372036854775807\",\"game_key\":\"player_b\"},\"policy_revision\":\"9223372036854775807\",\"server_id\":\"33333333-3333-4333-8333-333333333333\",\"token_generation\":\"44444444-4444-4444-8444-444444444444\",\"user_id\":\"SYNTHETIC_中文_💠_<>&\"}",
+      "payload_hash": "cfa2e63d4e374a1490a8ad2238aef248314259f1dec6971c8dbe5d4838d86247"
+    }
+  ],
+  "codec": {
+    "value": {
+      "value": "SYNTHETIC_\"\\\b\f\n\r\t\u0000  💠",
+      "empty": [],
+      "missing": null
+    },
+    "canonical": "{\"empty\":[],\"missing\":null,\"value\":\"SYNTHETIC_\\\"\\\\\\b\\f\\n\\r\\t\\u0000  💠\"}",
+    "payload_hash": "3b4ec2f2b2193718007e60341df216a4905719e697db2902bf4ea45ee8d3c363"
+  },
+  "operations": [
+    {
+      "name": "prepared",
+      "row": {
+        "operation_id": "66666666-6666-4666-8666-666666666666",
+        "environment_id": "11111111-1111-4111-8111-111111111111",
+        "group_id": "SYNTHETIC_GROUP_A",
+        "request_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "payload_hash": "851de30c02c6ea63a513c658a871690dc6fe521279aa7c40259c7ab2d49de86b",
+        "kind": "bind",
+        "actor_kind": "qq_member",
+        "actor_id": "SYNTHETIC_USER_A",
+        "target_user_id": "SYNTHETIC_USER_A",
+        "original_server_id": "33333333-3333-4333-8333-333333333333",
+        "token_generation": "44444444-4444-4444-8444-444444444444",
+        "reservation_id": null,
+        "policy_revision": "1",
+        "intent": {
+          "authorization": {
+            "policy_revision": "1",
+            "scope": "self"
+          },
+          "game_id": "Player_A",
+          "game_key": "player_a",
+          "target_server_ids": [
+            "33333333-3333-4333-8333-333333333333"
+          ]
+        },
+        "nickname_basis": null,
+        "state": "PREPARED",
+        "result_code": "PREPARED",
+        "effects": [],
+        "followup": {
+          "delivery": {},
+          "token_finalize": null
+        },
+        "next_attempt_at": null,
+        "created_at": "2026-11-18 00:00:00.000000",
+        "updated_at": "2026-11-18 00:00:00.000000"
+      }
+    },
+    {
+      "name": "reservation_pending",
+      "row": {
+        "operation_id": "66666666-6666-4666-8666-666666666666",
+        "environment_id": "11111111-1111-4111-8111-111111111111",
+        "group_id": "SYNTHETIC_GROUP_A",
+        "request_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "payload_hash": "851de30c02c6ea63a513c658a871690dc6fe521279aa7c40259c7ab2d49de86b",
+        "kind": "bind",
+        "actor_kind": "qq_member",
+        "actor_id": "SYNTHETIC_USER_A",
+        "target_user_id": "SYNTHETIC_USER_A",
+        "original_server_id": "33333333-3333-4333-8333-333333333333",
+        "token_generation": "44444444-4444-4444-8444-444444444444",
+        "reservation_id": null,
+        "policy_revision": "1",
+        "intent": {
+          "authorization": {
+            "policy_revision": "1",
+            "scope": "self"
+          },
+          "game_id": "Player_A",
+          "game_key": "player_a",
+          "target_server_ids": [
+            "33333333-3333-4333-8333-333333333333"
+          ]
+        },
+        "nickname_basis": null,
+        "state": "PREPARED",
+        "result_code": "PREPARED",
+        "effects": [],
+        "followup": {
+          "delivery": {},
+          "token_finalize": null,
+          "token_reservation": {
+            "reservation_id": null,
+            "state": "PENDING",
+            "token_generation": "44444444-4444-4444-8444-444444444444"
+          }
+        },
+        "next_attempt_at": "2026-11-18 00:00:00.000000",
+        "created_at": "2026-11-18 00:00:00.000000",
+        "updated_at": "2026-11-18 00:00:00.000000"
+      }
+    },
+    {
+      "name": "reserved",
+      "row": {
+        "operation_id": "66666666-6666-4666-8666-666666666666",
+        "environment_id": "11111111-1111-4111-8111-111111111111",
+        "group_id": "SYNTHETIC_GROUP_A",
+        "request_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "payload_hash": "851de30c02c6ea63a513c658a871690dc6fe521279aa7c40259c7ab2d49de86b",
+        "kind": "bind",
+        "actor_kind": "qq_member",
+        "actor_id": "SYNTHETIC_USER_A",
+        "target_user_id": "SYNTHETIC_USER_A",
+        "original_server_id": "33333333-3333-4333-8333-333333333333",
+        "token_generation": "44444444-4444-4444-8444-444444444444",
+        "reservation_id": "99999999-9999-4999-8999-999999999999",
+        "policy_revision": "1",
+        "intent": {
+          "authorization": {
+            "policy_revision": "1",
+            "scope": "self"
+          },
+          "game_id": "Player_A",
+          "game_key": "player_a",
+          "target_server_ids": [
+            "33333333-3333-4333-8333-333333333333"
+          ]
+        },
+        "nickname_basis": null,
+        "state": "RESERVED",
+        "result_code": "RESERVED",
+        "effects": [],
+        "followup": {
+          "delivery": {},
+          "token_finalize": null
+        },
+        "next_attempt_at": "2026-11-18 00:00:00.000000",
+        "created_at": "2026-11-18 00:00:00.000000",
+        "updated_at": "2026-11-18 00:00:00.000000"
+      }
+    },
+    {
+      "name": "committed",
+      "row": {
+        "operation_id": "66666666-6666-4666-8666-666666666666",
+        "environment_id": "11111111-1111-4111-8111-111111111111",
+        "group_id": "SYNTHETIC_GROUP_A",
+        "request_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "payload_hash": "851de30c02c6ea63a513c658a871690dc6fe521279aa7c40259c7ab2d49de86b",
+        "kind": "bind",
+        "actor_kind": "qq_member",
+        "actor_id": "SYNTHETIC_USER_A",
+        "target_user_id": "SYNTHETIC_USER_A",
+        "original_server_id": "33333333-3333-4333-8333-333333333333",
+        "token_generation": "44444444-4444-4444-8444-444444444444",
+        "reservation_id": "99999999-9999-4999-8999-999999999999",
+        "policy_revision": "1",
+        "intent": {
+          "authorization": {
+            "policy_revision": "1",
+            "scope": "self"
+          },
+          "game_id": "Player_A",
+          "game_key": "player_a",
+          "target_server_ids": [
+            "33333333-3333-4333-8333-333333333333"
+          ]
+        },
+        "nickname_basis": null,
+        "state": "COMMITTED",
+        "result_code": "SYNC_PENDING",
+        "effects": [
+          {
+            "game_id": "Player_A",
+            "game_key": "player_a",
+            "revision": "1",
+            "state": "active",
+            "user_id": "SYNTHETIC_USER_A"
+          }
+        ],
+        "followup": {
+          "delivery": {
+            "33333333-3333-4333-8333-333333333333": {
+              "effects": {
+                "player_a": {
+                  "effective_revision": null,
+                  "mirror": "PENDING",
+                  "online": "PENDING",
+                  "requested_revision": "1",
+                  "whitelist": "PENDING"
+                }
+              },
+              "mirror": "PENDING",
+              "online": "PENDING",
+              "whitelist": "PENDING"
+            }
+          },
+          "token_finalize": {
+            "decision": "COMMITTED",
+            "reservation_id": "99999999-9999-4999-8999-999999999999",
+            "state": "PENDING",
+            "token_generation": "44444444-4444-4444-8444-444444444444"
+          }
+        },
+        "next_attempt_at": "2026-11-18 00:00:00.000000",
+        "created_at": "2026-11-18 00:00:00.000000",
+        "updated_at": "2026-11-18 00:00:00.000000"
+      }
+    },
+    {
+      "name": "unbind_prepared",
+      "row": {
+        "operation_id": "77777777-7777-4777-8777-777777777777",
+        "environment_id": "11111111-1111-4111-8111-111111111111",
+        "group_id": "SYNTHETIC_GROUP_A",
+        "request_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "payload_hash": "6b69756eba44b9367c0d2498d1fb6ae2d45a7c7b3d3dc3517a98003f90b5d8c0",
+        "kind": "unbind_game",
+        "actor_kind": "qq_member",
+        "actor_id": "SYNTHETIC_USER_A",
+        "target_user_id": "SYNTHETIC_USER_A",
+        "original_server_id": null,
+        "token_generation": null,
+        "reservation_id": null,
+        "policy_revision": "1",
+        "intent": {
+          "authorization": {
+            "policy_revision": "1",
+            "scope": "self"
+          },
+          "target_server_ids": [
+            "33333333-3333-4333-8333-333333333333"
+          ],
+          "targets": [
+            {
+              "expected_revision": "1",
+              "game_key": "player_a"
+            }
+          ]
+        },
+        "nickname_basis": null,
+        "state": "PREPARED",
+        "result_code": "PREPARED",
+        "effects": [],
+        "followup": {
+          "delivery": {},
+          "token_finalize": null
+        },
+        "next_attempt_at": null,
+        "created_at": "2026-11-18 00:00:00.000000",
+        "updated_at": "2026-11-18 00:00:00.000000"
+      }
+    },
+    {
+      "name": "unbind_committed",
+      "row": {
+        "operation_id": "77777777-7777-4777-8777-777777777777",
+        "environment_id": "11111111-1111-4111-8111-111111111111",
+        "group_id": "SYNTHETIC_GROUP_A",
+        "request_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "payload_hash": "6b69756eba44b9367c0d2498d1fb6ae2d45a7c7b3d3dc3517a98003f90b5d8c0",
+        "kind": "unbind_game",
+        "actor_kind": "qq_member",
+        "actor_id": "SYNTHETIC_USER_A",
+        "target_user_id": "SYNTHETIC_USER_A",
+        "original_server_id": null,
+        "token_generation": null,
+        "reservation_id": null,
+        "policy_revision": "1",
+        "intent": {
+          "authorization": {
+            "policy_revision": "1",
+            "scope": "self"
+          },
+          "target_server_ids": [
+            "33333333-3333-4333-8333-333333333333"
+          ],
+          "targets": [
+            {
+              "expected_revision": "1",
+              "game_key": "player_a"
+            }
+          ]
+        },
+        "nickname_basis": null,
+        "state": "COMMITTED",
+        "result_code": "SYNC_PENDING",
+        "effects": [
+          {
+            "game_id": "Player_A",
+            "game_key": "player_a",
+            "revision": "2",
+            "state": "revoked",
+            "user_id": "SYNTHETIC_USER_A"
+          }
+        ],
+        "followup": {
+          "delivery": {
+            "33333333-3333-4333-8333-333333333333": {
+              "effects": {
+                "player_a": {
+                  "effective_revision": null,
+                  "mirror": "PENDING",
+                  "online": "PENDING",
+                  "requested_revision": "2",
+                  "whitelist": "PENDING"
+                }
+              },
+              "mirror": "PENDING",
+              "online": "PENDING",
+              "whitelist": "PENDING"
+            }
+          },
+          "token_finalize": null
+        },
+        "next_attempt_at": "2026-11-18 00:00:00.000000",
+        "created_at": "2026-11-18 00:00:00.000000",
+        "updated_at": "2026-11-18 00:00:00.000000"
+      }
+    },
+    {
+      "name": "aborted",
+      "row": {
+        "operation_id": "88888888-8888-4888-8888-888888888888",
+        "environment_id": "11111111-1111-4111-8111-111111111111",
+        "group_id": "SYNTHETIC_GROUP_A",
+        "request_key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "payload_hash": "a1d1f6acc1c3613d560d3b4fe8ce3e8f7148e9885bebcd5f2cc504b41dc08a60",
+        "kind": "bind",
+        "actor_kind": "qq_member",
+        "actor_id": "SYNTHETIC_USER_A",
+        "target_user_id": "SYNTHETIC_USER_A",
+        "original_server_id": "33333333-3333-4333-8333-333333333333",
+        "token_generation": "55555555-5555-4555-8555-555555555555",
+        "reservation_id": null,
+        "policy_revision": "1",
+        "intent": {
+          "authorization": {
+            "policy_revision": "1",
+            "scope": "self"
+          },
+          "game_id": "Player_B",
+          "game_key": "player_b",
+          "target_server_ids": [
+            "33333333-3333-4333-8333-333333333333"
+          ]
+        },
+        "nickname_basis": null,
+        "state": "ABORTED",
+        "result_code": "OK",
+        "effects": [],
+        "followup": {
+          "delivery": {},
+          "token_finalize": {
+            "decision": "ABORTED",
+            "reservation_id": null,
+            "state": "PENDING",
+            "token_generation": "55555555-5555-4555-8555-555555555555"
+          }
+        },
+        "next_attempt_at": "2026-11-18 00:00:00.000000",
+        "created_at": "2026-11-18 00:00:00.000000",
+        "updated_at": "2026-11-18 00:00:00.000000"
+      }
+    }
+  ],
+  "mirror_snapshot": {
+    "rows": [
+      {
+        "game_id": "Player_A",
+        "game_key": "player_a",
+        "state": "revoked",
+        "revision": "2",
+        "user_id": "SYNTHETIC_USER_A",
+        "last_operation_id": "77777777-7777-4777-8777-777777777777"
+      },
+      {
+        "game_id": "Player_B",
+        "game_key": "player_b",
+        "state": "active",
+        "revision": "1",
+        "user_id": "SYNTHETIC_USER_A",
+        "last_operation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+      }
+    ],
+    "operations": [
+      {
+        "operation_id": "77777777-7777-4777-8777-777777777777",
+        "environment_id": "11111111-1111-4111-8111-111111111111",
+        "group_id": "SYNTHETIC_GROUP_A",
+        "request_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "payload_hash": "6b69756eba44b9367c0d2498d1fb6ae2d45a7c7b3d3dc3517a98003f90b5d8c0",
+        "kind": "unbind_game",
+        "actor_kind": "qq_member",
+        "actor_id": "SYNTHETIC_USER_A",
+        "target_user_id": "SYNTHETIC_USER_A",
+        "original_server_id": null,
+        "token_generation": null,
+        "reservation_id": null,
+        "policy_revision": "1",
+        "intent": {
+          "authorization": {
+            "policy_revision": "1",
+            "scope": "self"
+          },
+          "target_server_ids": [
+            "33333333-3333-4333-8333-333333333333"
+          ],
+          "targets": [
+            {
+              "expected_revision": "1",
+              "game_key": "player_a"
+            }
+          ]
+        },
+        "nickname_basis": null,
+        "state": "COMMITTED",
+        "result_code": "SYNC_PENDING",
+        "effects": [
+          {
+            "game_id": "Player_A",
+            "game_key": "player_a",
+            "revision": "2",
+            "state": "revoked",
+            "user_id": "SYNTHETIC_USER_A"
+          }
+        ],
+        "followup": {
+          "delivery": {
+            "33333333-3333-4333-8333-333333333333": {
+              "effects": {
+                "player_a": {
+                  "effective_revision": null,
+                  "mirror": "PENDING",
+                  "online": "PENDING",
+                  "requested_revision": "2",
+                  "whitelist": "PENDING"
+                }
+              },
+              "mirror": "PENDING",
+              "online": "PENDING",
+              "whitelist": "PENDING"
+            }
+          },
+          "token_finalize": null
+        },
+        "next_attempt_at": "2026-11-18 00:00:00.000000",
+        "created_at": "2026-11-18 00:00:00.000000",
+        "updated_at": "2026-11-18 00:00:00.000000"
+      },
+      {
+        "operation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "environment_id": "11111111-1111-4111-8111-111111111111",
+        "group_id": "SYNTHETIC_GROUP_A",
+        "request_key": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "payload_hash": "c592e1a7726e8c37e5ea8af78204ad5abd9072f6762165349ef8ef0f9f0247d3",
+        "kind": "bind",
+        "actor_kind": "qq_member",
+        "actor_id": "SYNTHETIC_USER_A",
+        "target_user_id": "SYNTHETIC_USER_A",
+        "original_server_id": "33333333-3333-4333-8333-333333333333",
+        "token_generation": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "reservation_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "policy_revision": "1",
+        "intent": {
+          "authorization": {
+            "policy_revision": "1",
+            "scope": "self"
+          },
+          "game_id": "Player_B",
+          "game_key": "player_b",
+          "target_server_ids": [
+            "33333333-3333-4333-8333-333333333333"
+          ]
+        },
+        "nickname_basis": null,
+        "state": "COMMITTED",
+        "result_code": "SYNC_PENDING",
+        "effects": [
+          {
+            "game_id": "Player_B",
+            "game_key": "player_b",
+            "revision": "1",
+            "state": "active",
+            "user_id": "SYNTHETIC_USER_A"
+          }
+        ],
+        "followup": {
+          "delivery": {
+            "33333333-3333-4333-8333-333333333333": {
+              "effects": {
+                "player_b": {
+                  "effective_revision": null,
+                  "mirror": "PENDING",
+                  "online": "PENDING",
+                  "requested_revision": "1",
+                  "whitelist": "PENDING"
+                }
+              },
+              "mirror": "PENDING",
+              "online": "PENDING",
+              "whitelist": "PENDING"
+            }
+          },
+          "token_finalize": {
+            "decision": "COMMITTED",
+            "reservation_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            "state": "PENDING",
+            "token_generation": "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+          }
+        },
+        "next_attempt_at": "2026-11-18 00:00:00.000000",
+        "created_at": "2026-11-18 00:00:00.000000",
+        "updated_at": "2026-11-18 00:00:00.000000"
+      }
+    ]
+  }
+}

@@ -1,5 +1,9 @@
 import { call, getBridge, type RawBridge } from "./bridge";
 import type {
+  ActivationSave,
+  ActivationStatus,
+  OfficialState,
+  OfficialOperationScope, OfficialOperationPage, OfficialOperationDetail, OfficialOperationAction,
   BatchPayload,
   BindRule,
   BindRulePayload,
@@ -45,6 +49,17 @@ function post<T>(endpoint: string, body?: unknown) {
 }
 
 export const api = {
+  activation: () => get<ActivationStatus>("activation"),
+  activationUpdate: (value: ActivationSave) => post<ActivationStatus>("activation/update", value),
+  officialState: (environment_id: string) => get<OfficialState>("official/state", { environment_id }),
+  officialUpdate: (body: Record<string, unknown>) => post<OfficialState>("official/update", body),
+  officialOperations: (scope: OfficialOperationScope, filter: "pending" | "all", cursor?: string) =>
+    get<OfficialOperationPage>("official/operations", { ...scope, filter, ...(cursor ? { cursor } : {}) }),
+  officialOperation: (scope: OfficialOperationScope, operation_id: string) =>
+    get<OfficialOperationDetail>("official/operation", { ...scope, operation_id }),
+  officialOperationAction: (scope: OfficialOperationScope, operation: OfficialOperationDetail, action: "retry" | "cancel") =>
+    post<OfficialOperationAction>("official/operation/action", { ...scope, operation_id: operation.operation_id,
+      expected_state: operation.state, payload_hash: operation.payload_hash, action, confirmed: true }),
   summary: () => get<SummaryPayload>("summary"),
   group: (gid: string) => get<GroupPayload>("group", { gid }),
   groupCreate: (gid: string) => post<GroupPayload>("group/create", { gid }),

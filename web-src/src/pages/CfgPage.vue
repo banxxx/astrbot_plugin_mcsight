@@ -8,6 +8,7 @@ import UiModal from "../components/UiModal.vue";
 import UiNotice from "../components/UiNotice.vue";
 import UiSecretInput from "../components/UiSecretInput.vue";
 import UiSwitch from "../components/UiSwitch.vue";
+import ActivationPanel from "../components/ActivationPanel.vue";
 import { S, configSaving, dirtyCount, discardDrafts, fail, loadConfig, loading, openDialog, saveDrafts } from "../store";
 import { useIsMobile } from "../lib/useMediaQuery";
 import type { ConfigItem } from "../lib/types";
@@ -99,6 +100,7 @@ const restartRequired = computed(() => S.cfgItems.some(it => it.key in S.cfgDraf
       <div><h1>全局参数</h1><p>{{ isMobile ? "保存后按提示重载插件" : "统一配置权限、模组连接、数据库和在线卡片。" }}</p></div>
       <UiButton v-if="!isMobile" kind="line" :disabled="!S.cfgItems.length" @click="openDialog('json-config')"><UiIcon name="braces" :size="16" />查看 JSON</UiButton>
     </section>
+    <ActivationPanel />
     <UiNotice tone="warn">修改后统一保存，再按提示重载插件生效。请避免同时在 AstrBot 原生表单中编辑。</UiNotice>
     <div v-if="loading && !S.cfgItems.length" class="cfg-loading" role="status"><UiIcon name="loader-circle" :size="18" />正在读取配置…</div>
     <section v-else-if="!S.cfgItems.length && S.error" class="cfg-loading" role="alert"><UiIcon name="circle-alert" :size="18" /><span>暂时无法读取配置</span><UiButton kind="line" @click="retryConfig">重新加载</UiButton></section>

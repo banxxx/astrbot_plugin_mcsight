@@ -39,7 +39,8 @@ from ..config.server_config import (
 )
 from ..config.whitelist_config import WhitelistManager
 from ..features.player_status.checker import query_one
-from ..utils import mod_http, platform_activation
+from ..utils import mod_http, platform_activation, official_runtime
+from ..utils.official_core import OfficialError
 from ..utils.bind_rule import validate as validate_bind_rule
 from ..utils.host_validator import normalize_host_input, validate_host
 from ..utils.plugin_paths import PLUGIN_NAME, sub_dir
@@ -189,6 +190,11 @@ def _parse_port(raw):
 # ---------- 群与服务器 ----------
 
 async def view_summary():
+    selection = platform_activation.status().get("selection") or {}
+    if selection.get("platform") == "qq_official":
+        return _ok({"groups": [], "max_servers_per_group": MAX_SERVERS_PER_GROUP,
+                    "plugin_version": _plugin_version(), "plugin_name": PLUGIN_NAME,
+                    "platform": "qq_official"})
     groups = []
     wm = WhitelistManager()
     for gid in _group_ids():
@@ -882,7 +888,8 @@ async def view_config():
     # 按分区顺序出条目：schema 的书写顺序与分区无关，直接沿用它会把同一个分区拆成好几张卡
     ordered = [k for _, _, keys in SECTIONS for k in keys if k in _schema]
     ordered += [k for k in known if k not in ordered]
-    items = [_config_item(k) for k in ordered]
+    # 选择在专用区域整组保存，旧字段只保留首次初始化兼容。
+    items = [_config_item(k) for k in ordered if k not in platform_activation.ACTIVE_KEYS]
     extra = [k for k in _plugin_config.keys() if k not in _schema]
     return _ok({
         "items": items,
@@ -899,6 +906,8 @@ async def view_config_update():
     if err:
         return _err(err)
     key = str(body.get("key", ""))
+    if key in platform_activation.ACTIVE_KEYS:
+        return _err("请在「生效机器人」区域统一保存平台、实例与环境；完整重启 AstrBot 后应用。")
     if key in SECRET_KEYS:
         return _err(f"{key} 是密钥，请用「更换密钥」单独设置")
     if key not in _schema:
@@ -1012,6 +1021,8 @@ async def view_plugin_reload():
 
     响应必须先发出去——reload() 会把正在处理本次请求的这个模块实例终止并替换。
     """
+    if platform_activation.status().get("pending_restart"):
+        return _err("生效机器人选择尚待应用，请安排完整重启 AstrBot；插件热重载不会切换实例。")
     pm = _plugin_manager()
     if pm is None or not hasattr(pm, "reload"):
         return _err("当前内核没给插件开放重载入口，请到面板的插件列表里手动重载。")
@@ -1036,6 +1047,132 @@ async def view_activation():
     return _ok(platform_activation.status())
 
 
+async def view_activation_update():
+    """仅保存公开选择记录，不读取/重写整个插件配置，也不切换运行中的实例。"""
+    body, err = await _body()
+    if err:
+        return _err(err)
+    try:
+        return _ok(platform_activation.save_selection(body))
+    except platform_activation.SelectionError as error:
+        return _err(str(error))
+
+
+async def view_official_state():
+    try:
+        environment = web_request.query.get("environment_id", "")
+        return _ok(official_runtime.current().state(environment))
+    except OfficialError as error:
+        return _err(str(error))
+
+
+async def view_official_update():
+    """框架鉴权后的后台入口。候选/群/环境始终交叉校验，不接收 actor 授权。"""
+    body, err = await _body()
+    if err:
+        return _err(err)
+    if set(body) - {"environment_id", "action", "candidate_id", "config_id", "expected_revision",
+                    "alias", "display_group", "changes", "role", "user_id", "token"}:
+        return _err("请求包含不支持的字段。")
+    try:
+        runtime = official_runtime.current()
+        environment = runtime.environment(body.get("environment_id"))
+        store = runtime.store
+        action = body.get("action")
+        if action == "approve":
+            store.approve(environment, body.get("candidate_id"), body.get("expected_revision"),
+                          body.get("alias"), body.get("display_group", ""))
+        elif action == "save":
+            changes = body.get("changes")
+            if isinstance(changes, dict) and isinstance(changes.get("servers"), list):
+                for server in changes["servers"]:
+                    if not isinstance(server, dict) or not isinstance(server.get("host"), str):
+                        raise OfficialError("服务器地址无效。")
+                    # 后台是框架已授权的配置入口；内网部署按原超管规则允许。
+                    if validate_host(server["host"], allow_private=True):
+                        raise OfficialError("服务器地址格式无效，请填写域名或标准 IPv4。")
+            store.update(environment, body.get("config_id"), body.get("expected_revision"), changes)
+        elif action == "authorize":
+            store.authorize(environment, body.get("config_id"), body.get("candidate_id"),
+                            body.get("role"), body.get("expected_revision"))
+        elif action == "revoke":
+            store.revoke(environment, body.get("config_id"), body.get("user_id"),
+                         body.get("expected_revision"), body.get("role"))
+        elif action == "token":
+            store.save_token(environment, body.get("token"))
+        else:
+            raise OfficialError("不支持的官方群配置操作。")
+        runtime.pages.clear()
+        return _ok(runtime.state(environment))
+    except OfficialError as error:
+        return _err(str(error))
+
+
+def _official_operation_query(optional=()):
+    """Registered framework plugin-scope route only; never accepts actor claims."""
+    values = dict(web_request.query)
+    required = {"environment_id", "config_id", "expected_revision"}
+    if not required <= set(values) or set(values) - required - set(optional) - {"server_id"}:
+        raise OfficialError("官方操作查询字段无效。")
+    revision = values["expected_revision"]
+    if not isinstance(revision, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", revision):
+        raise OfficialError("群配置修订无效。")
+    values["expected_revision"] = int(revision)
+    return values
+
+
+def _official_operation_result(runtime, scope, result):
+    runtime.binding_admin.validate_scope(scope["environment_id"], scope["config_id"], scope["expected_revision"])
+    return _ok(result)
+
+
+async def view_official_operations():
+    try:
+        values = _official_operation_query(("filter", "cursor"))
+        mode = values.pop("filter", "pending")
+        if mode not in ("pending", "all"):
+            raise OfficialError("操作筛选无效。")
+        cursor = values.pop("cursor", None)
+        runtime = official_runtime.current()
+        result = await asyncio.to_thread(runtime.binding_admin.list, **values, pending=mode == "pending", cursor=cursor)
+        return _official_operation_result(runtime, values, result)
+    except OfficialError as error:
+        return _err(str(error))
+    except Exception:
+        return _err("官方操作查询暂不可用；不会读取旧绑定记录。")
+
+
+async def view_official_operation():
+    try:
+        values = _official_operation_query(("operation_id",))
+        operation_id = values.pop("operation_id", None)
+        runtime = official_runtime.current()
+        result = await asyncio.to_thread(runtime.binding_admin.inspect, **values, operation_id=operation_id)
+        return _official_operation_result(runtime, values, result)
+    except OfficialError as error:
+        return _err(str(error))
+    except Exception:
+        return _err("官方操作状态暂不可读取，请保留原操作编号。")
+
+
+async def view_official_operation_action():
+    body, error = await _body()
+    if error:
+        return _err(error)
+    required = {"environment_id", "config_id", "expected_revision", "operation_id",
+                "action", "expected_state", "payload_hash", "confirmed"}
+    if not required<=set(body) or set(body)-required-{"server_id"}:
+        return _err("恢复请求字段无效；不接受 actor、角色、验证码或新绑定意图。")
+    try:
+        runtime = official_runtime.current()
+        result = await asyncio.to_thread(runtime.binding_admin.act, **body)
+        return _official_operation_result(runtime, body, result)
+    except OfficialError as error:
+        return _err(str(error))
+    except Exception:
+        return _err("恢复结果待确认；请查询原操作，不要重复提交。")
+
+
 REMOTE_ROUTES = frozenset({
     "server/whitelist", "server/motd_preview", "server/remark_sync",
     "server/mod_state",
@@ -1053,6 +1190,12 @@ def _active_remote_handler(handler):
 
 ROUTES = (
     ("activation", view_activation, ["GET"], "读取生效机器人与实例列表"),
+    ("activation/update", view_activation_update, ["POST"], "整组保存生效机器人选择，完整重启后应用"),
+    ("official/state", view_official_state, ["GET"], "读取指定官方环境的登记与配置"),
+    ("official/update", view_official_update, ["POST"], "审核登记、保存官方独立配置与授权"),
+    ("official/operations", view_official_operations, ["GET"], "当前官方群操作摘要与范围分页"),
+    ("official/operation", view_official_operation, ["GET"], "查询原官方操作及分项待办"),
+    ("official/operation/action", view_official_operation_action, ["POST"], "确认后重查终态或中止未提交操作"),
     ("summary", view_summary, ["GET"], "群与服务器总览"),
     ("group", view_group, ["GET"], "读取单个群的配置"),
     ("group/create", view_group_create, ["POST"], "创建群配置文件"),
