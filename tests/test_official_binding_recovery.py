@@ -257,7 +257,7 @@ class RecoveryTests(unittest.TestCase):
 
 class RecoveryLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_starts_one_loop_and_stops_it_on_close(self):
-        fixture = prior.RuntimeTests("test_setup_registration_and_help_only_before_activation")
+        fixture = prior.RuntimeTests("test_setup_code_creates_group_and_help_only_before_activation")
         fixture.setUp()
         self.addCleanup(fixture.temp.cleanup)
         runtime = fixture.make_runtime()

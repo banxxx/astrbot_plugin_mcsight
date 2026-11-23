@@ -37,6 +37,7 @@ ENDPOINTS = {
     "bind": ("POST", frozenset({"operation_id", "request_key", "user_id", "game_id", "token_generation", "policy_revision", "nickname_basis", "actor", "authorization"}), frozenset({"token_code","resume","cancel","target_server_ids"}), True),
     "unbind": ("POST", frozenset({"operation_id", "request_key", "kind", "target_user_id", "targets", "actor", "authorization"}), frozenset({"cancel","target_server_ids"}), True),
     "command": ("POST", frozenset({"operation_id","request_key","action","payload","config_revision"}), frozenset(), True),
+    "settings/whitelist": ("POST", frozenset({"enabled"}), frozenset(), True),
 }
 
 
@@ -177,6 +178,8 @@ def _fields(endpoint, request):
                 or not request["payload"].strip() or len(request["payload"])>(200 if request["action"]=="console" else 1000)
                 or any(ord(c)<32 or ord(c)==127 for c in request["payload"])):
             raise BindingError("INVALID_INPUT","写命令内容无效。")
+    if endpoint=="settings/whitelist" and type(request["enabled"]) is not bool:
+        raise BindingError("INVALID_INPUT","登录开关必须为明确布尔值。")
     _json(request)
     return method, mutation, request
 
@@ -320,6 +323,13 @@ class V2ModClient:
                 raise TransportError("SCOPE_MISMATCH", "missing_scope", may_have_executed=mutation)
             if endpoint.startswith("operations/") and data.get("operation_id") != endpoint[len("operations/"):]:
                 raise TransportError("SCOPE_MISMATCH", "operation_id")
+            if endpoint == "settings/whitelist" and (
+                    set(data) != {"protocol_version", "scope", "enabled", "persisted",
+                                  "online_players", "released"}
+                    or type(data.get("enabled")) is not bool or type(data.get("persisted")) is not bool
+                    or any(type(data.get(name)) is not int or data[name] < 0
+                           for name in ("online_players", "released"))):
+                raise TransportError("SCHEMA_MISMATCH", "whitelist_reply", may_have_executed=mutation)
             return deepcopy(data)
         expected_status = {"PREPARED": (202,), "RESERVED": (202,), "RESULT_UNKNOWN": (202,),
             "UNAUTHORIZED": (401, 403), "SCOPE_MISMATCH": (404, 409), "CONFLICT": (200, 409),

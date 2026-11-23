@@ -63,6 +63,8 @@ AstrBot/data/plugins/astrbot_plugin_mcsight/
 绑定、TPS、玩家统计、广播这几项能力依赖 MC 侧的 **QQBindMod**。在每台服务器装好模组并开放 API 端口后，把端口写进服务器条目（`api_port`）即视为「已装模组」。
 
 - 未装模组的服务器仍然可以出现在列表里，`/在线` 会用 mcstatus 查询它，但 TPS / 统计 / 广播会跳过它。
+- QQ 官方模式下，旧接口仍只开放 `/api/status`、`/api/tps`、`/api/stats*` 等只读入口；新版模组额外提供 `POST /api/v2/binding/settings/whitelist`，配置页的「登录限制」可在线切换，立即生效、写回模组配置并重新校验在线玩家，无需重启服务器。旧版模组没有该接口时页面自动保持只读。官方绑定、控制台与广播继续走 `/api/v2/binding/*`，不受影响。
+- 官方模式要求模组 `apiToken` 至少 16 位可见 ASCII 字符。旧版官方环境里的 `qq_official/<环境UUID>/mod_token.json` 不再读取；升级前请把该值填入「公共参数 → `mod_api_token`」，并让所有 OneBot 模组的 `apiToken` 与它一致。
 - 下载地址见模组仓库 README。
 
 ### 5. 启用
@@ -73,7 +75,7 @@ AstrBot/data/plugins/astrbot_plugin_mcsight/
 
 ## ⚙️ 配置
 
-配置在 AstrBot WebUI 的插件配置面板中修改（落盘为 `data/config/astrbot_plugin_mcsight_config.json`）。
+配置在 AstrBot WebUI 的插件配置面板中修改（落盘为 `data/config/astrbot_plugin_mcwatcher_config.json`）。「全局参数」只保留两个平台共用的**公共参数**：模组 Token、权限名单与中心数据库连接；群主/管理员权限、卡片显示、OneBot 与 QQ 官方中心库开关都在「群与服务器」中按群设置。
 
 ### 生效机器人与完整重启
 
@@ -90,15 +92,15 @@ AstrBot/data/plugins/astrbot_plugin_mcsight/
 ### QQ 官方群：登记、查询与管理
 
 1. 在“全局参数 → 生效机器人”选定官方实例与应用环境，维护窗口完整重启 AstrBot。
-2. 在实际官方群向该机器人发送 `/mc setup [识别备注]`。只登记本群和发言者本人，不自动授予管理员权限，也不访问 MC。
-3. 打开插件页面的 **QQ 官方群**，选定对应应用环境，对照 QQ 客户端中的回执确认该群，填写别名与展示群号。
+2. 打开插件页面的 **QQ 官方群 → 新增群**，填写群别名（可选展示群号），点「生成验证码」。验证码只显示一次，5 分钟内有效。
+3. 在目标官方群发送 `/mc setup 验证码`。验证码一次性消费，消费后立即创建本群配置（默认未启用），弹窗会自动检测并关闭。
 4. 添加服务器主机、游戏端口和可选模组 API 端口。内网地址由后台管理员自行核对；独立配置不会自动导入旧 OneBot 群或绑定。
-5. 使用模组查询时，由用户在该环境的“模组连接”区域自行配置令牌；只写不回显。未装模组的服务器仍可用 mcstatus 查询在线状态。
+5. 在“全局参数 → 公共参数”配置 `mod_api_token`，与每台服务器模组里的 apiToken 完全一致；OneBot 与 QQ 官方共用。未装模组的服务器仍可用 mcstatus 查询在线状态。
 6. 启用本群功能后可使用 `/mc status [-s 名称]`、`/mc tps [-s 名称]`、`/mc stats 玩家名 [-s 名称]`、`/mc rank [类型] [总|周|月] -s 名称 [-n 1–50]`。公开统计不要求调用者先绑定；官方统计使用本环境独立的 30 日历史并复用六类统计图，历史积累足够时显示 7 日对比。官方本人排行按当前权威的有效账号关联，不会从旧 OneBot 绑定表推断身份。
 
 一轮只展示第一页，其它页发送 `/mc page <页码>`，缓存限本人、群、应用环境及配置修订，10 分钟失效。统计图完整单页输出；图片能力不可用或超过安全大小时返回分页文字。固定 AstrBot 4.29.1 事件族的本地图片载荷已核对公开源码，未知事件族继续文字降级。不会为发送图片把玩家数据上传到私人图床。合成测试覆盖本插件的单次 HTTP 调用与超时不重发；QQ 图片权限、限额及 WebSocket/Webhook 实际收发仍需用户环境验收。
 
-登记候选24小时过期。管理员在后台核对回执再授权；原生角色只取author.member_role，未知角色不提权，群昵称缺失不拿username代替。环境超管独立于群管理员，黑名单优先；退群、被踢或聊天黑名单不自动游戏解绑。`/mc bindhelp`说明官方重新绑定流程，不沿用OneBot QQ号或旧码。
+新增群验证码5分钟有效、用过即失效，同一验证码不能再次创建。创建配置不自动授予管理员权限；原生角色只取author.member_role，未知角色不提权，群昵称缺失不拿username代替。群主/管理员角色默认可作为管理命令使用者，黑名单优先；退群、被踢或聊天黑名单不自动游戏解绑。昵称检测忽略名单在群内使用 `/mc nicknamecheck 忽略 @成员` 管理。`/mc bindhelp`说明官方重新绑定流程，不沿用OneBot QQ号或旧码。
 
 本轮补齐以下源码入口（2026-11-20，尚未测试）：
 
@@ -119,31 +121,125 @@ AstrBot/data/plugins/astrbot_plugin_mcsight/
 
 提交 Git 时保留正式源码、`views/config/` 发布资源、`sql/`、`examples/`、交付/协议说明和核心回归测试。`.scratch/`、构建缓存、一次性图片/夹具生成脚本、本机专用执行器和开发过程记录已忽略。`tests/` 与离线 Vue 回归保留在仓库，通过 `.gitattributes` 从发布源码归档排除；测试夹具为虚构数据，插件测试无需相邻的 QQBindMod 工作目录。
 2026-11-20：F01–F05已修源码，包括统一API域名、member_role、上传file_name、err_code与异步审核分类、中心失败时本服预占查询分流；尚未测试。完整[OneBot功能对照及待验收清单](docs/QQ_OFFICIAL_TEST_CHECKLIST.md)记录已补能力和平台条件。
-### 权限与显示
+### 权限与显示（OneBot：群与服务器 → 本群规则）
+
+OneBot 的群主/管理员权限和卡片显示**按群**保存，统一放在 `policy` 对象里，字段名、类型、默认值与 QQ 官方的群对象完全一致。每个群一个目录、一个 `state.json`：
+
+`data/plugin_data/astrbot_plugin_mcsight/onebot/<群号>/state.json`
+
+```json
+{
+  "schema_version": 1,
+  "platform": "onebot",
+  "group_id": "123456789",
+  "enabled": true,
+  "servers": [],
+  "policy": {
+    "enable_group_owner": true,
+    "enable_group_admin": true,
+    "bind_require_nickname": true,
+    "bind_nickname_rule": "paren",
+    "bind_nickname_template": "",
+    "show_server_version": false,
+    "show_server_latency": true,
+    "show_last_online": false,
+    "nickname_check_enabled": true,
+    "use_central_db": false
+  },
+  "nickname_ignore": []
+}
+```
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `enable_group_owner` | bool | `true` | 群主是否可用管理功能 |
-| `enable_group_admin` | bool | `true` | 群管理员是否可用管理功能 |
-| `show_server_version` | bool | `false` | 状态卡片是否显示服务器版本 |
-| `show_server_latency` | bool | `false` | 状态卡片是否显示延迟 |
-| `super_admins` | list | `[]` | 插件超级管理员（QQ 号字符串），可管理白名单、可添加内网地址 |
-| `whitelist_admins` | list | `[]` | 白名单管理员，权限等同群管理员 |
-| `blacklist` | list | `[]` | 黑名单：所有命令一律拒绝 |
-| `default_group_id` | string | `""` | 仅当事件里取不到群号时兜底使用，通常留空 |
+| `enabled` | bool | `true` | 本群功能总开关；关闭后本群所有 OneBot 命令不再响应，后台每日采样也跳过本群 |
+| `policy.enable_group_owner` | bool | `true` | 本群群主是否可用管理功能 |
+| `policy.enable_group_admin` | bool | `true` | 本群群管理员是否可用管理功能 |
+| `policy.show_server_version` | bool | `false` | 本群状态卡片是否显示服务器版本 |
+| `policy.show_server_latency` | bool | `true` | 本群状态卡片是否显示延迟 |
+| `policy.show_last_online` | bool | `false` | 本群状态卡片是否显示上次在线时间 |
+| `policy.nickname_check_enabled` | bool | `true` | 本群是否允许 `/检测昵称` |
+| `policy.bind_require_nickname` | bool | `true` | 绑定时是否校验群名片 |
+| `policy.bind_nickname_rule` | string | `"paren"` | 群名片匹配方式：`paren` / `equals` / `contains` / `template` |
+| `policy.bind_nickname_template` | string | `""` | `template` 模式使用的模板，必须且只能包含一个 `{gameId}` |
+| `policy.use_central_db` | bool | `false` | 本群绑定是否使用中心数据库；连接参数仍取「公共参数」 |
+| `nickname_ignore` | list | `[]` | 昵称检测忽略的 QQ 号 |
 
-### 模组 API
+这是 2.0.0 的配置断代：旧全局群开关不再读取，也不会在 `_conf_schema.json` 中保留为隐藏兜底键。旧版 `group_configs/servers_<群号>.json` 会在插件启动时一次性迁移到 `onebot/<群号>/state.json`：`servers`、旧的群级开关、绑定昵称规则和忽略名单都会映射到新结构；旧文件保留不动，便于核对。迁移完成后运行时只读新目录；旧文件可以确认无误后自行删除。`default_group_id` 已完全移除，群号只从当前事件获取。
+
+切换中心库模式**不会自动迁移已有绑定**：本地切到中心后，玩家需要重新绑定或重新检测；中心切回本地后，读取的是各服模组自己的数据。切换前请先确认现有绑定数据。
+
+### 公共参数
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `mod_api_token` | string | `""` | 与模组配置里的 API Token **完全一致**，否则一律鉴权失败 |
+| `mod_api_token` | string | `""` | OneBot 与 QQ 官方共用；与模组配置里的 API Token **完全一致**，否则一律鉴权失败 |
+| `super_admins` | list | `[]` | 两个平台共用。可填 QQ 号或 openid；拥有插件全部管理权限 |
+| `whitelist_admins` | list | `[]` | 两个平台共用。可填 QQ 号或 openid；权限等同群主/群管理员 |
+| `blacklist` | list | `[]` | 两个平台共用。可填 QQ 号或 openid；名单内成员所有命令一律拒绝 |
+| `db_host` / `db_port` / `db_user` / `db_password` / `db_name` | - | - / `4000` / - / - / `qqbind_db` | 中心数据库公共连接参数（TiDB Serverless 需要 SSL，插件自带 `isrgrootx1.pem`）。OneBot 与 QQ 官方使用不同数据表，可共用同一个库 |
 
-### 中心数据库（可选）
+权限名单按平台各自的发送者 ID 精确匹配：OneBot 用 QQ 号，QQ 官方用 `member_openid`。同一份名单可以混填两种 ID，另一种平台的条目不会报错，也不会误匹配。格式校验：QQ 号必须是 5–12 位数字；openid 必须是 16–64 位英文字母或数字；中文、空格和其他符号会被拒绝。
+
+注意：QQ 官方的 `member_openid` 通常按群区分，同一个用户在不同官方群可能是不同 openid。因此全局名单里的 openid 主要在该群生效；需要跨群管理时，请逐群添加，或使用官方环境管理员/本群管理员。OneBot 的 QQ 号则天然跨群稳定。
+
+### QQ 官方群规则
+
+官方群不再有全局专用开关；群主/管理员权限、卡片显示和中心数据库启用都放到「群与服务器 → QQ 官方 → 本群规则」逐群设置。
+
+官方群「本群规则」中的字段与 OneBot 完全一致，使用同一个 `policy` 结构：启用中心数据库（本群）、允许群主使用管理功能、允许群管理员使用管理功能、显示服务器版本、显示服务器延迟、显示上次在线时间、昵称检测、绑定昵称规则。新建官方群的初始值为群主/管理员开启、版本关闭、延迟开启、昵称检测开启、中心数据库关闭，之后按群独立修改。官方 `state.json` 的 v1 文件会在首次读取时补齐缺失的 policy 字段并升到 v2，已有值保持不变。
+
+升级说明：旧版全局 `official_center_enabled` / `official_center_mode` 已删除。已有官方群在首次读取时按**中心数据库关闭**处理；需要继续使用中心库的群，请在「本群规则」中打开「启用中心数据库（本群）」，并按 [`sql/qq_official_v1.sql`](sql/qq_official_v1.sql) 建表。环境级 `qq_official/<环境UUID>/center_settings.json` 仍可作为高级覆盖，设置 `storage_mode` 和按服 `server_modes`。
+
+### 群配置存储布局与容量
+
+运行数据根：`data/plugin_data/astrbot_plugin_mcsight/`
+
+| 平台 | 路径 | 组织方式 |
+|------|------|----------|
+| OneBot | `onebot/<群号>/state.json` | **一个群一个目录、一个文件**，只含本群的 `servers` / `policy` / `nickname_ignore`；旧 `group_configs/servers_<群号>.json` 启动时自动迁移 |
+| QQ 官方 | `qq_official/<环境UUID>/state.json` | **一个环境一个原子文件**，内部 `groups` 数组保存该环境所有群，同时保存 `revision`、候选群、环境管理员和授权历史 |
+| QQ 官方 | `qq_official/<环境UUID>/console_tokens/<server_id>.json`<br>`qq_official/<环境UUID>/remarks/<server_id>.json` | 每服独立凭据 / 备注缓存，避免把明文 Token 写进群对象 |
+| QQ 官方 | `qq_official/<环境UUID>/setup_codes/`、`center_settings.json` | 一次性验证码、环境级中心库覆盖 |
+
+```text
+data/plugin_data/astrbot_plugin_mcsight/
+  onebot/
+    1072429487/
+      state.json
+  qq_official/
+    <环境UUID>/
+      state.json
+      console_tokens/
+      remarks/
+      setup_codes/
+      center_settings.json
+  group_configs/          # 旧版 OneBot 目录，只在升级时读取
+    servers_1072429487.json
+```
+
+两种平台的**目录不同是刻意的**，不是格式没统一：
+
+- 群对象的字段已经统一：`enabled`、`servers`、`policy`、`nickname_ignore`，`policy` 的字段名和默认值完全一致。
+- 官方 `state.json` 不只是群列表，它承担“环境级原子提交”：群配置、候选群、环境管理员、授权历史和 `revision` 必须在同一个文件里一次写入。把官方群拆成每群一个文件，就要引入跨文件事务；在官方群上限 100 个的规模下，单文件更简单、更不容易出现半写状态。
+- 不建议为了目录整齐把两边硬塞进同一个文件或同一个目录；那会破坏官方现有的原子语义，收益只是路径看起来一致。
+
+容量参考（按上限估算）：
+
+- OneBot：每群最多 20 台服务器，一份群文件约 7–8 KB，`json.loads` 约 0.04 ms。
+- QQ 官方：每环境最多 100 个群 × 每群 20 台服务器，`state.json` 约 0.8 MB，读取约 5 ms，内存深拷贝约 15 ms；当前实际文件只有约 5 KB。
+- 真正的耗时在模组/QQ API、数据库和图片生成，JSON 读写不是瓶颈。官方每次写群规则会重写整个环境 `state.json`，但在 100 群上限内仍远低于 8 MB 上限；如果以后官方群数量级远大于 100，再考虑按群拆文件或换 SQLite。
+
+### 中心数据库（公共连接 + 按群开关）
+
+连接参数放在「公共参数」，两个平台共用；启用开关都在「群与服务器 → 本群规则」：
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `use_central_db` | bool | `false` | 开启后绑定数据写入中心库并跨服共享；关闭则各服独立走模组 API |
-| `db_host` / `db_port` / `db_user` / `db_password` / `db_name` | - | - / `4000` / - / - / `qqbind_db` | MySQL / TiDB 连接参数（TiDB Serverless 需要 SSL，插件自带 `isrgrootx1.pem`） |
+| `use_central_db`（OneBot） | bool | `false` | 开启后本群绑定写入中心库并跨服共享；关闭则本群各服独立走模组 API |
+| `use_central_db`（QQ 官方） | bool | `false` | 开启后本群官方绑定写入官方中心表；关闭则使用模组本地存储 |
+
+`use_central_db` 只决定本群的读写路径，数据库连接池仍使用全局公共连接。OneBot 的 `bindings` 表本身带 `group_id`，不同群可以分别选择中心或本地。QQ 官方群开启后使用公共 `db_*` 连接，默认 `hybrid` 模式；环境级 `center_settings.json` 存在时完整覆盖全局默认值。该文件仍由用户自行维护，WebUI 不读取、不回显其中的连接信息。
 
 **两种模式的区别**
 
@@ -243,14 +339,14 @@ AstrBot/data/plugins/astrbot_plugin_mcsight/
 
 | 路径 | 内容 |
 |------|------|
-| `group_configs/servers_<群号>.json` | 每个群一份服务器列表（私聊用会话 ID 命名） |
+| `onebot/<群号>/state.json` | 每个群一份服务器列表与群规则（私聊用会话 ID 命名）；旧 `group_configs/servers_<群号>.json` 启动时自动迁移 |
 | `stats_snapshots.sqlite3` | 玩家统计每日快照，保留 30 天 |
 | `avatar_cache/` | 头像磁盘缓存，过期 7 天，另有一层内存缓存 |
 | `help_cache/` | `/帮助`、`/绑定帮助` 渲染出的 PNG；删掉文件即重新渲染 |
 
 | 路径 | 内容 |
 |------|------|
-| `AstrBot/data/config/astrbot_plugin_mcsight_config.json` | 插件配置（WebUI 面板写入） |
+| `AstrBot/data/config/astrbot_plugin_mcwatcher_config.json` | 插件配置（WebUI 面板写入） |
 | `resources/`（插件目录内） | 字体与默认皮肤，随仓库一起分发 |
 
 服务器条目格式：

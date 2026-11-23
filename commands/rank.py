@@ -114,11 +114,11 @@ def _resolve_target(servers: list, wm: WhitelistManager, server_name):
 
 
 async def _resolve_self_names(event: AstrMessageEvent, wm: WhitelistManager,
-                              target: dict, token: str) -> list:
+                              config: ConfigManager, target: dict, token: str) -> list:
     """查询者在本群绑定的游戏名；未绑定/查询失败返回空列表。"""
     qq = str(event.get_sender_id())
 
-    if wm.use_central_db:
+    if config.get_flag("use_central_db"):
         group_id = event.get_group_id()
         if not group_id:
             return []
@@ -325,7 +325,7 @@ async def handle_rank(event: AstrMessageEvent, config: ConfigManager,
         else:
             if data.get("truncated"):
                 logger.warning(f"[rank] {target['name']} 玩家数超过上限，结果已截断")
-            self_names = await _resolve_self_names(event, wm, target, token)
+            self_names = await _resolve_self_names(event, wm, config, target, token)
             doc = _build_doc(target["name"], type_label, window, n,
                              players, self_names)
 

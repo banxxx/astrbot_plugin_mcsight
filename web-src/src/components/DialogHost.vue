@@ -13,12 +13,14 @@ import UiSecretInput from "./UiSecretInput.vue";
 import UiSwitch from "./UiSwitch.vue";
 import {
   S,
+  activePlatform,
   api,
   closeDialog,
   dirtyCount,
   discardDrafts,
   loadGroup,
   loadSummary,
+  openDialog,
   reloadPlugin,
   run,
   saveDrafts,
@@ -27,7 +29,9 @@ import {
   type PageKey,
 } from "../store";
 import { ApiError } from "../lib/bridge";
-import type { ConfigItem, ServerEntry } from "../lib/types";
+import { aliasUnits, clipAlias, clipDigits } from "../lib/groupFields";
+import type { ConfigItem, RemarkRun, ServerEntry } from "../lib/types";
+import RemarkText from "./RemarkText.vue";
 
 const d = computed(() => S.dialog);
 const payload = computed(() => (d.value?.payload || {}) as Record<string, unknown>);
@@ -39,6 +43,7 @@ const srv = computed(() => {
   return servers.value.find((s) => s.name === srvKey.value) ?? snap;
 });
 const name = computed(() => d.value?.name || "");
+const officialMode = computed(() => payload.value.platform === "qq_official" || activePlatform.value === "qq_official");
 
 const f = reactive<Record<string, string>>({});
 const selected = reactive<Record<string, boolean>>({});
@@ -54,11 +59,35 @@ const clearTokenConfirm = ref(false);
 const listDraft = ref<string[]>([]);
 const fieldErrors = reactive<Record<string, string>>({});
 /* 添加服务器时的 MOTD 预取：只回显，不落盘；提交时随创建请求一起写入缓存 */
-const motdPreview = reactive({ text: "", error: "", loading: false });
+const motdPreview = reactive({ text: "", error: "", loading: false, runs: [] as RemarkRun[] });
 let previewSeq = 0;
+/* 官方新增群：后台生成一次性验证码，群内发送后由弹窗轮询到创建结果 */
+const setup = reactive({
+  generating: false, code: "", setupId: "", expiresAt: 0,
+  status: "" as "" | "pending" | "claimed" | "expired" | "missing", error: "",
+});
+/* 倒计时完全以后台返回的 now/expires_at 为基准，避免前端系统时间不准。 */
+let setupOffset = 0;
+const setupLeft = ref(0);
+let setupClock: number | undefined;
+let setupPoll: number | undefined;
+let setupSeq = 0;
+const officialAlias = computed({
+  get: () => f.alias ?? "",
+  set: value => { f.alias = clipAlias(value); },
+});
+const officialDisplay = computed({
+  get: () => f.display ?? "",
+  set: value => { f.display = clipDigits(value); },
+});
+/* OneBot 新增群里的群别名：与官方共用 clipAlias 的显示宽度裁剪 */
+const onebotAlias = computed({
+  get: () => f.alias ?? "",
+  set: value => { f.alias = clipAlias(value); },
+});
 
 const FORMS = ["add-server", "edit-server"];
-const CONFIRMS = ["del-server", "del-group", "leave-cfg", "reload-plugin"];
+const CONFIRMS = ["del-server", "del-group", "leave-cfg", "reload-plugin", "batch-del-confirm"];
 const LISTS = ["ignore-list", "list-manage"];
 const JSONS = ["json-group", "json-config"];
 const modalCls = computed(() => {
@@ -79,6 +108,8 @@ const title = computed(() => {
       return "编辑服务器";
     case "add-group":
       return "新增群";
+    case "edit-group":
+      return "编辑群信息";
     case "del-server":
       return "删除服务器";
     case "del-group":
@@ -86,6 +117,7 @@ const title = computed(() => {
     case "batch-add":
       return "批量添加服务器";
     case "batch-del":
+    case "batch-del-confirm":
       return "批量删除服务器";
     case "json-group":
     case "json-config":
@@ -116,9 +148,12 @@ const sub = computed(() => {
       return srv.value?.name ?? "";
     case "del-group":
       return `当前群 ${S.gid}`;
+    case "edit-group":
+      return `当前群 ${S.gid}`;
     case "batch-add":
       return "每行一条，或使用逗号分隔；名称与主机之间使用冒号。";
     case "batch-del":
+    case "batch-del-confirm":
       return "从当前群移除所选服务器条目及其 Token。";
     case "ignore-list":
       return "名单内成员不参与名片校验，添加与移除即时保存。";
@@ -127,7 +162,9 @@ const sub = computed(() => {
     case "leave-cfg":
       return "离开全局参数页前，请先处理当前草稿。";
     case "add-group":
-      return "先建立群配置，再添加这个群的服务器。";
+      return officialMode.value
+        ? "填写 QQ 群号后生成验证码，在目标 QQ 群发送 /mc setup 验证码即可创建。"
+        : "先建立群配置，再添加这个群的服务器。";
     case "json-group":
       return "当前群配置 / 只读预览";
     case "json-config":
@@ -147,6 +184,7 @@ const listNote = computed(() =>
 );
 const confirmWarn = computed(() => {
   if (name.value === "del-server") return `从当前群移除「${srv.value?.name ?? ""}」，其命令 Token 一并删除。`;
+  if (name.value === "batch-del-confirm") return `确定删除所选 ${selectedNames.value.length} 台服务器？其命令 Token 一并删除。`;
   if (name.value === "leave-cfg") {
     return `全局参数还有 ${dirtyCount.value} 项更改未保存。`;
   }
@@ -154,10 +192,15 @@ const confirmWarn = computed(() => {
 });
 const confirmNote = computed(() => {
   if (name.value === "del-server") return "绑定记录不受影响。";
+  if (name.value === "batch-del-confirm") return "绑定记录会保留；此操作保存后无法直接撤销。";
   if (name.value === "leave-cfg") return "保存失败时会保留未保存的草稿，并停留在当前页面。";
   return "本群相关查询与绑定功能将不可用，直到重新创建群配置。已有绑定记录保留。";
 });
-const confirmVerb = computed(() => (name.value === "del-server" ? "删除服务器" : "删除群配置"));
+const confirmVerb = computed(() => {
+  if (name.value === "del-server") return "删除服务器";
+  if (name.value === "batch-del-confirm") return `删除 ${selectedNames.value.length} 台服务器`;
+  return "删除群配置";
+});
 /* 删除群配置必须手打「确认删除」才放行，防的是弹窗一开随手回车/连点把群配置删掉 */
 const delGroupReady = computed(() => (f.confirm ?? "").trim() === "确认删除");
 const footerDisabled = computed(
@@ -166,6 +209,8 @@ const footerDisabled = computed(
     (name.value === "batch-del" && !selectedNames.value.length) ||
     (name.value === "del-group" && !delGroupReady.value) ||
     (name.value === "add-server" && servers.value.length >= S.maxServers) ||
+    (name.value === "add-group" && officialMode.value &&
+      (!S.officialEnvironment || !S.officialState || !f.display?.trim() || setup.generating)) ||
     (name.value === "reload-plugin" && dirtyCount.value > 0),
 );
 const footAction = computed(() => {
@@ -176,6 +221,8 @@ const footAction = computed(() => {
       return submitEditServer;
     case "add-group":
       return submitAddGroup;
+    case "edit-group":
+      return submitEditGroup;
     case "del-server":
       return submitDelServer;
     case "del-group":
@@ -183,6 +230,8 @@ const footAction = computed(() => {
     case "batch-add":
       return submitBatchAdd;
     case "batch-del":
+      return openBatchDelConfirm;
+    case "batch-del-confirm":
       return submitBatchDel;
     case "reload-plugin":
       return submitReload;
@@ -194,12 +243,18 @@ const footVerb = computed(() => {
   if (name.value === "reload-plugin") return "重载插件";
   if (CONFIRMS.includes(name.value)) return confirmVerb.value;
   if (name.value === "add-server" || name.value === "batch-add") return "添加服务器";
-  if (name.value === "add-group") return "创建群配置";
+  if (name.value === "add-group") {
+    return officialMode.value ? (setup.code ? "重新生成" : "生成验证码") : "创建群配置";
+  }
+  if (name.value === "edit-group") return "保存";
   if (name.value === "batch-del") return `删除 ${selectedNames.value.length} 台服务器`;
   return "保存服务器";
 });
-const footKind = computed(() => (name.value === "del-server" || name.value === "del-group" || name.value === "batch-del" ? "danger" : "pri"));
-const footIcon = computed(() => name.value === "reload-plugin" ? "refresh" : CONFIRMS.includes(name.value) || name.value === "batch-del" ? "trash" : name.value === "edit-server" ? "check" : "plus");
+const footKind = computed(() => (name.value === "del-server" || name.value === "del-group" || name.value === "batch-del" || name.value === "batch-del-confirm" ? "danger" : "pri"));
+const footIcon = computed(() => name.value === "reload-plugin" ? "refresh"
+  : CONFIRMS.includes(name.value) || name.value === "batch-del" ? "trash"
+  : name.value === "edit-server" || name.value === "edit-group" ? "check"
+  : name.value === "add-group" && officialMode.value ? "key" : "plus");
 
 function requestClose() {
   if (busy.value || leaving.value) return;
@@ -262,10 +317,12 @@ watch(
     window.clearTimeout(copyTimer);
     batchResult.message = "";
     batchResult.failed = [];
+    resetOfficialSetup();
     previewSeq += 1;
     motdPreview.text = "";
     motdPreview.error = "";
     motdPreview.loading = false;
+    motdPreview.runs = [];
     if (!cur) return;
     srvKey.value = (cur.payload?.server as ServerEntry | undefined)?.name ?? "";
     if (cur.name === "edit-server") {
@@ -285,6 +342,10 @@ watch(
       f.token = "";
     } else if (cur.name === "add-group") {
       f.gid = "";
+      f.alias = clipAlias(String(cur.payload?.alias ?? ""));
+      f.display = "";
+    } else if (cur.name === "edit-group") {
+      f.alias = clipAlias(String(S.group?.alias ?? ""));
     } else if (cur.name === "batch-add") {
       f.text = "";
     } else if (cur.name === "batch-del") {
@@ -333,7 +394,8 @@ function copyWithSelection(text: string): boolean {
   input.value = text;
   input.readOnly = true;
   input.setAttribute("aria-hidden", "true");
-  Object.assign(input.style, { position: "fixed", top: "0", left: "0", width: "1px", height: "1px", opacity: "0" });
+  Object.assign(input.style, { position: "fixed", top: "0", left: "0", width: "1px", height: "1px",
+    opacity: "0", fontSize: "16px" });
   document.body.appendChild(input);
   try {
     input.focus();
@@ -378,7 +440,10 @@ async function copyJson() {
   }
 }
 
-onBeforeUnmount(() => window.clearTimeout(copyTimer));
+onBeforeUnmount(() => {
+  window.clearTimeout(copyTimer);
+  resetOfficialSetup();
+});
 
 /* 地址/端口一改，之前取到的 MOTD 就作废：别让提交时把旧地址的值写进新服务器 */
 watch(
@@ -389,6 +454,7 @@ watch(
     motdPreview.text = "";
     motdPreview.error = "";
     motdPreview.loading = false;
+    motdPreview.runs = [];
   },
 );
 
@@ -424,9 +490,30 @@ function commitConfigList(next: string[]) {
   else S.cfgDraft[it.key] = next;
 }
 
+/** QQ 号 5–12 位数字；openid 16–64 位英文/数字；中文、空格、符号一律拒绝。 */
+function memberIdError(id: string): string {
+  if (!/^[A-Za-z0-9]+$/.test(id)) return "只能包含英文字母和数字，不能包含中文、空格或符号。";
+  if (/^\d+$/.test(id)) return /^\d{5,12}$/.test(id) ? "" : "QQ 号应为 5–12 位数字。";
+  return /^[A-Za-z0-9]{16,64}$/.test(id) ? "" : "openid 应为 16–64 位英文字母或数字。";
+}
+
+function configListError(ids: string[]): string {
+  for (let i = 0; i < ids.length; i += 1) {
+    const why = memberIdError(ids[i]);
+    if (why) return `第 ${i + 1} 项格式无效：${why}`;
+  }
+  return "";
+}
+
 function addConfigList() {
+  delete fieldErrors.member;
   const ids = f.qq.split(/[,，\s]+/).map((v) => v.trim()).filter(Boolean);
   if (!ids.length) return;
+  const why = configListError(ids);
+  if (why) {
+    fieldErrors.member = why;
+    return;
+  }
   const next = listDraft.value.slice();
   for (const id of ids) if (!next.includes(id)) next.push(id);
   listDraft.value = next;
@@ -434,16 +521,26 @@ function addConfigList() {
 }
 
 function removeConfigList(id: string) {
+  delete fieldErrors.member;
   listDraft.value = listDraft.value.filter((v) => v !== id);
 }
 
 function applyConfigList() {
+  const why = configListError(listDraft.value);
+  if (why) {
+    fieldErrors.member = why;
+    return;
+  }
   commitConfigList(listDraft.value.slice());
   closeDialog();
 }
 
+watch(() => f.qq, () => {
+  if (fieldErrors.member) delete fieldErrors.member;
+});
+
 const listItems = computed<string[]>(() => {
-  if (name.value === "ignore-list") return S.group?.nickname_check_ignore_ids ?? [];
+  if (name.value === "ignore-list") return S.group?.nickname_ignore ?? [];
   return listDraft.value;
 });
 
@@ -596,9 +693,11 @@ async function fetchMotdPreview() {
     const r = await api.serverMotdPreview(host, f.port);
     if (seq !== previewSeq) return;
     motdPreview.text = r.motd;
+    motdPreview.runs = r.runs ?? [];
   } catch (err) {
     if (seq !== previewSeq) return;
     motdPreview.text = "";
+    motdPreview.runs = [];
     motdPreview.error = err instanceof ApiError ? err.message : String(err);
   } finally {
     if (seq === previewSeq) motdPreview.loading = false;
@@ -653,21 +752,179 @@ function motdValueText(): string {
   return srv.value?.remark_motd || "还没有值：点「立即同步」或在群里跑一次 /在线";
 }
 
+function stopSetupWatch() {
+  window.clearInterval(setupClock);
+  window.clearInterval(setupPoll);
+  setupClock = undefined;
+  setupPoll = undefined;
+}
+
+function resetOfficialSetup() {
+  setupSeq += 1;
+  stopSetupWatch();
+  setupOffset = 0;
+  setupLeft.value = 0;
+  Object.assign(setup, { generating: false, code: "", setupId: "", expiresAt: 0,
+    status: "", error: "" });
+}
+
+/* 用后台时间刷新剩余秒数；本地只负责两次响应之间的走秒。 */
+function syncSetupClock(serverNow: number) {
+  if (Number.isFinite(serverNow)) setupOffset = serverNow - Date.now() / 1000;
+  updateSetupLeft();
+}
+
+function updateSetupLeft() {
+  const now = Date.now() / 1000 + setupOffset;
+  setupLeft.value = setup.expiresAt ? Math.max(0, Math.ceil(setup.expiresAt - now)) : 0;
+}
+
+function setupCountdown(): string {
+  const left = setupLeft.value;
+  return `${String(Math.floor(left / 60)).padStart(2, "0")}:${String(left % 60).padStart(2, "0")}`;
+}
+
+async function pollSetupStatus() {
+  if (!setup.setupId || setup.status !== "pending" || !S.officialEnvironment) return;
+  const seq = setupSeq;
+  const setupId = setup.setupId;
+  const environment = S.officialEnvironment;
+  try {
+    const r = await api.officialSetupStatus(environment, setupId);
+    if (seq !== setupSeq || setup.setupId !== setupId) return;
+    syncSetupClock(r.now);
+    if (r.status === "claimed") {
+      const alias = f.alias?.trim() || "新群";
+      stopSetupWatch();
+      setup.status = "claimed";
+      if (r.state) S.officialState = r.state;
+      closeDialog();
+      toast(`已在群内创建配置「${alias}」`);
+    } else if (r.status === "expired" || r.status === "missing") {
+      stopSetupWatch();
+      setup.status = "expired";
+      setupLeft.value = 0;
+    }
+  } catch {
+    /* 轮询失败不打断用户；下一轮继续 */
+  }
+}
+
+function startSetupWatch() {
+  stopSetupWatch();
+  updateSetupLeft();
+  setupClock = window.setInterval(() => {
+    updateSetupLeft();
+    if (setup.status === "pending" && setup.expiresAt && setupLeft.value <= 0) {
+      setup.status = "expired";
+      stopSetupWatch();
+    }
+  }, 1000);
+  setupPoll = window.setInterval(() => { void pollSetupStatus(); }, 2000);
+}
+
+async function generateSetupCode() {
+  const alias = (f.alias || "").trim();
+  const display = (f.display || "").trim();
+  delete fieldErrors.alias;
+  delete fieldErrors.display;
+  if (!display) {
+    fieldErrors.display = "请输入 QQ 群号。";
+    return;
+  }
+  if (!/^[0-9]+$/.test(display)) {
+    fieldErrors.display = "QQ 群号只能填写数字。";
+    return;
+  }
+  if (alias && aliasUnits(alias) > 16) {
+    fieldErrors.alias = "群别名最多 8 个中文字符（或 16 个英文字符）。";
+    return;
+  }
+  if (!S.officialEnvironment || !S.officialState) {
+    toast("请先到“全局参数 → 生效机器人”保存官方实例与环境，再新增官方群。");
+    return;
+  }
+  setupSeq += 1;
+  setup.generating = true;
+  setup.error = "";
+  try {
+    const r = await api.officialSetupCreate(S.officialEnvironment, alias, display);
+    Object.assign(setup, { code: r.code, setupId: r.setup_id, expiresAt: r.expires_at,
+      status: "pending", error: "" });
+    syncSetupClock(r.now);
+    startSetupWatch();
+  } catch (e) {
+    resetOfficialSetup();
+    setup.error = e instanceof Error ? e.message : "生成验证码失败";
+  } finally {
+    setup.generating = false;
+  }
+}
+
+async function copySetupCode() {
+  if (!setup.code) return;
+  const command = `/mc setup ${setup.code}`;
+  /* 先走同步选区复制，保住用户点击手势；iframe/旧版手机浏览器更可靠。 */
+  let copied = copyWithSelection(command);
+  if (!copied) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(command);
+        copied = true;
+      }
+    } catch {
+      /* 两种方式都不可用时再提示手动复制。 */
+    }
+  }
+  toast(copied ? "已复制命令" : "复制失败，请手动输入命令");
+}
+
+async function submitAddOfficialGroup() {
+  await generateSetupCode();
+}
+
 async function submitAddGroup() {
+  if (officialMode.value) {
+    await submitAddOfficialGroup();
+    return;
+  }
   if (!/^\d{5,12}$/.test(f.gid?.trim() ?? "")) {
     fieldErrors.gid = "请输入 5–12 位数字群号。";
     return;
   }
   delete fieldErrors.gid;
+  const alias = (f.alias || "").trim();
+  if (alias && aliasUnits(alias) > 16) {
+    fieldErrors.alias = "群别名最多 8 个中文字符（或 16 个英文字符）。";
+    return;
+  }
+  delete fieldErrors.alias;
   await run("create", async () => {
-    const r = await api.groupCreate(f.gid);
+    const r = await api.groupCreate(f.gid, alias);
     /* 群列表来自 summary：不重读的话「当前群」下拉里看不到刚建的群，
        要等下次刷新页面才出现。先刷新列表，再把选中项落到新群。 */
     await loadSummary();
     S.gid = r.gid;
     S.group = r;  // 立即切到新群，别让面板停在旧群等请求回来
     closeDialog();
-    toast(`已创建 servers_${r.gid}.json`);
+    toast(`已创建群配置（${r.gid}）`);
+  });
+}
+
+async function submitEditGroup() {
+  const alias = (f.alias || "").trim();
+  if (aliasUnits(alias) > 16) {
+    fieldErrors.alias = "群别名最多 8 个中文字符（或 16 个英文字符）。";
+    return;
+  }
+  delete fieldErrors.alias;
+  await run("editgroup", async () => {
+    const r = await api.groupUpdate(S.gid, alias);
+    S.group = r;
+    /* 别名会出现在「当前群」下拉里，同步刷新 summary 让下拉立即跟上 */
+    await loadSummary();
+    closeDialog();
+    toast("群信息已保存");
   });
 }
 
@@ -693,7 +950,7 @@ async function submitDelGroup() {
     S.modStates = {};
     closeDialog();
     await loadSummary();
-    toast(`已删除 servers_${gone}.json`);
+    toast(`已删除群配置（${gone}）`);
   });
 }
 
@@ -704,6 +961,10 @@ async function submitBatchAdd() {
     batchResult.failed = r.failed;
     S.group = r.group;
   });
+}
+
+function openBatchDelConfirm() {
+  openDialog("batch-del-confirm");
 }
 
 async function submitBatchDel() {
@@ -718,7 +979,7 @@ async function submitBatchDel() {
 async function addIgnore() {
   await run("ignore", async () => {
     const r = await api.ignoreAdd(S.gid, f.qq);
-    if (S.group) S.group.nickname_check_ignore_ids = r.nickname_check_ignore_ids;
+    if (S.group) S.group.nickname_ignore = r.nickname_ignore;
     f.qq = "";
   });
 }
@@ -726,7 +987,7 @@ async function addIgnore() {
 async function removeIgnore(qq: string) {
   await run("ignore", async () => {
     const r = await api.ignoreRemove(S.gid, qq);
-    if (S.group) S.group.nickname_check_ignore_ids = r.nickname_check_ignore_ids;
+    if (S.group) S.group.nickname_ignore = r.nickname_ignore;
   });
 }
 
@@ -791,7 +1052,7 @@ async function submitReload() {
         </div>
         <div class="motd-result">
           <div class="motd-copy">
-            <p class="motd-value" :class="{ muted: !hasMotdValue || f.remark_src !== 'motd', error: !!motdPreview.error }">{{ motdValueText() }}</p>
+            <p class="motd-value" :class="{ muted: !hasMotdValue || f.remark_src !== 'motd', error: !!motdPreview.error }"><RemarkText :runs="name === 'add-server' && !motdPreview.loading && !motdPreview.error && motdPreview.text ? motdPreview.runs : null" :fallback="motdValueText()" /></p>
             <p class="field-help">{{ motdTimeText() }}</p>
           </div>
           <UiButton v-if="name === 'edit-server'" :disabled="syncing || busy" @click="syncRemarkMotd">
@@ -836,9 +1097,50 @@ async function submitReload() {
     </div>
 
     <template v-else-if="name === 'add-group'">
-      <UiField for="group-id" label="群号" required help="只创建配置，不会自动加入或发送群消息。" :err="fieldErrors.gid">
-        <UiInput id="group-id" v-model="f.gid" inputmode="numeric" placeholder="请输入 5–12 位数字群号" :error="!!fieldErrors.gid" />
+      <template v-if="officialMode">
+        <div class="official-group-fields">
+          <UiField for="official-display" label="QQ 群号" required help="只用于玩家提示，只能填写数字。" :err="fieldErrors.display">
+            <UiInput id="official-display" v-model="officialDisplay" inputmode="numeric" :maxlength="20" placeholder="例如：123456789" :error="!!fieldErrors.display" />
+          </UiField>
+          <UiField for="official-alias" label="群别名" help="选填；最多 8 个中文字符（或 16 个英文字符）。" :err="fieldErrors.alias">
+            <UiInput id="official-alias" v-model="officialAlias" :maxlength="16" placeholder="例如：生存服玩家群" :error="!!fieldErrors.alias" />
+          </UiField>
+        </div>
+
+        <div v-if="setup.code" class="setup-code-box">
+          <div class="setup-code-head">
+            <span class="field-label">在目标 QQ 群发送</span>
+            <span class="setup-code-time">剩余 {{ setupCountdown() }}</span>
+          </div>
+          <div class="setup-code-line">
+            <code class="setup-code">/mc setup {{ setup.code }}</code>
+            <UiButton size="sm" @click="copySetupCode"><UiIcon name="copy" :size="15" />复制</UiButton>
+          </div>
+          <p class="field-help">验证码 5 分钟有效，使用后立即失效；弹窗会自动检测创建结果。</p>
+          <p v-if="setup.status === 'expired'" class="field-error" role="alert">验证码已过期，请点「重新生成」。</p>
+          <p v-else-if="setup.status === 'pending'" class="field-help">等待群内发送… 如未发送，可点「重新生成」换一个新的。</p>
+        </div>
+        <UiNotice v-else tone="info">
+          填写 QQ 群号（可选填群别名）后点下方「生成验证码」，再到目标 QQ 群发送 /mc setup 验证码；收到后会自动创建本群配置。
+        </UiNotice>
+        <UiNotice v-if="setup.error" tone="bad">{{ setup.error }}</UiNotice>
+        <UiNotice v-if="!S.officialEnvironment || !S.officialState" tone="warn">请先在「全局参数 → 生效机器人」保存 QQ 官方实例，完整重启后再回到这里。</UiNotice>
+      </template>
+      <div v-else class="onebot-group-fields">
+        <UiField for="group-id" label="QQ 群号" required help="只创建配置，不会自动加入或发送群消息。" :err="fieldErrors.gid">
+          <UiInput id="group-id" v-model="f.gid" inputmode="numeric" placeholder="请输入 5–12 位数字群号" :error="!!fieldErrors.gid" />
+        </UiField>
+        <UiField for="group-alias" label="群别名" help="选填；最多 8 个中文字符（或 16 个英文字符）。" :err="fieldErrors.alias">
+          <UiInput id="group-alias" v-model="onebotAlias" :maxlength="16" placeholder="例如：生存服玩家群" :error="!!fieldErrors.alias" />
+        </UiField>
+      </div>
+    </template>
+
+    <template v-else-if="name === 'edit-group'">
+      <UiField for="group-alias-edit" label="群别名" help="选填；最多 8 个中文字符（或 16 个英文字符），留空即清除。" :err="fieldErrors.alias">
+        <UiInput id="group-alias-edit" v-model="onebotAlias" :maxlength="16" placeholder="例如：生存服玩家群" :error="!!fieldErrors.alias" />
       </UiField>
+      <p class="field-help">QQ 群号（{{ S.gid }}）不可修改。</p>
     </template>
 
     <template v-else-if="name === 'reload-plugin'">
@@ -927,12 +1229,15 @@ async function submitReload() {
         <UiInput
           id="list-member-input"
           v-model="f.qq"
-          :placeholder="name === 'ignore-list' ? '输入 QQ 号' : '输入 QQ 号，逗号可一次加多个'"
+          :placeholder="name === 'ignore-list' ? '输入 QQ 号' : '输入 QQ 号或 openid，逗号可一次加多个'"
+          :error="!!fieldErrors.member"
           class="grow"
           @enter="addEntry"
         />
         <UiButton :disabled="!f.qq?.trim() || busy" @click="addEntry"><UiIcon name="plus" :size="16" />添加</UiButton>
       </div>
+      <p v-if="name === 'list-manage'" class="field-help">QQ 号为 5–12 位数字；openid 为 16–64 位英文字母或数字；不能包含中文、空格或符号。</p>
+      <p v-if="fieldErrors.member" class="field-error" role="alert">{{ fieldErrors.member }}</p>
       <div class="member-list" role="list">
         <div v-for="q in listItems" :key="q" class="member-row" role="listitem">
           <UiIcon name="user" :size="16" />
@@ -1176,6 +1481,12 @@ async function submitReload() {
   flex-direction: column;
   gap: 8px;
 }
+.member-list {
+  padding: 6px;
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  background: var(--surface);
+}
 .pick {
   display: flex;
   align-items: center;
@@ -1325,6 +1636,44 @@ async function submitReload() {
   outline: 2px solid var(--ac-line);
   outline-offset: 2px;
 }
+.setup-code-box {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--thead);
+}
+.setup-code-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.setup-code-time {
+  color: var(--ink3);
+  font-family: var(--fm);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.setup-code-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.setup-code {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--ink);
+  font-family: var(--fm);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  overflow-wrap: anywhere;
+}
+.official-group-fields, .onebot-group-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 760px) { .official-group-fields, .onebot-group-fields { grid-template-columns: minmax(0, 1fr); } }
 .spinning {
   animation: dialog-spin 1s linear infinite;
 }
@@ -1362,6 +1711,20 @@ async function submitReload() {
   }
   .clear-token {
     min-height: 44px;
+  }
+  .setup-code-box {
+    padding: 12px;
+  }
+  .setup-code-line {
+    gap: 8px;
+  }
+  .setup-code {
+    font-size: 17px;
+    letter-spacing: 1px;
+  }
+  .setup-code-line .btn {
+    min-height: 44px;
+    padding: 0 14px;
   }
 }
 </style>

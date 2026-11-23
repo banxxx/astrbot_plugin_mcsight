@@ -210,7 +210,9 @@ class FixedTransportTests(unittest.IsolatedAsyncioTestCase):
             file_data="SYNTHETIC_BASE64", file_type=1, srv_send_msg=False)
         self.assertEqual(result["file_info"], "SYNTHETIC_FILE")
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]["json"], dict(group_openid=GROUP, file_data="SYNTHETIC_BASE64", file_type=1, srv_send_msg=False))
+        # 群身份固定在 URL 路径里，请求体只带文件字段。
+        self.assertEqual(calls[0]["json"], dict(file_data="SYNTHETIC_BASE64", file_type=1, srv_send_msg=False))
+        self.assertIn(GROUP, calls[0]["url"])
         self.assertTrue(calls[0]["url"].endswith("/files"))
         self.assertFalse(calls[0]["allow_redirects"])
 

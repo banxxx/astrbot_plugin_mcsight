@@ -3,7 +3,6 @@ import type {
   ActivationSave,
   ActivationStatus,
   OfficialState,
-  OfficialOperationScope, OfficialOperationPage, OfficialOperationDetail, OfficialOperationAction,
   BatchPayload,
   BindRule,
   BindRulePayload,
@@ -22,6 +21,8 @@ import type {
   MotdPreviewPayload,
   ReloadPayload,
   SecretPayload,
+  SetupCodePayload,
+  SetupStatusPayload,
   SummaryPayload,
   RemarkSyncPayload,
   WhitelistPayload,
@@ -40,29 +41,49 @@ export function requireBridge(): RawBridge {
   return bridge;
 }
 
+/* 面板桥用 postMessage 传参，Vue 的 reactive/ref 代理不能被结构化克隆。
+   统一在这里转成普通 JSON 快照，避免各页面漏转后报 “could not be cloned”。 */
+function plain<T>(value: T): T {
+  if (value === undefined) return value;
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function get<T>(endpoint: string, params?: Record<string, string | number>) {
-  return call<T>(requireBridge().apiGet<T>(`view/${endpoint}`, params));
+  return call<T>(requireBridge().apiGet<T>(`view/${endpoint}`, params === undefined ? undefined : plain(params)));
 }
 
 function post<T>(endpoint: string, body?: unknown) {
-  return call<T>(requireBridge().apiPost<T>(`view/${endpoint}`, body));
+  return call<T>(requireBridge().apiPost<T>(`view/${endpoint}`, plain(body)));
 }
 
 export const api = {
   activation: () => get<ActivationStatus>("activation"),
   activationUpdate: (value: ActivationSave) => post<ActivationStatus>("activation/update", value),
   officialState: (environment_id: string) => get<OfficialState>("official/state", { environment_id }),
+  officialModState: (environment_id: string, config_id: string) =>
+    get<ModStatePayload>("official/mod_state", { environment_id, config_id }),
+  officialWhitelist: (environment_id: string, config_id: string, expected_revision: number,
+    server_id: string, enabled: boolean) =>
+    post<WhitelistPayload>("official/whitelist", { environment_id, config_id, expected_revision, server_id, enabled }),
+  officialMotdPreview: (environment_id: string, host: string, game_port: number, api_port: string) =>
+    post<MotdPreviewPayload>("official/motd_preview", { environment_id, host, game_port, api_port }),
+  officialRemarkSync: (environment_id: string, config_id: string, expected_revision: number, server_id: string) =>
+    post<OfficialState>("official/remark_sync", { environment_id, config_id, expected_revision, server_id }),
+  officialRemarkSrc: (environment_id: string, config_id: string, expected_revision: number,
+    server_id: string, remark_src: "manual" | "motd") =>
+    post<OfficialState>("official/remark_src", { environment_id, config_id, expected_revision, server_id, remark_src }),
+  officialSetupCreate: (environment_id: string, alias: string, display_group: string) =>
+    post<SetupCodePayload>("official/setup_create", { environment_id, alias, display_group }),
+  officialSetupStatus: (environment_id: string, setup_id: string) =>
+    get<SetupStatusPayload>("official/setup_status", { environment_id, setup_id }),
+  officialSetupCancel: (environment_id: string, setup_id: string) =>
+    post<Record<string, never>>("official/setup_cancel", { environment_id, setup_id }),
   officialUpdate: (body: Record<string, unknown>) => post<OfficialState>("official/update", body),
-  officialOperations: (scope: OfficialOperationScope, filter: "pending" | "all", cursor?: string) =>
-    get<OfficialOperationPage>("official/operations", { ...scope, filter, ...(cursor ? { cursor } : {}) }),
-  officialOperation: (scope: OfficialOperationScope, operation_id: string) =>
-    get<OfficialOperationDetail>("official/operation", { ...scope, operation_id }),
-  officialOperationAction: (scope: OfficialOperationScope, operation: OfficialOperationDetail, action: "retry" | "cancel") =>
-    post<OfficialOperationAction>("official/operation/action", { ...scope, operation_id: operation.operation_id,
-      expected_state: operation.state, payload_hash: operation.payload_hash, action, confirmed: true }),
-  summary: () => get<SummaryPayload>("summary"),
+  summary: (platform?: "onebot" | "qq_official") =>
+    get<SummaryPayload>("summary", platform ? { platform } : undefined),
   group: (gid: string) => get<GroupPayload>("group", { gid }),
-  groupCreate: (gid: string) => post<GroupPayload>("group/create", { gid }),
+  groupCreate: (gid: string, alias?: string) => post<GroupPayload>("group/create", { gid, alias: alias ?? "" }),
+  groupUpdate: (gid: string, alias: string) => post<GroupPayload>("group/update", { gid, alias }),
   groupDelete: (gid: string) => post<DeleteGroupPayload>("group/delete", { gid }),
   groupFlag: (gid: string, key: GroupFlagKey, value: boolean) =>
     post<FlagPayload>("group/flag", { gid, key, value }),

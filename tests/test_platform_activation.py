@@ -157,7 +157,6 @@ def ready_controller(platform, instance_id, inventory):
     if platform == "qq_official" and instance_id:
         controller.save_selection({
             "platform": platform, "instance_id": instance_id,
-            "application_ref": "SYNTHETIC_APP", "confirm_application": True,
             "expected_revision": 0,
         })
         controller = activation.ActivationController(platform, instance_id, inventory, store=controller.store)
@@ -495,7 +494,6 @@ class PersistenceTests(unittest.TestCase):
 
     def save_official(self, controller, **extra):
         request = {"platform": "qq_official", "instance_id": "official-a",
-                   "application_ref": "SYNTHETIC_APP_A", "confirm_application": True,
                    "expected_revision": 1}
         request.update(extra)
         return controller.save_selection(request)
@@ -702,32 +700,39 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(controller.status()["state"], "selection_required")
         self.assertFalse(self.path.exists())
 
-    def test_official_requires_application_confirmation_and_remains_closed(self):
+    def test_official_save_does_not_require_appid_and_remains_closed(self):
         controller = self.start()
-        with self.assertRaises(activation.SelectionError):
-            self.save_official(controller, confirm_application=False)
-        self.save_official(controller)
+        saved = self.save_official(controller)["saved_selection"]
+        self.assertEqual(saved["application_ref"], "")
         self.assertTrue(controller.allows(SyntheticEvent()))
         restarted = self.controller()
         self.assertEqual(restarted.status()["state"], "not_ready")
         self.assertFalse(restarted.allows(SyntheticEvent("qq_official", "official-a")))
 
-    def test_application_change_cannot_reuse_previous_environment(self):
-        controller = self.start()
-        saved = self.save_official(controller)["saved_selection"]
-        with self.assertRaises(activation.SelectionError):
-            self.save_official(controller, expected_revision=2, application_ref="SYNTHETIC_APP_B",
-                               environment_id=saved["environment_id"])
-        changed = self.save_official(controller, expected_revision=2, application_ref="SYNTHETIC_APP_B")
-        self.assertNotEqual(changed["saved_selection"]["environment_id"], saved["environment_id"])
-
-    def test_instance_rename_preserves_confirmed_app_environment_and_reset_is_explicit(self):
+    def test_environment_is_stable_across_saves_and_reset_is_explicit(self):
         controller = self.start()
         saved = self.save_official(controller)["saved_selection"]
         changed = self.save_official(controller, expected_revision=2, instance_id="official-b")
         self.assertEqual(changed["saved_selection"]["environment_id"], saved["environment_id"])
         reset = self.save_official(controller, expected_revision=3, new_environment=True)
         self.assertNotEqual(reset["saved_selection"]["environment_id"], saved["environment_id"])
+
+    def test_legacy_appid_is_migrated_to_empty_without_losing_environment(self):
+        controller = self.start()
+        registry = self.store.read()
+        env_id = "33333333-3333-4333-8333-333333333333"
+        registry["environments"].append({"environment_id": env_id, "platform": "qq_official",
+                                         "application_ref": "LEGACY_APP"})
+        registry["selection"] = {"platform": "qq_official", "instance_id": "official-a",
+                                 "environment_id": env_id, "application_ref": "LEGACY_APP",
+                                 "config_revision": 2}
+        self.store.save(registry, 1)
+        reloaded = self.controller(platform="qq_official", instance_id="official-a")
+        saved = reloaded.save_selection({"platform": "qq_official", "instance_id": "official-a",
+                                         "expected_revision": 2})["saved_selection"]
+        self.assertEqual(saved["environment_id"], env_id)
+        self.assertEqual(saved["application_ref"], "")
+        self.assertEqual(self.store.read()["environments"][-1]["application_ref"], "")
 
     def test_failed_inventory_can_recover_at_next_lifecycle_notification(self):
         available = False

@@ -2,6 +2,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from ..config.whitelist_config import WhitelistManager
+from ..config.server_config import read_group_flag
 
 # 权限等级定义
 LEVEL_BLACKLIST = 0
@@ -76,15 +77,18 @@ async def get_user_permission_level(event: AstrMessageEvent) -> int:
         logger.debug(f"用户 {user_id} 是插件白名单管理员")
         return LEVEL_WHITELIST_ADMIN
 
-    # 5. 群主 / 群管理员：两个开关各管各的角色。
+    # 5. 群主 / 群管理员：两个开关按群保存，各管各的角色。
     # 旧写法里群主走的是 `role in ('admin','owner') and enable_group_admin` 那条，
     # 于是「允许群主」关掉后，只要「允许管理员」还开着，群主照样能过——那个开关等于没生效。
     role = await get_group_role(event)
-    if role == 'owner' and wm.enable_group_owner:
-        logger.debug(f"用户 {user_id} 是群主，且开关已启用")
+    group_id = event.get_group_id()
+    owner_enabled = read_group_flag(group_id, "enable_group_owner") if group_id else True
+    admin_enabled = read_group_flag(group_id, "enable_group_admin") if group_id else True
+    if role == 'owner' and owner_enabled:
+        logger.debug(f"用户 {user_id} 是群主，且本群开关已启用")
         return LEVEL_GROUP_ADMIN
-    if role == 'admin' and wm.enable_group_admin:
-        logger.debug(f"用户 {user_id} 是群管理员，且开关已启用")
+    if role == 'admin' and admin_enabled:
+        logger.debug(f"用户 {user_id} 是群管理员，且本群开关已启用")
         return LEVEL_GROUP_ADMIN
 
     return LEVEL_MEMBER

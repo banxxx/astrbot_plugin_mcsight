@@ -44,7 +44,7 @@ const showClear = computed(() => props.clearable && props.hasValue && !props.mod
 
 <style scoped>
 .sec { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: var(--h-ctl); padding: 0 10px 0 12px; border: 1px solid var(--ctl-bd); border-radius: 8px; background: var(--surface); transition: border-color var(--transition), box-shadow var(--transition); }
-.sec:focus-within { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus), 0 0 4px var(--focus-ring); }
+.sec:focus-within { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus), 0 0 4px var(--focus-ring); position: relative; z-index: 1; }
 .sec.err { border-color: #d78b93; background: #fffafb; }
 .sec.disabled { border-color: var(--disabled-bd); background: var(--disabled-bg); }
 .v { flex: 1 1 auto; min-width: 0; width: 0; border: none; outline: none; padding: 0; background: none; color: var(--ink); font-family: var(--ff); font-size: 13px; line-height: 1.5; }

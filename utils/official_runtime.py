@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from threading import Lock, RLock
 
-from .official_core import OfficialError, OfficialStore, PageCache, event_scope, permission, uuid_value
+from .official_core import OfficialError, OfficialStore, PageCache, event_scope, uuid_value
 from .official_binding_policy import OfficialBindingPolicy
 from .official_binding_service import OfficialBindingService
 from .official_binding_host import OfficialBindingHost
@@ -26,7 +26,7 @@ from .official_members import OfficialMembers
 
 
 HELP = ("MCSight · QQ 官方群\n"
-        "/mc setup [识别备注]：登记本群和本人，由后台确认\n"
+        "/mc setup <验证码>：在后台“新增群”生成验证码后发送，创建本群配置\n"
         "/mc status [-s 服务器名]：在线状态\n"
         "/mc tps [-s 服务器名]：TPS\n"
         "/mc stats <游戏名> [-s 服务器名]：公开统计\n"
@@ -243,8 +243,12 @@ class OfficialSender:
 
 
 class OfficialRuntime:
-    def __init__(self, root, activation, *, queries=None, renderer=render_pages, sender=OfficialSender, recovery_gate=None):
-        self.store = OfficialStore(root)
+    def __init__(self, root, activation, *, queries=None, renderer=render_pages, sender=OfficialSender,
+                 recovery_gate=None, mod_token=None, policy_defaults=None, center_defaults=None,
+                 access_lists=None):
+        # 官方与 OneBot 共用全局 mod_api_token、权限名单；这里只注入取值函数，不在官方目录另存凭据。
+        self.store = OfficialStore(root, token_provider=mod_token, policy_defaults=policy_defaults,
+                                   access_provider=access_lists)
         self.activation = activation
         self.stats = OfficialStats(self.store.root)
         self.queries = queries if queries is not None else QueryService(history=self.stats)
@@ -259,7 +263,8 @@ class OfficialRuntime:
         self.sampling = False
         self.last_sample = None
         self.help_image = None
-        self.binding_host = OfficialBindingHost(self.store, lambda: None if self.closed else self.selection())
+        self.binding_host = OfficialBindingHost(self.store, lambda: None if self.closed else self.selection(),
+                                                center_defaults=center_defaults)
         self.binding_commands = OfficialBindingCommands(self.binding_host)
         self.write_commands=OfficialWriteCommands(self.store,lambda:None if self.closed else self.selection())
         self.members=OfficialMembers()
@@ -278,7 +283,7 @@ class OfficialRuntime:
         state = self.activation.status()
         if not any(e["environment_id"] == environment and e["platform"] == "qq_official"
                    for e in state.get("environments", [])):
-            raise OfficialError("未登记该官方应用环境。")
+            raise OfficialError("未登记该官方环境。")
         if active:
             selected = self.selection() or {}
             if selected.get("platform") != "qq_official" or selected.get("environment_id") != environment:
@@ -290,7 +295,20 @@ class OfficialRuntime:
     def state(self, environment):
         self.environment(environment)
         data = self.store.list_state(environment)
+        for group in data["groups"]:
+            for server in group["servers"]:
+                remark = self.store.server_remark(environment, server["server_id"])
+                server["remark_src"] = remark["remark_src"]
+                server["remark_motd"] = remark["remark_motd"]
+                server["remark_motd_at"] = remark["remark_motd_at"]
+                server["remark_display"] = (remark["remark_motd"]
+                    if remark["remark_src"] == "motd" and remark["remark_motd"]
+                    else server["remark"])
+                server["remark_runs"] = (remark.get("remark_motd_runs")
+                    if remark["remark_src"] == "motd" and remark.get("remark_motd_runs")
+                    else None)
         data["has_mod_token"] = self.store.token_is_set(environment)
+        data["console_token_ids"] = self.store.console_token_ids(environment)
         selected = self.selection() or {}
         data["active"] = selected.get("platform") == "qq_official" and selected.get("environment_id") == environment
         data["binding_ready"] = None
@@ -338,7 +356,7 @@ class OfficialRuntime:
             group = next((g for g in state["groups"] if g["group_openid"] == scope.group_id), None)
             environment_admins = state["environment_administrators"]
             page_revision = (group["revision"], tuple(sorted(environment_admins))) if group is not None else None
-            if group is not None and permission(scope, group, environment_admins) == 0:
+            if group is not None and self.store.access_level(scope, group, environment_admins) == 0:
                 await sender.text("您已被列入本群插件黑名单，无法使用本插件。")
                 return
             if group is not None:self.members.observe(scope)
@@ -350,9 +368,22 @@ class OfficialRuntime:
             command={"say":"broadcast","remove":"del"}.get(command,command)
             arguments = parsed[1] if len(parsed) > 1 else ""
             if command == "setup":
-                candidate = self.store.register(scope, arguments)
-                await sender.text(f"已登记本群和您的身份，回执：{candidate['candidate_id']}\n"
-                                  "请由后台管理员核对、配置和授权。登记不会自动启用业务或授予管理权。")
+                code = arguments.split(maxsplit=1)[0] if arguments.strip() else ""
+                if not code:
+                    await sender.text("请在后台「新增群」中生成验证码，然后在群内发送 /mc setup 验证码。")
+                    return
+                try:
+                    created_group, created = self.store.claim_setup_code(
+                        scope.environment_id, code, scope.group_id)
+                except OfficialError as error:
+                    await sender.text(str(error))
+                    return
+                name = created_group.get("alias") or created_group.get("display_group") or "新群"
+                if created:
+                    await sender.text(f"已创建本群配置「{name}」。"
+                                      "请后台管理员添加服务器并启用本群；群主和管理员可直接使用管理命令。")
+                else:
+                    await sender.text(f"本群已配置「{name}」，无需重复登记。")
                 return
             if command == "bindhelp":
                 await sender.text(BIND_HELP)
@@ -361,7 +392,7 @@ class OfficialRuntime:
                 def help_revalidate():
                     self.environment(scope.environment_id, active=True)
                     latest = self.store.group(scope.environment_id, group_id=scope.group_id)
-                    if latest is not None and permission(scope, latest) == 0:
+                    if latest is not None and self.store.access_level(scope, latest) == 0:
                         raise OfficialError("当前身份已被禁止使用本群插件。")
                 if self._supports_images(sender):
                     if self.help_image is None:
@@ -387,7 +418,8 @@ class OfficialRuntime:
                 await sender.text(HELP)
                 return
             if group is None or not group["enabled"]:
-                await sender.text("本官方群尚未启用。请先发送 /mc setup，由后台管理员完成独立配置。")
+                await sender.text("本官方群尚未启用。请在后台「新增群」生成验证码，"
+                                  "再在群内发送 /mc setup 验证码。")
                 return
             if command in BINDING_COMMANDS:
                 await self._binding_command(scope, sender, command, arguments, group, page_revision)
@@ -396,7 +428,7 @@ class OfficialRuntime:
                 await self._member_command(scope,sender,command,arguments,group,page_revision)
                 return
             if command in WRITE_COMMANDS:
-                minimum_permission = 3 if permission(scope, group, environment_admins) >= 3 else 1
+                minimum_permission = 3 if self.store.access_level(scope, group, environment_admins) >= 3 else 1
                 title,lines=await asyncio.to_thread(self.write_commands.execute,scope,command,arguments)
                 current=self.store.list_state(scope.environment_id)
                 latest=next((g for g in current["groups"] if g["group_openid"]==scope.group_id),None)
@@ -408,7 +440,7 @@ class OfficialRuntime:
                     latest=self.store.list_state(scope.environment_id)
                     current=next((g for g in latest["groups"] if g["group_openid"]==scope.group_id),None)
                     if (current is None or not current["enabled"]
-                            or permission(scope,current,latest["environment_administrators"])<minimum_permission
+                            or self.store.access_level(scope,current,latest["environment_administrators"])<minimum_permission
                             or current["revision"]!=result_revision[0]
                             or tuple(sorted(latest["environment_administrators"]))!=result_revision[1]):
                         raise OfficialError("当前身份已不能接收操作结果。")
@@ -478,11 +510,11 @@ class OfficialRuntime:
                 latest_state = self.store.list_state(scope.environment_id)
                 latest = next((g for g in latest_state["groups"] if g["group_openid"] == scope.group_id), None)
                 if (latest is None or not latest["enabled"]
-                        or permission(scope, latest, latest_state["environment_administrators"]) == 0
+                        or self.store.access_level(scope, latest, latest_state["environment_administrators"]) == 0
                         or latest["revision"] != group["revision"]
                         or tuple(sorted(latest_state["environment_administrators"])) != page_revision[1]):
                     raise OfficialError("查询期间配置或权限已变化，请重新查询。")
-                self.pages.authorize(scope, page_revision, permission(scope, latest, latest_state["environment_administrators"]))
+                self.pages.authorize(scope, page_revision, self.store.access_level(scope, latest, latest_state["environment_administrators"]))
             revalidate()
             # 媒体上传有等待窗口，消息发布前仍须检查；假发送器无需网络接口。
             image_output = self._supports_images(sender)
@@ -528,7 +560,7 @@ class OfficialRuntime:
                     pass
 
     async def _binding_command(self, scope, sender, command, arguments, group, page_revision):
-        minimum_permission = 3 if permission(scope, group, page_revision[1]) >= 3 else 1
+        minimum_permission = 3 if self.store.access_level(scope, group, page_revision[1]) >= 3 else 1
         if scope.key in self.busy or len(self.busy) >= 16:
             raise OfficialError("上一条请求仍在处理中，请稍后查询原操作。")
         self.busy.add(scope.key)
@@ -542,7 +574,7 @@ class OfficialRuntime:
             state = self.store.list_state(scope.environment_id)
             latest = next((g for g in state["groups"] if g["group_openid"] == scope.group_id), None)
             if (latest is None or not latest["enabled"] or latest["revision"] != group["revision"]
-                    or permission(scope, latest, state["environment_administrators"]) < minimum_permission
+                    or self.store.access_level(scope, latest, state["environment_administrators"]) < minimum_permission
                     or tuple(sorted(state["environment_administrators"])) != page_revision[1]):
                 raise OfficialError("请求期间配置或权限已变化，请用新消息查询原操作。")
         revalidate()
@@ -562,11 +594,11 @@ class OfficialRuntime:
             current=next((g for g in state["groups"] if g["group_openid"]==scope.group_id),None)
             if (current is None or not current["enabled"] or current["revision"]!=group["revision"]
                     or tuple(sorted(state["environment_administrators"]))!=page_revision[1]
-                    or permission(scope,current,state["environment_administrators"])<3):
+                    or self.store.access_level(scope,current,state["environment_administrators"])<3):
                 raise OfficialError("当前群管理权限或配置已变化，停止成员扫描。")
         guard()
         if command=="checknick" and arguments.strip():raise OfficialError("格式检测用 /mc checknick；开关和忽略名单用 /mc nicknamecheck。")
-        if command=="checknick" and not group["policy"].get("nickname_check_enabled",True):raise OfficialError("本群昵称检测已关闭。")
+        if command=="checknick" and not group["policy"]["nickname_check_enabled"]:raise OfficialError("本群昵称检测已关闭。")
         if scope.key in self.busy or len(self.busy)>=16:raise OfficialError("当前请求较多，请稍后重试。")
         self.busy.add(scope.key)
         try:
@@ -677,7 +709,8 @@ _runtime = None
 _recovery_gate = Lock()
 
 
-def configure(root, activation, *, owner=None):
+def configure(root, activation, *, owner=None, mod_token=None, policy_defaults=None, center_defaults=None,
+              access_lists=None):
     global _runtime
     if _runtime is not None:
         _runtime.close()
@@ -687,7 +720,9 @@ def configure(root, activation, *, owner=None):
         if gate is None:
             gate = Lock()
             setattr(owner, "_mcsight_official_recovery_gate", gate)
-    _runtime = OfficialRuntime(root, activation, recovery_gate=gate)
+    _runtime = OfficialRuntime(root, activation, recovery_gate=gate, mod_token=mod_token,
+                               policy_defaults=policy_defaults, center_defaults=center_defaults,
+                               access_lists=access_lists)
     return _runtime
 
 

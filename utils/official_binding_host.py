@@ -1,8 +1,9 @@
 """Lazy official-center assembly. Imports never load configuration or credentials.
 
 Only an accepted, enabled group event can open a session. Production settings
-are an explicit per-environment owner file; no old pool, defaults, environment
-discovery, credential echo or connection attempt is used during construction.
+come from an explicit per-environment owner file, or the global public DB
+connection when the group enables the center; no environment discovery,
+credential echo or connection attempt is used during construction.
 """
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -12,7 +13,7 @@ from .official_binding_policy import OfficialBindingPolicy
 from .official_binding_service import BindingScope, OfficialBindingService
 from .official_bindings import BindingError
 from .official_center import CheckedOfficialBindings, OfficialMySQLFactory
-from .official_core import OfficialError, permission, read_json, uuid_value
+from .official_core import OfficialError, read_json, uuid_value
 from .official_transport import ModTarget, V2ModClient, V2TokenPeer
 from .official_local import LocalRepository, LocalBindingService
 
@@ -43,17 +44,51 @@ def token_peer(target, token_source, revalidate):
 
 class OfficialBindingHost:
     def __init__(self, groups, selection, *, settings_source=None, center_factory=center_repository,
-                 peer_factory=token_peer):
+                 peer_factory=token_peer, center_defaults=None):
         self.groups, self.selection = groups, selection
+        self.center_defaults = center_defaults
         self.settings_source = settings_source or self._settings
         self.center_factory, self.peer_factory = center_factory, peer_factory
+
+    def _default_settings(self):
+        """环境级文件不存在时，使用全局公共连接；是否启用由本群策略决定。
+
+        环境级文件始终优先；存在但无效时不会回退到全局，避免把错误配置
+        静默换成另一套存储权威。
+        """
+        if not callable(self.center_defaults):
+            raise BindingError("NOT_SUPPORTED", "官方绑定尚未配置独立中心，当前不能开放。")
+        try:
+            snapshot = deepcopy(self.center_defaults())
+        except Exception:
+            raise BindingError("STORAGE_ERROR", "官方中心配置暂不可用。") from None
+        if snapshot is None:
+            raise BindingError("NOT_SUPPORTED", "官方中心未启用，当前不能开放。")
+        if (not isinstance(snapshot, dict)
+                or set(snapshot) != {"enabled", "storage_mode", "connection"}
+                or type(snapshot["enabled"]) is not bool):
+            raise BindingError("SCHEMA_MISMATCH", "官方中心配置结构无效。")
+        if not snapshot["enabled"] or snapshot["storage_mode"] not in ("hybrid", "remote", "local"):
+            raise BindingError("NOT_SUPPORTED", "官方中心未启用，或所选存储模式尚未接通。")
+        connection = snapshot["connection"]
+        needs_center = snapshot["storage_mode"] != "local"
+        if ((needs_center or connection is not None) and (not isinstance(connection, dict)
+                or set(connection) != {"host", "port", "user", "password", "database", "ssl_ca"})):
+            raise BindingError("SCHEMA_MISMATCH", "官方中心连接字段不完整。")
+        def unchanged():
+            try:
+                return self.center_defaults() == snapshot
+            except Exception:
+                return False
+        return CenterSettings(dict(connection) if connection is not None else None,
+                              unchanged, snapshot["storage_mode"], {})
 
     def _settings(self, environment):
         path = self.groups.root / uuid_value(environment) / "center_settings.json"
         try:
             before = path.stat()
         except FileNotFoundError:
-            raise BindingError("NOT_SUPPORTED", "官方绑定尚未配置独立中心，当前不能开放。") from None
+            return self._default_settings()
         except OSError:
             raise BindingError("STORAGE_ERROR", "官方中心配置暂不可用。") from None
         try:
@@ -104,11 +139,15 @@ class OfficialBindingHost:
         with self.groups.lock:
             state = self.groups.list_state(event_scope.environment_id)
             group = next((g for g in state["groups"] if g["group_openid"] == event_scope.group_id), None)
-            if group is None or not group["enabled"] or permission(event_scope, group, state["environment_administrators"]) == 0:
+            if group is None or not group["enabled"] or self.groups.access_level(event_scope, group, state["environment_administrators"]) == 0:
                 raise BindingError("UNAUTHORIZED", "当前官方群或身份未获授权。")
             group = deepcopy(group)
             administrators = tuple(sorted(state["environment_administrators"]))
-        settings = self.settings_source(event_scope.environment_id)
+        # 中心库开关跟随本群策略；关闭时不读取环境级中心文件，直接使用模组本地权威。
+        if group["policy"]["use_central_db"]:
+            settings = self.settings_source(event_scope.environment_id)
+        else:
+            settings = CenterSettings(None, lambda: True, "local", {})
         if not isinstance(settings, CenterSettings) or not callable(settings.unchanged):
             raise BindingError("STORAGE_ERROR", "官方中心依赖无效。")
 
@@ -124,7 +163,7 @@ class OfficialBindingHost:
                 latest = next((g for g in state["groups"] if g["group_openid"] == event_scope.group_id), None)
                 if (latest is None or not latest["enabled"] or latest["revision"] != group["revision"]
                         or tuple(sorted(state["environment_administrators"])) != administrators
-                        or permission(event_scope, latest, state["environment_administrators"]) == 0):
+                        or self.groups.access_level(event_scope, latest, state["environment_administrators"]) == 0):
                     raise BindingError("CONFLICT", "官方群配置或权限已变化，请使用新消息。")
 
         revalidate()
@@ -143,7 +182,15 @@ class OfficialBindingHost:
         environment = uuid_value(expected.get("environment_id"))
         if guard is not None and guard() is False:
             raise BindingError("UNAUTHORIZED", "当前管理请求未获授权。")
-        settings = self.settings_source(environment)
+        with self.groups.lock:
+            state = self.groups.list_state(environment)
+            groups = {group["group_openid"]: group for group in state["groups"]}
+        # 已知群关闭中心库时按本地模式恢复；未指定群的后台扫描仍读取中心设置。
+        group = groups.get(group_id) if group_id is not None else None
+        if group is not None and not group["policy"]["use_central_db"]:
+            settings = CenterSettings(None, lambda: True, "local", {})
+        else:
+            settings = self.settings_source(environment)
         if not isinstance(settings, CenterSettings) or not callable(settings.unchanged):
             raise BindingError("STORAGE_ERROR", "官方中心依赖无效。")
         if settings.connection is None and server_id is None:
@@ -154,9 +201,6 @@ class OfficialBindingHost:
             if guard is not None and guard() is False:
                 raise BindingError("UNAUTHORIZED", "当前管理请求已失效。")
         revalidate()
-        with self.groups.lock:
-            state = self.groups.list_state(environment)
-            groups = {group["group_openid"]: group for group in state["groups"]}
         center = self.center_factory(settings.connection,revalidate) if settings.connection is not None else UnselectedAuthority()
         if server_id is not None:
             uuid_value(server_id)

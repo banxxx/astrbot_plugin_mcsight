@@ -390,7 +390,7 @@ class EventPolicyGuardTests(unittest.TestCase):
         self.event = core.event_scope(prior.Event(message_id="SYNTHETIC_POLICY_EVENT"), prior.SELECTION)
         candidate = self.groups.register(self.event, "synthetic")
         group = self.groups.approve(ENV, candidate["candidate_id"], self.groups.list_state(ENV)["revision"],
-                                   "Synthetic", "Synthetic")
+                                   "Synthetic", "123456789")
         group = self.groups.update(ENV, group["config_id"], group["revision"], {"enabled": True, "servers": [
             {"server_id": "", "name": "one", "host": "mc.example.invalid", "game_port": 25565,
              "api_port": 8080, "hidden": False, "remark": ""}]})

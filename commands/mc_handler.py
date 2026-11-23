@@ -36,6 +36,11 @@ async def handle_mc_command(event: AstrMessageEvent):
     else:
         config = ConfigManager(session_id=event.session_id)
 
+    # 本群总开关：关闭后查询、绑定、管理命令与其他群互不影响。
+    if group_id and not config.is_group_enabled():
+        yield event.plain_result("本群功能已关闭，请在后台「群与服务器 → 本群规则」中启用本群功能。")
+        return
+
     # 黑名单闸门：配置承诺黑名单用户无法使用插件的所有功能，
     # 所有命令都汇聚到本入口，在这里统一拦截（在防抖与解析之前）。
     # 用同步的 is_blacklisted 而非 get_user_permission_level()，

@@ -114,12 +114,9 @@ def _format_sync_failures(failed, action: str) -> str:
     return "\n" + "\n".join(lines)
 
 
-def _get_group_id(event: AstrMessageEvent, wm: WhitelistManager) -> str:
-    """从事件或配置中获取当前群号"""
-    gid = event.get_group_id()
-    if gid:
-        return str(gid)
-    return str(wm._get_config_value("default_group_id", ""))
+def _get_group_id(event: AstrMessageEvent) -> str:
+    """只从当前事件取群号；默认群号兜底已移除，避免把私聊操作写进别的群。"""
+    return str(event.get_group_id() or "")
 
 
 # ============================================================
@@ -133,7 +130,7 @@ async def _do_unbind_by_game_id(event, config, wm, use_central, game_id,
 
     # ---- 中心模式：直连数据库 ----
     if use_central:
-        group_id = _get_group_id(event, wm)
+        group_id = _get_group_id(event)
         if not group_id:
             yield event.plain_result("❌ 无法获取群号，请确保在群聊中使用本命令。")
             return
@@ -266,7 +263,7 @@ async def _do_unbind_by_qq(event, config, wm, use_central, target_qq,
 
     # ---- 中心模式 ----
     if use_central:
-        group_id = _get_group_id(event, wm)
+        group_id = _get_group_id(event)
         if not group_id:
             yield event.plain_result("❌ 无法获取群号，请确保在群聊中使用本命令。")
             return
@@ -469,7 +466,7 @@ async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: lis
         yield event.plain_result("还没有添加任何服务器。")
         return
 
-    use_central = wm.use_central_db
+    use_central = config.get_flag("use_central_db")
 
     # ---- 步骤0：每用户失败预算（不再替连续瞎猜的人向各服转发） ----
     guard_scope = str(event.get_group_id() or event.session_id)
@@ -580,7 +577,7 @@ async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: lis
     # 步骤3A：中心模式 —— 直接操作数据库
     # ============================================================
     if use_central:
-        group_id = _get_group_id(event, wm)
+        group_id = _get_group_id(event)
         if not group_id:
             yield event.plain_result("❌ 无法获取群号，请确保在群聊中使用本命令。")
             return
@@ -646,7 +643,7 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
         yield event.plain_result("❌ 模组 API Token 未配置，请联系管理员设置。")
         return
 
-    use_central = wm.use_central_db
+    use_central = config.get_flag("use_central_db")
     current_qq = str(event.get_sender_id())
 
     target_server_name = None
@@ -716,7 +713,7 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
     # ---- 查询该 game_id 绑定的 QQ，验证是否属于当前用户 ----
     bound_qq = None
     if use_central:
-        group_id = _get_group_id(event, wm)
+        group_id = _get_group_id(event)
         if not group_id:
             yield event.plain_result("❌ 无法获取群号，请确保在群聊中使用本命令。")
             return
@@ -832,7 +829,7 @@ async def handle_check(event: AstrMessageEvent, config: ConfigManager, parts: li
         yield event.plain_result("❌ 模组 API Token 未配置，请联系管理员设置。")
         return
 
-    use_central = wm.use_central_db
+    use_central = config.get_flag("use_central_db")
 
     query_type = None
     query_value = None
@@ -871,7 +868,7 @@ async def handle_check(event: AstrMessageEvent, config: ConfigManager, parts: li
     # 中心模式：直连数据库查询
     # ============================================================
     if use_central:
-        group_id = _get_group_id(event, wm)
+        group_id = _get_group_id(event)
         if not group_id:
             yield event.plain_result("❌ 无法获取群号，请确保在群聊中使用本命令。")
             return

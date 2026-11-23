@@ -93,6 +93,33 @@ class TransportTests(unittest.TestCase):
         self.assertTrue(self.connection.closed)
         self.assertNotIn(CREDENTIAL, repr(client.__dict__))
 
+    def test_official_whitelist_setting_is_a_typed_single_boolean_post(self):
+        client = self.make(Connection(Response(envelope(dict(
+            enabled=False, persisted=True, online_players=3, released=1)))))
+        data = client.request("settings/whitelist", {"enabled": False}, token=CREDENTIAL)
+        args, kwargs = self.connection.requests[0]
+        self.assertEqual(args, ("POST", "/api/v2/binding/settings/whitelist"))
+        self.assertEqual(json.loads(kwargs["body"]), dict(SCOPE.wire(), enabled=False))
+        self.assertEqual(data["enabled"], False)
+        self.assertEqual(data["released"], 1)
+        for bad in ({"enabled": "false"}, {"enabled": 0}, {"enabled": None}, {}):
+            client = self.make()
+            with self.subTest(bad=bad), self.assertRaises(prior.core.OfficialError):
+                client.request("settings/whitelist", bad, token=CREDENTIAL)
+            self.assertFalse(self.factories)
+
+    def test_official_whitelist_reply_requires_exact_typed_fields(self):
+        for payload in (dict(enabled=False, persisted=True, online_players=0, released=0, extra=True),
+                        dict(enabled=False, persisted=True, online_players=0),
+                        dict(enabled="false", persisted=True, online_players=0, released=0),
+                        dict(enabled=False, persisted=None, online_players=0, released=0),
+                        dict(enabled=False, persisted=True, online_players=-1, released=0),
+                        dict(enabled=False, persisted=True, online_players=0, released=True)):
+            client = self.make(Connection(Response(envelope(payload))))
+            with self.subTest(payload=payload), self.assertRaises(transport.TransportError) as caught:
+                client.request("settings/whitelist", {"enabled": False}, token=CREDENTIAL)
+            self.assertEqual(caught.exception.code, "SCHEMA_MISMATCH")
+
     def test_get_scopes_are_encoded_and_have_no_post_body(self):
         client = self.make()
         client.request("check", {"user_id": USER, "limit": 10}, token=CREDENTIAL)

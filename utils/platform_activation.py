@@ -73,7 +73,7 @@ def _validate_registry(data):
                 or entry["platform"] not in ("onebot", "qq_official")):
             raise SelectionError("官方环境登记格式无效。")
         key = _uuid(entry["environment_id"])
-        _text(entry["application_ref"], empty=entry["platform"] == "onebot")
+        _text(entry["application_ref"], empty=True)
         if key in environments or (entry["platform"] == "onebot" and entry["application_ref"]):
             raise SelectionError("环境登记重复或归属不匹配。")
         environments[key] = entry
@@ -291,18 +291,18 @@ class ActivationController:
             raise SelectionError("新建环境选项必须为布尔值。")
         application_ref = ""
         if platform == "qq_official":
-            application_ref = _text(request.get("application_ref"))
-            if request.get("confirm_application") is not True:
-                raise SelectionError("请确认所选官方实例属于填写的应用；更换应用须使用新环境。")
+            # AppID 不再由页面手填：统一把本平台既有环境的应用标识清空，环境仅按平台归组。
+            for item in registry["environments"]:
+                if item["platform"] == "qq_official":
+                    item["application_ref"] = ""
         environment_id = request.get("environment_id", "")
         _text(environment_id, empty=True)
         if new_environment and environment_id:
             raise SelectionError("新建环境时不能同时指定旧环境。")
-        matches = [item for item in registry["environments"]
-                   if item["platform"] == platform and item["application_ref"] == application_ref]
+        matches = [item for item in registry["environments"] if item["platform"] == platform]
         if environment_id:
             if not any(item["environment_id"] == environment_id for item in matches):
-                raise SelectionError("所选环境不属于当前平台和应用。")
+                raise SelectionError("所选环境不属于当前平台。")
         elif not new_environment:
             saved = registry["selection"] or {}
             if any(item["environment_id"] == saved.get("environment_id") for item in matches):
@@ -310,7 +310,7 @@ class ActivationController:
             elif len(matches) == 1:
                 environment_id = matches[0]["environment_id"]
             elif len(matches) > 1:
-                raise SelectionError("该应用有多个环境，请显式选择要使用的环境。")
+                raise SelectionError("当前平台存在多个环境，请由管理员处理。")
         if not environment_id:
             if len(registry["environments"]) >= MAX_ENVIRONMENTS:
                 raise SelectionError("环境登记数量已满，请先安排维护。")
@@ -393,7 +393,7 @@ class ActivationController:
             if saved is not None:
                 result.update(state="pending_restart", message="选择已保存，请完整重启 AstrBot 后应用。")
             elif self.platform == "qq_official":
-                result.update(state="selection_required", message="QQ 官方必须在配置页显式选择实例并确认应用归属。")
+                result.update(state="selection_required", message="QQ 官方必须在配置页显式选择实例。")
             elif not self.requested_instance and not result["framework_loaded"]:
                 result.update(state="loading", message="等待框架加载完成；也可显式保存实例后完整重启。")
             else:
@@ -412,9 +412,9 @@ class ActivationController:
             result.update(state="offline", message="所选适配器已停止或出错，业务暂停且不自动接管。")
         elif self.selection["platform"] not in READY_PLATFORMS:
             if self.official_scope is not None:
-                result.update(state="configuring", message="已选择 QQ 官方；群登记和只读功能按群配置开放，绑定与远程写操作尚未开放。")
+                result.update(state="configuring", message="已选择 QQ 官方；群登记、查询、绑定与写操作按群配置开放。")
             else:
-                result.update(state="not_ready", message="当前阶段尚未开放 QQ 官方业务，所选官方实例保持静默。")
+                result.update(state="not_ready", message="QQ 官方业务尚未就绪，所选官方实例保持静默。")
         else:
             result.update(state="active", message="本插件仅处理当前运行选择；在线状态尚未确认。")
         if memory_only:

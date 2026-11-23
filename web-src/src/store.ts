@@ -9,10 +9,12 @@ import { ApiError } from "./lib/bridge";import type {
   GroupBrief,
   GroupPayload,
   ModState,
+  OfficialState,
   ServerEntry,
 } from "./lib/types";
 
 export type PageKey = "srv" | "cfg" | "official" | "const" | "map" | "help";
+export type PlatformView = "onebot" | "qq_official";
 
 export { api };
 
@@ -27,6 +29,9 @@ export interface Dialog {
 
 interface State {
   activation: ActivationStatus | null;
+  /** 官方页与新增群弹窗共享的当前环境/状态，避免弹窗自己再拉一遍。 */
+  officialEnvironment: string;
+  officialState: OfficialState | null;
   ready: boolean;
   noBridge: boolean;
   /** 在飞的请求数，读与写都算。页面用它把「还没读到」和「真的没有数据」分开 */
@@ -54,6 +59,8 @@ interface State {
 
 export const S = reactive<State>({
   activation: null,
+  officialEnvironment: "",
+  officialState: null,
   ready: false,
   noBridge: false,
   pending: 0,
@@ -80,6 +87,11 @@ export const S = reactive<State>({
 export const currentGroup = computed(() => S.group);
 export const servers = computed<ServerEntry[]>(() => S.group?.servers ?? []);
 export const dirtyCount = computed(() => Object.keys(S.cfgDraft).length);
+
+/** 真正接管消息的平台；没有激活信息时按 OneBot 兼容旧行为。配置页始终跟随它。 */
+export const activePlatform = computed<PlatformView>(() =>
+  S.activation?.selection?.platform === "qq_official" ? "qq_official" : "onebot",
+);
 
 let toastTimer: number | undefined;
 
@@ -119,8 +131,8 @@ export function closeDialog() {
   S.dialog = null;
 }
 
-export async function loadSummary() {
-  const r = await inflight(() => api.summary());
+export async function loadSummary(platform: PlatformView = activePlatform.value) {
+  const r = await inflight(() => api.summary(platform));
   S.groups = r.groups;
   S.maxServers = r.max_servers_per_group;
   S.pluginVersion = r.plugin_version;
@@ -410,6 +422,13 @@ export async function boot() {
       .AstrBotPluginView?.ready();
   } catch {
     /* 桥的 ready 只在面板里 resolve；到这里说明上下文没发过来 */
+  }
+  if (!S.activation) {
+    try {
+      S.activation = await api.activation();
+    } catch {
+      /* 读不到生效平台时按 OneBot 兼容视图继续 */
+    }
   }
   try {
     await loadSummary();

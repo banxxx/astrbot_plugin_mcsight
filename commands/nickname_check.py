@@ -59,24 +59,24 @@ async def handle_nicknamecheck_switch(event: AstrMessageEvent, config, parts: li
         if not qq.isdigit():
             yield event.plain_result("❌ QQ 号必须是纯数字。")
             return
-        ids = config.get_nickname_check_ignore_ids()
+        ids = config.get_nickname_ignore()
         if qq in ids:
             yield event.plain_result(f"⚠️ QQ「{qq}」已在忽略列表中。")
             return
         ids.append(qq)
-        config.set_nickname_check_ignore_ids(ids)
+        config.set_nickname_ignore(ids)
         yield event.plain_result(f"✅ 已将 QQ「{qq}」加入忽略列表。")
     elif action in ("取消忽略", "unignore") and len(parts) >= 3:
         qq = parts[2].strip()
-        ids = config.get_nickname_check_ignore_ids()
+        ids = config.get_nickname_ignore()
         if qq not in ids:
             yield event.plain_result(f"⚠️ QQ「{qq}」不在忽略列表中。")
             return
         ids.remove(qq)
-        config.set_nickname_check_ignore_ids(ids)
+        config.set_nickname_ignore(ids)
         yield event.plain_result(f"✅ 已将 QQ「{qq}」从忽略列表移除。")
     elif action in ("忽略列表", "ignorelist"):
-        ids = config.get_nickname_check_ignore_ids()
+        ids = config.get_nickname_ignore()
         if not ids:
             yield event.plain_result("当前忽略列表为空。")
         else:
@@ -84,7 +84,7 @@ async def handle_nicknamecheck_switch(event: AstrMessageEvent, config, parts: li
     elif action is None or action in ("查询", "status", "state"):
         enabled = config.is_nickname_check_enabled()
         state = "已开启" if enabled else "已关闭"
-        ignore_ids = config.get_nickname_check_ignore_ids()
+        ignore_ids = config.get_nickname_ignore()
         ignore_tip = f"\n忽略列表：{', '.join(ignore_ids)}" if ignore_ids else "\n忽略列表：无"
         yield event.plain_result(
             f"当前本群的「昵称检测」功能：{state}{ignore_tip}\n"
@@ -138,7 +138,7 @@ async def handle_checknick(event: AstrMessageEvent, config, parts: list):
         return
 
     # ---- 先读取手动忽略列表（廉价操作，优先判断） ----
-    manual_ignore = set(config.get_nickname_check_ignore_ids())
+    manual_ignore = set(config.get_nickname_ignore())
     if manual_ignore:
         logger.info(f"昵称检测：手动忽略列表 = {manual_ignore}")
 

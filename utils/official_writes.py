@@ -9,7 +9,7 @@ import json
 from threading import RLock
 from uuid import UUID, uuid4, uuid5
 
-from .official_core import OfficialError, atomic_json, read_json, permission, uuid_value
+from .official_core import OfficialError, atomic_json, read_json, uuid_value
 from .official_bindings import BindingError
 from .official_binding_service import BindingScope
 from .official_transport import ModTarget, V2ModClient
@@ -62,7 +62,7 @@ class OfficialWriteCommands:
             raise OfficialError("原官方实例已失效。")
         state=self.groups.list_state(event.environment_id)
         group=next((g for g in state["groups"] if g["group_openid"]==event.group_id),None)
-        level=permission(event,group,state["environment_administrators"]) if group else 0
+        level=self.groups.access_level(event,group,state["environment_administrators"]) if group else 0
         if group is None or not group["enabled"] or level<(3 if admin else 1):
             raise OfficialError("当前身份无权执行此操作。")
         if revision is not None and group["revision"]!=revision:
@@ -80,7 +80,7 @@ class OfficialWriteCommands:
                     if not words or len(words)==1 and words[0].lower() in ("status","state","查询"):
                         field="show_last_online" if command=="lastonline" else "nickname_check_enabled"
                         name="上次在线显示" if command=="lastonline" else "全群昵称检测"
-                        return name,["当前"+("开启" if group["policy"].get(field,True) else "关闭"),"使用 /mc "+command+" 开|关 修改。"]
+                        return name,["当前"+("开启" if group["policy"][field] else "关闭"),"使用 /mc "+command+" 开|关 修改。"]
                     if command=="nicknamecheck" and words in (["忽略列表"],["ignorelist"]):
                         return "本群昵称检测忽略列表",list(group["nickname_ignore"]) or ["空"]
                 path,state=self._load(event)
@@ -157,7 +157,7 @@ class OfficialWriteCommands:
             field="show_last_online" if command=="lastonline" else "nickname_check_enabled"
             policy=deepcopy(group["policy"])
             if not words or words==["status"] or words==["查询"]:
-                raise OfficialError(("上次在线显示" if command=="lastonline" else "全群昵称检测")+"当前"+("开启" if policy.get(field,True) else "关闭")+"；使用 开/关 修改。")
+                raise OfficialError(("上次在线显示" if command=="lastonline" else "全群昵称检测")+"当前"+("开启" if policy[field] else "关闭")+"；使用 开/关 修改。")
             if len(words)==1 and words[0].lower() in ("开","on","true","1","开启","关","off","false","0","关闭"):
                 policy[field]=words[0].lower() in ("开","on","true","1","开启")
                 return command,[],"",dict(policy=policy)

@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw
 
 from ...utils.avatar_cache import download_avatar, get_default_avatar
 from ...utils.text_renderer import draw_text_with_emoji, measure_text_with_emoji
-from ...config.whitelist_config import WhitelistManager
+from ...utils.group_policy import POLICY_DEFAULTS
 from ..help_image.image_generator import (
     WIDTH, PAD, SCALE, BG, ACCENT,
     new_ops, add_text, add_rect, add_ellipse, add_dash, add_shadow,
@@ -173,37 +173,63 @@ def _make_rounded(img: Image.Image, radius: int) -> Image.Image:
     return img
 
 
-def _layout_remark(text: str, max_w: float):
-    """备注折行：最多 REMARK_MAX_LINES 行，放不下时末行以 … 结尾。
+def _coalesce_chars(chars):
+    """(单字符, color) 流合并成 (text, color) 段；None 色落到默认备注色。"""
+    out = []
+    for ch, c in chars:
+        c = c or REMARK_COLOR
+        if out and out[-1][1] == c:
+            out[-1] = (out[-1][0] + ch, c)
+        else:
+            out.append((ch, c))
+    return out
 
+
+def _layout_remark_runs(runs, max_w: float):
+    """备注彩色折行：runs=[(text, hex|None), ...]，返回行列表（每行是 (text, color) 段）。
+
+    与旧 _layout_remark 同口径（逐字符折行），最多 REMARK_MAX_LINES 行，放不下末行以 … 结尾。
     高度估算（_card_height）与绘制（_draw_card）共用本函数，行数永不漂移。
-    测量用字体 getlength，与 add_text 的实际绘制同源。
     """
     font = _font(REMARK_SIZE)
     ell_w = font.getlength('…')
-    lines, cur, cur_w = [], '', 0.0
-    for ch in text:
+    chars = [(ch, c) for t, c in runs for ch in t]
+    lines, cur, cur_w = [], [], 0.0
+    for ch, c in chars:
         w = font.getlength(ch)
         if cur and cur_w + w > max_w:
             lines.append(cur)
-            cur, cur_w = '', 0.0
-        cur += ch
+            cur, cur_w = [], 0.0
+        cur.append((ch, c))
         cur_w += w
     if cur:
         lines.append(cur)
     if len(lines) <= REMARK_MAX_LINES:
-        return lines
+        return [_coalesce_chars(ln) for ln in lines]
     # 超出行数：前 N-1 行完整保留，剩余内容填入末行并预留省略号宽度
     kept = lines[:REMARK_MAX_LINES - 1]
-    last, last_w = '', 0.0
-    for ch in ''.join(lines[REMARK_MAX_LINES - 1:]):
-        w = font.getlength(ch)
-        if last and last_w + w > max_w - ell_w:
-            break
-        last += ch
-        last_w += w
-    kept.append(last + '…')
-    return kept
+    last, last_w = [], 0.0
+    for ln in lines[REMARK_MAX_LINES - 1:]:
+        for ch, c in ln:
+            w = font.getlength(ch)
+            if last and last_w + w > max_w - ell_w:
+                break
+            last.append((ch, c))
+            last_w += w
+    last.append(('…', last[-1][1] if last else None))
+    kept.append(last)
+    return [_coalesce_chars(ln) for ln in kept]
+
+
+def _remark_lines(card):
+    """当前卡备注的折行（彩色 runs 或纯文本单段）；供高度估算与绘制共用。"""
+    runs = card.get('remark_runs')
+    if runs:
+        return _layout_remark_runs(runs, REMARK_MAX_W)
+    remark = (card.get('remark') or '').strip()
+    if not remark:
+        return []
+    return _layout_remark_runs([(remark, None)], REMARK_MAX_W)
 
 
 # ========== 高度估算与分页装箱 ==========
@@ -232,9 +258,7 @@ def _card_height(card: Dict[str, Any]) -> int:
                   + CARD_PAD_BOTTOM)
     if limit is not None and len(players) > limit:
         card_h += FOLD_ROW_H
-    remark = (card.get('remark') or '').strip()
-    if remark:
-        card_h += len(_layout_remark(remark, REMARK_MAX_W)) * REMARK_LINE_H
+    card_h += len(_remark_lines(card)) * REMARK_LINE_H
     return card_h
 
 
@@ -243,9 +267,7 @@ def _max_players_for_height(card: Dict[str, Any], avail: int) -> int:
     base = (CARD_PAD_TOP + HEAD_H + CAP_Y_GAP + CAP_H
             + DIV_GAP_TOP + 1 + DIV_GAP_BOTTOM + CARD_PAD_BOTTOM
             + FOLD_ROW_H)  # 被截断的卡必带折叠行
-    remark = (card.get('remark') or '').strip()
-    if remark:
-        base += len(_layout_remark(remark, REMARK_MAX_W)) * REMARK_LINE_H
+    base += len(_remark_lines(card)) * REMARK_LINE_H
     room = avail - base
     if room < AVATAR:
         return COLS
@@ -311,8 +333,6 @@ def _draw_card(draw, ops, card, y):
 
     # 高度统一由 _card_height 决定（分页装箱与绘制共用一套公式，不会漂移）
     card_h = _card_height(card)
-
-    remark = (card.get('remark') or '').strip()
 
     add_shadow(ops, x0, y, x1 - x0, card_h, CARD_RADIUS)
     add_rect(ops, 'bg0', x0, y, x1 - x0, card_h, CARD_RADIUS, card_bg)
@@ -384,13 +404,13 @@ def _draw_card(draw, ops, card, y):
              COUNT_TXT_COLOR)
 
     # 备注行：与容量条/玩家网格左对齐（px0），首行下移避开胶囊底部，
-    # 最多 REMARK_MAX_LINES 行，超长由 _layout_remark 以 … 结尾
+    # 最多 REMARK_MAX_LINES 行，超长以 … 结尾；支持 MOTD 彩色分段
     body_top = head_top + HEAD_H
-    if remark:
-        remark_lines = _layout_remark(remark, REMARK_MAX_W)
+    remark_lines = _remark_lines(card)
+    if remark_lines:
         for i, line in enumerate(remark_lines):
-            add_text(ops, px0, body_top + REMARK_Y_OFF + i * REMARK_LINE_H,
-                     line, REMARK_SIZE, REMARK_COLOR)
+            place_runs(ops, draw, px0, body_top + REMARK_Y_OFF + i * REMARK_LINE_H,
+                       line, REMARK_SIZE)
         body_top += len(remark_lines) * REMARK_LINE_H
 
     # 容量条
@@ -481,11 +501,17 @@ def _build_status(draw, ops, doc, y):
 
 
 async def draw_status_pages(servers_data: List[Dict[str, Any]],
-                            show_last_online: bool = False) -> List[Image.Image]:
-    """生成 /在线 的全部页面图片（按高度预算自动分页，通常只有一页）。"""
-    wm = WhitelistManager()
-    show_version = wm.show_server_version
-    show_latency = wm.show_server_latency
+                            show_last_online: bool = False,
+                            show_version: bool | None = None,
+                            show_latency: bool | None = None) -> List[Image.Image]:
+    """生成 /在线 的全部页面图片（按高度预算自动分页，通常只有一页）。
+
+    显示项由调用方按本群配置传入；未传时使用共享群策略默认值。
+    """
+    if show_version is None:
+        show_version = POLICY_DEFAULTS["show_server_version"]
+    if show_latency is None:
+        show_latency = POLICY_DEFAULTS["show_server_latency"]
     now_str = time.strftime("%Y/%m/%d  %H:%M:%S")
 
     # ---- 归一化 + 收集头像下载请求 ----
@@ -510,6 +536,7 @@ async def draw_status_pages(servers_data: List[Dict[str, Any]],
             'version': srv.get('version', '未知'),
             'latency': srv.get('latency'),
             'remark': srv.get('remark', ''),
+            'remark_runs': srv.get('remark_runs'),
             'last_activity_time': srv.get('last_activity_time', 0),
             'show_version': show_version,
             'show_latency': show_latency,

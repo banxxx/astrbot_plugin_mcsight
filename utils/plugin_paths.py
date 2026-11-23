@@ -18,7 +18,7 @@ def data_dir() -> str:
 
 
 def sub_dir(name: str) -> str:
-    """数据根下的子目录，如 group_configs / help_cache / avatar_cache"""
+    """数据根下的子目录，如 onebot / qq_official / help_cache / avatar_cache"""
     path = os.path.join(data_dir(), name)
     os.makedirs(path, exist_ok=True)
     return path

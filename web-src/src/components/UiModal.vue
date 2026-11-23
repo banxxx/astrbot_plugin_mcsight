@@ -115,7 +115,9 @@ onBeforeUnmount(() => {
 .ms { font-size: 13px; line-height: 1.5; color: var(--ink3); overflow-wrap: anywhere; }
 .mx { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; padding: 0; border: 1px solid #f6f8fc; border-radius: 8px; background: #f6f8fc; color: var(--ink3); cursor: pointer; }
 .mx:hover { background: #eef0fd; color: var(--ac); }
-.mb { display: flex; flex: 0 1 auto; min-height: 0; flex-direction: column; gap: 20px; overflow-y: auto; overscroll-behavior: contain; }
+/* overflow-y:auto 会连横轴一起裁剪，聚焦时的 1px 描边 + 4px 光晕会被切掉；
+   用 6px 内边距给焦点环留出空间，负外边距抵消，视觉布局保持不变。 */
+.mb { display: flex; flex: 0 1 auto; min-height: 0; flex-direction: column; gap: 20px; overflow-y: auto; overscroll-behavior: contain; padding: 6px; margin: -6px; }
 .mf { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 16px; border-top: 1px solid #e8ecf3; }
 .mf .info { margin-right: auto; min-width: 0; color: var(--ink3); font-size: 12px; overflow-wrap: anywhere; }
 .mf .spacer { flex: 1 1 auto; }
@@ -124,7 +126,7 @@ onBeforeUnmount(() => {
   .modal.is-mobile { width: 100%; height: 100vh; height: 100dvh; max-height: 100vh; max-height: 100dvh; padding: 0; gap: 0; border: none; border-radius: 0; }
   .modal.is-mobile .mh { min-height: 88px; padding: calc(20px + env(safe-area-inset-top)) 20px 20px; border-bottom: 1px solid var(--bd); }
   .modal.is-mobile .mx { width: 44px; height: 44px; }
-  .modal.is-mobile .mb { flex: 1 1 auto; padding: 20px; gap: 20px; }
+  .modal.is-mobile .mb { flex: 1 1 auto; padding: 20px; gap: 20px; margin: 0; }
   .modal.is-mobile .mf { min-height: 76px; padding: 16px 20px calc(16px + env(safe-area-inset-bottom)); flex-wrap: wrap; }
   .modal.is-mobile .mf .info { flex-basis: 100%; }
   .modal.is-mobile.m-confirm, .modal.is-mobile.m-confirm-typed { align-self: center; width: calc(100% - 32px); height: auto; max-height: calc(100dvh - 32px); border: 1px solid var(--bd); border-radius: 14px; }

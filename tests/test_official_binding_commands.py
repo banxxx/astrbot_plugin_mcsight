@@ -84,11 +84,13 @@ class CommandIntegrationTests(unittest.TestCase):
             db.executescript(warehouse.SCHEMA)
             db.commit()
         self.center = bindings.OfficialBindings(lambda: sqlite3.connect(self.db_path), placeholder="?")
-        self.groups = core.OfficialStore(self.root / "groups")
+        # 中心库改为按群开关；这些集成测试显式开启，覆盖既有中心路径。
+        self.groups = core.OfficialStore(self.root / "groups",
+                                         policy_defaults=lambda: {"use_central_db": True})
         self.event = prior.scope(message_id="SYNTHETIC_BIND_EVENT_A")
         candidate = self.groups.register(self.event)
         self.group = self.groups.approve(ENV, candidate["candidate_id"], self.groups.list_state(ENV)["revision"],
-                                         "Synthetic", "Synthetic")
+                                         "Synthetic", "123456789")
         self.update({"enabled": True, "servers": [prior.server()]})
         self.current, self.unchanged, self.opens = dict(prior.SELECTION), True, 0
         self.peers, self.dependencies = {}, []
@@ -297,7 +299,7 @@ class CommandIntegrationTests(unittest.TestCase):
         with patch.object(self.center, "commit_unbind", side_effect=bindings.BindingError("RESULT_UNKNOWN", "synthetic lost")):
             self.execute("unbind", "all", event)
         operation = self.operation(event, "unbind_user")
-        self.update({"alias": "Changed synthetic alias"})
+        self.update({"alias": "Changed alias"})
         self.execute("operation", operation["operation_id"] + " retry", replace(event, message_id="SYNTHETIC_POLICY_RETRY"))
         self.assertEqual(self.operation(event, "unbind_user")["state"], "REJECTED")
         self.assertEqual(self.center.active_snapshot(ENV, GROUP, USER)[0]["revision"], "1")
@@ -342,6 +344,15 @@ class CommandIntegrationTests(unittest.TestCase):
         with self.assertRaises(bindings.BindingError):
             session.peer(self.group["servers"][0])
         self.assertEqual(self.peers, {})
+
+    def test_group_center_switch_off_uses_local_without_loading_center_settings(self):
+        policy = dict(self.group["policy"], use_central_db=False)
+        self.update({"policy": policy})
+        before = self.opens
+        session = self.host.open(self.event)
+        self.assertEqual((session.settings.storage_mode, session.settings.connection), ("local", None))
+        self.assertIsInstance(session.central, host_module.UnselectedAuthority)
+        self.assertEqual(self.opens, before)
 
     def test_public_hidden_target_is_not_probed_but_remains_a_fixed_sync_target(self):
         self.update({"servers": self.group["servers"] + [prior.server("hidden", hidden=True)]})
@@ -402,10 +413,38 @@ class SettingsTests(unittest.TestCase):
         self.path.write_text('{"enabled":true,"enabled":false}', encoding="utf-8")
         with self.assertRaises(bindings.BindingError): self.host._settings(ENV)
 
+    def test_missing_file_uses_global_defaults_and_revalidates(self):
+        snapshot = dict(enabled=True, storage_mode="hybrid", connection=center_tests.settings())
+        host = host_module.OfficialBindingHost(
+            self.groups, lambda: prior.SELECTION, center_defaults=lambda: deepcopy(snapshot))
+        settings = host._settings(ENV)
+        self.assertEqual((settings.storage_mode, settings.server_modes), ("hybrid", {}))
+        self.assertEqual(settings.connection["host"], center_tests.settings()["host"])
+        self.assertTrue(settings.unchanged())
+        snapshot["enabled"] = False
+        self.assertFalse(settings.unchanged())
+
+    def test_global_local_mode_needs_no_connection(self):
+        host = host_module.OfficialBindingHost(
+            self.groups, lambda: prior.SELECTION,
+            center_defaults=lambda: {"enabled": True, "storage_mode": "local", "connection": None})
+        settings = host._settings(ENV)
+        self.assertEqual((settings.storage_mode, settings.connection), ("local", None))
+
+    def test_invalid_explicit_file_never_falls_back_to_global_defaults(self):
+        self.data["storage_mode"] = "unsupported"
+        self.write()
+        host = host_module.OfficialBindingHost(
+            self.groups, lambda: prior.SELECTION,
+            center_defaults=lambda: dict(enabled=True, storage_mode="hybrid",
+                                         connection=center_tests.settings()))
+        with self.assertRaises(bindings.BindingError):
+            host._settings(ENV)
+
 
 class RuntimeIngressTests(unittest.IsolatedAsyncioTestCase):
     async def test_registered_runtime_command_calls_worker_and_replayed_event_does_not_repeat(self):
-        fixture = prior.RuntimeTests("test_setup_registration_and_help_only_before_activation")
+        fixture = prior.RuntimeTests("test_setup_code_creates_group_and_help_only_before_activation")
         fixture.setUp()
         self.addCleanup(fixture.temp.cleanup)
         runtime = fixture.make_runtime()

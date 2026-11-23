@@ -78,8 +78,10 @@ class WhitelistManager:
                 if hasattr(self._context, 'get_plugin_config'):
                     config = self._context.get_plugin_config()
                     if config is not None and isinstance(config, dict):
-                        # 检查是否包含插件配置的实际值（非 schema）
-                        if any(k in config for k in ['show_server_version', 'show_server_latency', 'super_admins']):
+                        # 检查是否包含插件配置的实际值（非 schema）。群规则已移到
+                        # 各群配置，这里只认公共参数，避免把空配置当成有效配置。
+                        if any(k in config for k in ['super_admins', 'whitelist_admins',
+                                                      'blacklist', 'mod_api_token', 'db_host']):
                             self._config_cache = config
                             return config
             except Exception as e:
@@ -311,27 +313,6 @@ class WhitelistManager:
         """黑名单列表"""
         return self._get_config_list("blacklist")
 
-    @property
-    def enable_group_owner(self) -> bool:
-        """是否允许群主使用管理功能"""
-        return self._get_config_value("enable_group_owner", True)
-
-    @property
-    def enable_group_admin(self) -> bool:
-        """是否允许管理员使用管理功能"""
-        return self._get_config_value("enable_group_admin", True)
-
-    # ---------- 显示选项 ----------
-    @property
-    def show_server_version(self) -> bool:
-        """是否显示服务器版本"""
-        return self._get_config_value("show_server_version", False)
-
-    @property
-    def show_server_latency(self) -> bool:
-        """是否显示服务器延迟"""
-        return self._get_config_value("show_server_latency", False)
-
     # ---------- 白名单查询方法 ----------
     def is_super_admin(self, user_id: str) -> bool:
         """检查用户是否是超级管理员"""
@@ -359,11 +340,6 @@ class WhitelistManager:
     def mod_api_token(self) -> str:
         """模组 API 鉴权 Token"""
         return self._get_config_value("mod_api_token", "")
-
-    @property
-    def use_central_db(self) -> bool:
-        """是否启用中心数据库（D1）。若为 False，则回退到调用模组 API 的旧模式"""
-        return self._get_config_value("use_central_db", False)
 
     @property
     def db_host(self) -> str:

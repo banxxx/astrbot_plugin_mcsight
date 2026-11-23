@@ -16,12 +16,17 @@ export interface ServerEntry {
   remark_motd_at: number;
   /** 后端算好的最终显示值——/在线 卡片名字下方用的就是它 */
   remark_display: string;
+  /** MOTD 备注当前生效时的彩色分段；手填/无颜色时为 null */
+  remark_runs: RemarkRun[] | null;
   /** 隐藏＝只从 /在线 撤下去（连查询都不发），条目、绑定、Token 都不动 */
   hidden: boolean;
   has_token: boolean;
 }
 
 export type RemarkSrc = "manual" | "motd";
+
+/** MOTD 彩色分段：[[文本, 安全色 hex|null], ...]；null 表示默认色 */
+export type RemarkRun = [string, string | null];
 
 export interface HidePayload {
   hidden: boolean;
@@ -38,25 +43,41 @@ export interface RemarkSyncPayload {
 
 export interface MotdPreviewPayload {
   motd: string;
+  /** 彩色分段（可能为空数组）；预览只读，也用它显示颜色 */
+  runs?: RemarkRun[];
+}
+
+/** OneBot 与 QQ 官方共用的群策略；字段名必须与 utils/group_policy.py 一致。 */
+export interface GroupPolicy {
+  enable_group_owner: boolean;
+  enable_group_admin: boolean;
+  bind_require_nickname: boolean;
+  bind_nickname_rule: BindRule;
+  bind_nickname_template: string;
+  show_server_version: boolean;
+  show_server_latency: boolean;
+  show_last_online: boolean;
+  nickname_check_enabled: boolean;
+  use_central_db: boolean;
 }
 
 export interface GroupPayload {
   gid: string;
   file: string;
+  /** 群别名（选填）；未设置时为空串 */
+  alias: string;
   servers: ServerEntry[];
   mod_count: number;
   token_count: number;
-  last_online_enabled: boolean;
-  nickname_check_enabled: boolean;
-  bind_require_nickname: boolean;
-  bind_nickname_rule: BindRule;
-  bind_nickname_template: string;
-  nickname_check_ignore_ids: string[];
+  enabled: boolean;
+  policy: GroupPolicy;
+  nickname_ignore: string[];
   max_servers_per_group: number;
 }
 
 export interface GroupBrief {
   gid: string;
+  alias: string;
   server_count: number;
   mod_count: number;
   token_count: number;
@@ -69,7 +90,17 @@ export interface SummaryPayload {
   plugin_name: string;
 }
 
-export type GroupFlagKey = "last_online_enabled" | "nickname_check_enabled" | "bind_require_nickname";
+export type GroupPolicyBoolKey =
+  | "nickname_check_enabled"
+  | "bind_require_nickname"
+  | "enable_group_owner"
+  | "enable_group_admin"
+  | "show_server_version"
+  | "show_server_latency"
+  | "show_last_online"
+  | "use_central_db";
+
+export type GroupFlagKey = "enabled" | GroupPolicyBoolKey;
 
 export type BindRule = "paren" | "equals" | "contains" | "template";
 
@@ -84,12 +115,14 @@ export interface FlagPayload {
 }
 
 export interface IgnorePayload {
-  nickname_check_ignore_ids: string[];
+  nickname_ignore: string[];
 }
 
 export interface ModState {
   reachable: boolean;
   enabled: boolean | null;
+  /** 新模组在官方模式提供 V2 在线写入口；旧模组缺该字段时保持只读。 */
+  writable?: boolean;
   reason?: string;
 }
 
@@ -131,6 +164,7 @@ export interface ConfigItem {
   desc: string;
   hint: string;
   default: unknown;
+  options?: string[] | null;
   secret: boolean;
   value: unknown;
   has_value: boolean;
@@ -187,11 +221,7 @@ export interface ActivationStatus {
 export interface ActivationSave {
   platform: ActivationPlatform;
   instance_id: string;
-  application_ref: string;
-  environment_id: string;
   expected_revision: number;
-  new_environment: boolean;
-  confirm_application: boolean;
 }
 
 export interface OfficialCandidate {
@@ -212,19 +242,34 @@ export interface OfficialServer {
   api_port: number | null;
   hidden: boolean;
   remark: string;
+  /** 备注来源：手填或服务端 MOTD；后端按 server_id 独立存放 */
+  remark_src?: "manual" | "motd";
+  remark_motd?: string;
+  remark_motd_at?: number;
+  /** 后端算好的最终显示值；列表只渲染它 */
+  remark_display?: string;
+  /** MOTD 备注当前生效时的彩色分段；手填/无颜色时为 null */
+  remark_runs?: RemarkRun[] | null;
 }
 
-export interface OfficialPolicy {
-  enable_group_owner: boolean;
-  enable_group_admin: boolean;
-  bind_require_nickname: boolean;
-  bind_nickname_rule: BindRule;
-  bind_nickname_template: string;
-  show_server_version: boolean;
-  show_server_latency: boolean;
-  show_last_online: boolean;
-  nickname_check_enabled?: boolean;
+export interface SetupCodePayload {
+  setup_id: string;
+  code: string;
+  expires_at: number;
+  /** 后台当前时间（秒），用来校正前端倒计时。 */
+  now: number;
 }
+
+export interface SetupStatusPayload {
+  status: "pending" | "claimed" | "expired" | "missing";
+  expires_at?: number;
+  now: number;
+  config_id?: string;
+  /** 验证码刚被消费时返回最新官方状态，弹窗可直接同步整页。 */
+  state?: OfficialState;
+}
+
+export type OfficialPolicy = GroupPolicy;
 
 export interface OfficialGroup {
   config_id: string;
@@ -249,30 +294,11 @@ export interface OfficialState {
   environment_administrators: string[];
   authorization_history_count: number;
   has_mod_token: boolean;
+  console_token_ids: string[];
   active: boolean;
   binding_ready: boolean | null;
   binding_readiness?: string;
   message_delivery: { ready: boolean; receipts_count: number | null; capacity: number; message: string };
-}
-
-export type OfficialOperationState = "PREPARED" | "RESERVED" | "COMMITTED" | "REJECTED" | "ABORTED";
-export interface OfficialOperationScope { environment_id: string; config_id: string; expected_revision: number; server_id?: string; }
-export interface OfficialOperationSummary {
-  operation_id: string; kind: string; state: OfficialOperationState; result_code: string | null;
-  policy_revision: string; created_at: string; updated_at: string;
-}
-export interface OfficialOperationPage {
-  operations: OfficialOperationSummary[]; next_cursor: string | null; total: number; truncated: boolean;
-}
-export interface OfficialOperationDetail {
-  operation_id: string; kind: string; state: OfficialOperationState; result_code: string | null;
-  payload_hash: string; policy_revision: string; pending: boolean; token_state: string | null;
-  effects: { game_id: string; game_key: string; state: string; revision: string }[];
-  delivery: { server_id: string; name: string; mirror: string; whitelist: string; online: string }[];
-}
-export interface OfficialOperationAction {
-  code: string; operation: OfficialOperationDetail;
-  recovery: { token_confirmed: number; delivered: number; failed: number; budget_exhausted: boolean } | null;
 }
 
 export interface ConfigUpdatePayload {

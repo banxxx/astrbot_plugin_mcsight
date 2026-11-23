@@ -145,7 +145,8 @@ class QueryService:
                     continue
                 if not isinstance(data, dict) or len(data) > 256:
                     raise OfficialError("模组统计字段格式无效。")
-                numeric_keys = {"playTime", "blocksMined", "blocksPlaced", "jumps"}
+                # 只保留模组 /api/stats/{player} 实际返回的字段；blocksMined/blocksPlaced/jumps 模组不产出
+                numeric_keys = {"playTime"}
                 numeric_keys.update(item[1] for category in CATEGORIES.values() for item in category["items"])
                 sanitized = {key: max(0, number(data.get(key))) for key in numeric_keys}
                 sanitized["online"] = data.get("online") is True

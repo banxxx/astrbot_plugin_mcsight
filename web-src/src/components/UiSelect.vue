@@ -3,7 +3,7 @@ import { computed, nextTick, ref, useId, watch } from "vue";
 import UiIcon from "./UiIcon.vue";
 import { useAnchoredPopup } from "./useAnchoredPopup";
 
-interface Option { value: string; label: string; description?: string; disabled?: boolean }
+interface Option { value: string; label: string; description?: string; sub?: string; disabled?: boolean }
 const props = withDefaults(defineProps<{
   modelValue: string;
   options: Option[];
@@ -99,7 +99,10 @@ watch(() => props.options, () => {
           :aria-selected="option.value === modelValue" :disabled="option.disabled" :data-active="index === active"
           @pointerdown.prevent @pointermove="!option.disabled && (active = index)" @click="pick(index)">
           <span class="option-check"><UiIcon v-if="option.value === modelValue" name="check" :size="16" /></span>
-          <span class="option-label">{{ option.label }}</span>
+          <span class="option-main">
+            <span class="option-label">{{ option.label }}</span>
+            <span v-if="option.sub" class="option-sub">{{ option.sub }}</span>
+          </span>
           <span v-if="option.description" class="option-description">{{ option.description }}</span>
         </button>
         <div v-if="!options.length" class="select-empty">暂无可选项</div>
@@ -119,7 +122,9 @@ watch(() => props.options, () => {
 .select-menu { position: fixed; z-index: 100; overflow-y: auto; overscroll-behavior: contain; padding: 6px; border: 1px solid var(--bd); border-radius: 10px; background: var(--surface); box-shadow: 0 6px 18px #24335312; }
 .select-option { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 9px 10px; border: none; border-radius: 6px; background: none; color: var(--ink); text-align: left; cursor: pointer; }
 .option-check { display: inline-flex; flex: none; width: 16px; color: var(--ac); }
-.option-label { flex: 1 1 auto; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+.option-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.option-label { font-size: 13px; overflow-wrap: anywhere; }
+.option-sub { font-size: 12px; color: var(--ink3); overflow-wrap: anywhere; }
 .option-description { flex: none; max-width: 45%; font-size: 12px; color: var(--ink3); overflow-wrap: anywhere; }
 .select-option.active:not(.selected), .select-option:hover:not(:disabled) { background: #f8f9ff; }
 .select-option.selected { background: var(--ac-soft); color: var(--ac); font-weight: 500; }

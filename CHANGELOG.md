@@ -4,7 +4,7 @@
 
 ## 2.0.0 — 2026-11-22（QQ 官方机器人平台支持）
 
-这是面向 QQ 官方机器人的大版本。OneBot 原有命令、配置与数据保持兼容；QQ 官方使用独立的平台选择、绑定、存储和操作记录，不复用旧 OneBot 绑定。
+这是面向 QQ 官方机器人的大版本。OneBot 原有命令与绑定数据保持不变；群级配置改为只从「本群规则」读取，旧全局群开关在大版本中直接移除。QQ 官方使用独立的平台选择、绑定、存储和操作记录，不复用旧 OneBot 绑定。
 
 ### 本次更新
 
@@ -13,14 +13,21 @@
 - 支持 `hybrid`（中心数据库 + 本服镜像）、`remote`（中心数据库）、`local`（本服独立权威）三种存储模式；中心不可用时按策略拒绝新增/解绑，不静默回退旧数据。
 - 新增中心两表 `bindings_qqofficial`、`bindings_qqofficial_ops`，以及操作日志、预占、断库恢复和未知结果只查询不重放的处理。
 - 配置页新增「QQ 官方」操作页与「生效机器人」选择面板；「群与服务器」页收紧间距，隐藏状态的服务器显示斜纹背景，隐藏标签不再撑高列表行。
+- 群配置格式统一：OneBot 与 QQ 官方共用同一套 `policy` 字段与默认值；OneBot 群文件增加 `schema_version` / `platform` / `group_id`，旧扁平开关不再读取，昵称忽略名单统一为 `nickname_ignore`。
 - 新增 `sql/qq_official_v1.sql`、`examples/` 占位模板、`docs/` 协议/交付/测试文档，以及官方绑定、协议、只读、恢复、统计和传输的离线回归测试与合成夹具。
 - 改进激活选择：等待框架加载完成后再锁定唯一 OneBot 候选，兼容运行期安装插件和缺少加载钩子的旧框架；持久化失败时降级为内存选择并提示。
+- QQ 官方模式的「登录限制」支持在线切换：新模组通过 `POST /api/v2/binding/settings/whitelist` 立即修改 `enableWhitelistCheck`、写回模组配置并重新校验在线受限玩家；插件按 `/api/status` 的 `whitelist_check_writable` 自动识别能力，旧模组仍显示为只读。
 - 修复数据库保活线程停止后无法重新启动的问题。
 
 ### 兼容性
 
-- OneBot v11 / aiocqhttp 的原有命令、群配置、绑定数据和运行行为不变。
+- OneBot v11 / aiocqhttp 的命令与绑定数据保持不变。
+- 旧版全局 `enable_group_owner`、`enable_group_admin`、`show_server_version`、`show_server_latency`、`use_central_db` 和 `default_group_id` 已从 `_conf_schema.json` 删除，不再读取、不再兜底。升级后请在「群与服务器 → 本群规则」逐群重新设置；群号只从当前事件获取。
+- OneBot 群文件改为 `onebot/<群号>/state.json` 标准结构。启动时自动把旧 `group_configs/servers_<群号>.json` 迁移过去：`servers`、旧群级开关、绑定昵称规则和忽略名单都会映射到新结构，旧文件保留；`nickname_check_ignore_ids` 改为 `nickname_ignore`，`last_online_enabled` 改为 `policy.show_last_online`。
+- 官方 `state.json` 升到 v2：读取 v1 时只补齐缺失的 `policy` 字段并写回，已有值不变；v2 缺字段按损坏处理。
 - QQ 官方需要配套 QQBindMod 2.0.0；旧版模组没有 `/api/v2/binding/*`，官方功能会 fail-closed，不会读写旧 OneBot 数据。
+- 官方模组 Token 改为只读公共参数 `mod_api_token`；旧 `qq_official/<环境UUID>/mod_token.json` 不再读取。升级前请把旧官方 Token 填入公共参数，并让所有 OneBot 模组的 apiToken 与它一致。模组官方模式要求 Token 至少 16 位可见 ASCII 字符。
+- QQ 官方模式下，旧接口仍只放行 `/api/status`、`/api/tps`、`/api/stats*`，旧版 `POST /api/whitelist_check` 会被拒绝；新版模组（2.0.1+）提供官方作用域的 `POST /api/v2/binding/settings/whitelist`，官方页「登录限制」可在线修改 `enableWhitelistCheck` 并持久化，无需重启。旧模组没有 `whitelist_check_writable` 能力标记时页面保持只读。官方绑定、控制台和广播走 `/api/v2/binding/*`，不受影响。
 - 真实 QQ / Minecraft / MySQL·TiDB / 浏览器验收仍按 `docs/QQ_OFFICIAL_DELIVERY.md` 执行；完成实机验证前不要当作已上线版本。
 
 ### 详细开发记录

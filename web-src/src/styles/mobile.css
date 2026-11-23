@@ -1,5 +1,4 @@
 /* Mobile controls and page layouts live with their components. */
 @media (max-width:900px),(max-height:520px) {
- .toast { bottom:20px; max-width:calc(100% - 32px); }
- .toast.above-savebar { bottom:calc(92px + env(safe-area-inset-bottom)); }
+ .toast { top:88px; max-width:calc(100% - 32px); }
 }

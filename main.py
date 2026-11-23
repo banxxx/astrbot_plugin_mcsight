@@ -1,12 +1,13 @@
 import asyncio
 import os
+import re
 
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from .commands.mc_handler import handle_mc_command
 from .commands.common import attach_db_keepalive_context, start_db_keepalive, stop_db_keepalive
-from .config.server_config import ConfigManager
+from .config.server_config import ConfigManager, migrate_legacy_group_configs
 from .config.whitelist_config import WhitelistManager
 from .utils import mod_http, platform_activation, stats_sampler, official_runtime
 from .utils.official_core import event_scope
@@ -22,6 +23,72 @@ def _lifecycle_hook(name):
 
 def _has_loaded_hook():
     return callable(getattr(filter, "on_astrbot_loaded", None))
+
+
+def _global_mod_token(config) -> str:
+    """官方与 OneBot 共用全局 mod_api_token；每次运行时读取，面板改完立即生效。"""
+    getter = getattr(config, "get", None)
+    return str(getter("mod_api_token", "") or "") if callable(getter) else ""
+
+
+def _config_text(getter, key: str, default: str = "") -> str:
+    value = getter(key, default)
+    return value.strip() if isinstance(value, str) else default
+
+
+def _config_list(getter, key: str) -> list:
+    """权限名单统一成字符串列表；兼容手写配置里的逗号串。"""
+    value = getter(key, [])
+    if isinstance(value, str):
+        value = re.split(r"[,，\s]+", value)
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _global_access_lists(config) -> dict:
+    """公共超级管理员/白名单管理员/黑名单；官方用 openid，OneBot 用 QQ 号精确匹配。"""
+    getter = getattr(config, "get", None)
+    if not callable(getter):
+        return {}
+    return {key: _config_list(getter, key)
+            for key in ("super_admins", "whitelist_admins", "blacklist")}
+
+
+def _db_ca_path() -> str:
+    """与 OneBot 连接池使用同一份 CA；只返回实际存在的路径。"""
+    plugin_dir = os.path.dirname(__file__)
+    for path in (os.path.join(plugin_dir, "isrgrootx1.pem"), "isrgrootx1.pem",
+                 "/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"):
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
+def _official_center_defaults(config):
+    """官方中心的全局默认连接；环境级 center_settings.json 仍可完整覆盖。
+
+    是否启用中心库由官方群「本群规则」逐群决定；这里只在公共连接参数齐全时
+    提供 hybrid 默认值，避免把为 OneBot 填写的半套连接当成官方中心已就绪。
+    密码只在本进程内传给连接层。
+    """
+    getter = getattr(config, "get", None)
+    if not callable(getter):
+        return None
+    try:
+        port = int(getter("db_port", 4000))
+    except (TypeError, ValueError):
+        port = 0
+    host = _config_text(getter, "db_host", "")
+    user = _config_text(getter, "db_user", "")
+    password = _config_text(getter, "db_password", "")
+    database = _config_text(getter, "db_name", "")
+    ssl_ca = _db_ca_path()
+    if not (host and user and password and database and 1 <= port <= 65535 and ssl_ca):
+        return None
+    connection = {"host": host, "port": port, "user": user,
+                  "password": password, "database": database, "ssl_ca": ssl_ca}
+    return {"enabled": True, "storage_mode": "hybrid", "connection": connection}
 
 
 def _rest_after_command(event: AstrMessageEvent) -> str:
@@ -43,7 +110,11 @@ class MCWatcher(Star):
         super().__init__(context)
         self._activation = platform_activation.configure(
             context, config, store_path=os.path.join(data_dir(), "activation.json"), official_scope=event_scope)
-        self._official = official_runtime.configure(os.path.join(data_dir(), "qq_official"), platform_activation, owner=context)
+        self._official = official_runtime.configure(
+            os.path.join(data_dir(), "qq_official"), platform_activation, owner=context,
+            mod_token=lambda: _global_mod_token(config),
+            center_defaults=lambda: _official_center_defaults(config),
+            access_lists=lambda: _global_access_lists(config))
         self._startup_task = None
         attach_db_keepalive_context(context)
         legacy_platform = (self._activation.selection or {}).get("platform", self._activation.platform)
@@ -51,6 +122,13 @@ class MCWatcher(Star):
             WhitelistManager().set_context(context)
             # 仅 OneBot 注入旧名单与连接配置；官方使用独立环境存储。
             WhitelistManager().set_config(config)
+        # 旧版 OneBot 群文件一次性迁到 onebot/<群号>/state.json；旧文件保留不删。
+        try:
+            migrated, failed = migrate_legacy_group_configs()
+            if migrated or failed:
+                logger.info(f"[群配置] 旧目录迁移：成功 {migrated}，失败 {failed}")
+        except Exception as e:
+            logger.error(f"[群配置] 旧目录迁移异常: {e}")
         # config 是 data/config/<插件名>_config.json 的内存对象，配置页写它就等于面板改配置
         register_view_api(context, config)
 

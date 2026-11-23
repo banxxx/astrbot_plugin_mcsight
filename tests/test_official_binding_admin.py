@@ -97,7 +97,7 @@ class AdminTests(unittest.TestCase):
         with self.assertRaises(bindings.BindingError): self.admin.list(**self.scope())
         self.fixture.current = dict(prior.SELECTION)
         values = self.scope()
-        self.fixture.update({"alias": "Changed synthetic alias"})
+        self.fixture.update({"alias": "Changed alias"})
         with self.assertRaises(bindings.BindingError): self.admin.list(**values)
         self.assertEqual(self.fixture.opens, 0)
 

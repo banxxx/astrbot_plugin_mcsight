@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import UiIcon from "./components/UiIcon.vue";
 import UiButton from "./components/UiButton.vue";
 import DialogHost from "./components/DialogHost.vue";
-import SrvPage from "./pages/SrvPage.vue";
+import GroupsPage from "./pages/GroupsPage.vue";
 import CfgPage from "./pages/CfgPage.vue";
 import OfficialPage from "./pages/OfficialPage.vue";
 import ConstPage from "./pages/ConstPage.vue";
@@ -17,7 +17,6 @@ const NAV: { group: string; items: { key: PageKey; label: string; icon: string }
   { group: "配置", items: [
     { key: "srv", label: "群与服务器", icon: "server" },
     { key: "cfg", label: "全局参数", icon: "sliders" },
-    { key: "official", label: "QQ 官方群", icon: "users" },
   ] },
   { group: "参考", items: [
     { key: "map", label: "命令对照", icon: "list-tree" },
@@ -25,7 +24,7 @@ const NAV: { group: string; items: { key: PageKey; label: string; icon: string }
     { key: "const", label: "代码常量", icon: "code" },
   ] },
 ];
-const PAGES = { srv: SrvPage, cfg: CfgPage, official: OfficialPage, const: ConstPage, map: MapPage, help: HelpPage };
+const PAGES = { srv: GroupsPage, cfg: CfgPage, official: OfficialPage, const: ConstPage, map: MapPage, help: HelpPage };
 const pageComp = computed(() => PAGES[S.page]);
 const isMobile = useIsMobile();
 const menuOpen = ref(false);
@@ -79,7 +78,7 @@ onMounted(boot);
       <div><b>更改未保存</b><span>保存后按提示重载</span></div>
       <UiButton kind="pri" :loading="saving" :disabled="saving" @click="save"><UiIcon name="check" :size="16" />保存更改</UiButton>
     </div>
-    <div v-if="S.toast" class="toast" :class="{ 'above-savebar': isMobile && S.page === 'cfg' && !!dirtyCount }" role="status" aria-live="polite">{{ S.toast }}</div>
+    <div v-if="S.toast" class="toast" role="status" aria-live="polite">{{ S.toast }}</div>
     <DialogHost />
   </div>
 </template>

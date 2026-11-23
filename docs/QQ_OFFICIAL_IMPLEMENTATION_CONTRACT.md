@@ -58,21 +58,18 @@
 
 ### 2.3 首次登记
 
-已选官方实例在CONFIGURING状态只开放setup/help。setup使用当前真实群事件产生待配置候选，不访问MC、不读旧群、不写中心库；重复按environment/group合并。
+已选官方实例在CONFIGURING状态只开放setup/help。WebUI“新增群”填写别名后生成一次性验证码，5 分钟有效；在目标群发送 `/mc setup <验证码>` 后原子消费验证码并创建默认未启用的群配置。生成与消费均不访问MC、不读旧群、不写中心库；验证码只落哈希，不经 URL 或消息重复传输。
 
-候选默认24小时过期、每环境最多100个，按群/用户限制触发频率。普通成员只能登记，不能启用业务或提权。WebUI认证管理员确认、填写显示信息和服务器，然后才允许能力探测。真实bindingGroupId由用户在界面自行复制到模组，不发送给助手。
+每环境最多保留 10 个未使用验证码，过期或已消费的条目按保留窗口清理。普通成员即使知道验证码也只能创建群配置，不能借此启用业务或提权。真实bindingGroupId由用户在界面自行复制到模组，不发送给助手。
 
 非活动实例永远不响应setup。官方C2C和频道在配置管理器构造前拒绝进入该流程。
 
-### 2.4 首位管理员与身份登记
+### 2.4 管理权限
 
-- `/mc setup [识别备注]` 同时可建立发言者本人的待授权身份候选；真实环境、群和发言者 ID 只从事件提取，不接收消息参数指定的 user_id 或角色。
-- 候选使用内部随机编号，回复本人登记回执；回执仅供 WebUI 管理员与 QQ 客户端中的实际发言核对，不是授权令牌，持有回执不能自助提权。
-- 候选默认 24 小时过期；群候选沿用每环境 100 个的限制，身份候选每群最多 20 个、每环境最多 1000 个，重复本人登记合并并限频。
-- WebUI 的已认证管理员核对来源后，显式选择群管理员或环境超管权限再保存。只有登记、可见昵称、已绑定游戏账号或当前角色缓存，都不能自行产生插件管理员授权。
-- 授权记录保留 environment/group/member 的身份来源；跨群不通过昵称、游戏名或 OpenID 字符串相似性自动合并。授权范围与身份来源分开保存，环境超管也必须明确授权。
-- 昵称缺失时显示“昵称不可用”及登记回执，管理员不能确认来源时保持待授权。真实身份仅由用户在自己的界面核对，不要求提供给助手。
-- 管理员可以在 WebUI 撤销授权；配置修订立即使权限缓存与相关分页失效。撤销聊天管理权不自动解绑游戏账号。
+- `/mc setup <验证码>` 不建立身份候选、不授予管理员权限；真实环境、群和发言者 ID 只从事件提取，不接收消息参数指定的 user_id 或角色。
+- 管理命令按 QQ 官方事件中可识别的群主/管理员角色与群策略开关判定；未知角色不猜成管理员，群昵称缺失不影响该判定。
+- 本版 WebUI 不再提供“待配置群”列表和身份核对授权界面；昵称检测忽略名单在群内使用 `/mc nicknamecheck 忽略 @成员` 管理。后端保留既有授权存储字段以供旧数据兼容，但新群不再依赖它才能使用管理命令。
+- 黑名单优先级和“退群/被踢/聊天黑名单不自动解绑游戏账号”的运行时语义保持不变；WebUI 撤销授权不再作为常规操作入口。
 
 ## 3. 单活选择与WebUI
 
@@ -575,7 +572,7 @@ CREATE TABLE bindings_qqofficial_ops (
 
 - 官方入口新增 accepts 实例门禁与独立 official_runtime 分发，allows 仍只授权旧 OneBot 业务；因此已选官方的合法群事件可登记/查询，C2C、频道、身份不一致或非活动实例提前退出。所有别名遵守相同门禁，广播别名也不能先构造旧群配置。
 - 每环境的 state.json 作为一个原子配置提交单元，集中保存 groups、candidates、环境管理员与 authorization_history；这是第 2 节 registry/群配置的具体实现，不声称跨多个文件有事务。OpenID 不参与路径拼接，群和服务器有独立内部 ID。环境超管在环境级存储；群黑名单、群管、昵称忽略分别保留，撤销一种权限不删除其它名单。
-- 真实凭据另存于该环境专用 mod_token.json。普通状态页面只检查其存在性，不读取或返回凭据内容。配置、旧 OneBot 名单和 Token 不自动复用；运行时读取仅限所选环境，测试用临时目录与虚构值。
+- 模组 API Token 与 OneBot 共用插件全局配置 mod_api_token，官方目录不另存凭据；运行时按需从注入的配置读取器取值，普通状态页面只检查是否已配置，不返回凭据内容。旧 OneBot 名单不自动复用；测试用临时目录与虚构值。
 - setup 不访问 MC 或绑定表，普通成员只能建立限量且过期的候选。后台授权检查候选所属群，记录目标身份、来源群、候选回执、授权/撤销种类及时间。后台主体依赖框架认证，不接受请求体 actor 提权。
 - 只读请求仅允许 /api/status、/api/tps、/api/stats/<合法玩家名>、/api/stats/all；关闭重定向、代理环境与自动重试，响应限 4MiB，不打印请求/响应或异常原文。无模组在线查询使用 mcstatus；隐藏条目不查询。官方统计按环境、群和稳定 server_id 写入独立 SQLite，仅存合成/公开数值字段，保留 30 日 UTC 日快照并复用共享六类统计图；同日覆盖，不导入 OneBot 历史，历史不可用时仍可读生涯统计。完整统计图保持单页，超编码限制回退分页文字。本人排行关联仍依赖 S3 当前官方绑定，不能读取旧 bindings 兜底。
 - 图片发送只使用匹配已核验 AstrBot 官方事件族/上传方法签名的 BotPy 直发封装，或经签名核对的显式群文件接口。内部动作名不是宣称 BotPy 提供同名 helper；file_data 群载荷依照 AstrBot 4.29.1 公开源码构造。缺少能力、渲染失败或体积超限时提供本人文字分页；不传 URL 参数冒充 base64，也不上传私人图床。合成测试证明本插件的单次 request 与载荷，不证明应用权限、实际 QQ 媒体预算或真实 WebSocket/Webhook 收发均已兼容。
@@ -708,6 +705,7 @@ CREATE TABLE bindings_qqofficial_ops (
 6. 新增 26 项内存 HttpExchange 用例、3 项真实 Bootstrap/配置桥接执行用例；Java 合计 189 项执行和 6 组语法/结构检查在 JDK 17/21 各通过，Python 263 项通过。内存预占到消费及 sync 经过真实协议/状态核心，中心/驱动/游戏是明确替身，没有运行真实 HttpServer/Socket/DB/MC/Gradle 或读取用户数据。19 文件解析不做原生类型分析，不能称为四加载器构建或真实网络/TLS/权限验收。
 7. 字节/并发限制不构成慢速请求或阻塞 I/O 的硬墙钟取消保证；JDK HttpServer/代理/防火墙和线程池的真实压力、停启验收仍需后续安全环境验证。本包未改前端或 SQL 模板，保留既有产物及未提交工作。
 8. 下一包接官方登录取码/退出清码 I/O 与连接代次复核，再接唯一游戏线程的版本化 GameEffects、逐项 ACK/恢复 worker，随后绑定授权/可靠昵称策略、插件命令/恢复页/多服定位/本人排行。S4 remote/local、正式四加载器及真实 QQ/MC/TiDB/浏览器仍未完成；敏感配置、建表、备份、部署和实机操作继续由用户自行执行。
+9. 2026-11-23 增补：POST `/api/v2/binding/settings/whitelist` 只接受唯一 API Bearer、protocol_version=2、精确 scope 和恰好 `{enabled: bool}`。该路由在 registry.acquire 之前分流，直接更新官方运行期快照而不持配置读租约，避免与配置写锁自锁；随后写回服务器本地 `enableWhitelistCheck`，并到主线程重校验在线受限玩家。它不触碰旧 OneBot 写入口、中心绑定或配置修订；`/api/status` 的 `whitelist_check_writable=true` 仅声明该模组具备此在线写能力，旧模组缺字段时插件保持只读。
 
 ## 附录 Q：官方取码、在线副作用与异步 ACK 边界（2026-11-19 阶段记录，最新见 R）
 
@@ -735,7 +733,7 @@ CREATE TABLE bindings_qqofficial_ops (
 ## 附录 S：受控聊天入口、独立中心装配与终态补偿（2026-11-19）
 
 1. 正式聊天路由支持 bind/unbind/check/operation；只接当前已选实例的合法官方群事件，群未启用/黑名单/其它平台均不加载中心依赖。沿用真实 OfficialBindingPolicy 与同一两表状态机，不调用旧绑定、旧池或旧身份兜底。模组完整 capabilities 仍未开放；入口接线不等于允许生产绑定，binding_ready 继续 false。
-2. 独立配置文件为 `<插件数据目录>/qq_official/<environment_uuid>/center_settings.json`，只由用户依据 `examples/qq-official-center.json.example` 在后续交付维护窗口自行准备；当前默认 disabled，不应部署。固定 schema_version=1、environment_id、enabled、storage_mode、connection 五个顶层字段，connection 仅 host/port/user/password/database/ssl_ca。当前只装配 hybrid，remote/local 拒绝，不能借此提升支持范围。真实值不粘贴给助手；普通 WebUI 状态只报告既有安全计数，不读取/回显中心配置。
+2. 环境级配置文件为 `<插件数据目录>/qq_official/<environment_uuid>/center_settings.json`，只由用户依据 `examples/qq-official-center.json.example` 自行准备；默认 disabled。固定 schema_version=1、environment_id、enabled、storage_mode、connection 五个顶层字段，connection 仅 host/port/user/password/database/ssl_ca；可选 server_modes 按服务器覆盖。当前装配允许 hybrid/remote/local，真实 SQL/TLS/权限验收仍待完成，不能据此宣称生产就绪。文件存在时完整优先；不存在时才读取全局「公共参数」的 db_* 连接。是否使用中心库由官方群「本群规则」的 `use_central_db` 逐群决定，默认关闭；关闭时直接走模组本地权威，不读取环境级中心文件。全局值只在本进程内传给连接层；普通 WebUI 不读取、不回显任何环境级中心文件内容。真实值不粘贴给助手。
 3. 先确认当前来源/群授权再读取显式 owner 文件；每请求创建 CheckedOfficialBindings/OfficialMySQLFactory，构造时不连接，真实数据库会话仍逐事务做 schema/权限预检。无配置/损坏/环境不符/失联均不自动建表、不用 OneBot 池、不扫描其它用户配置。文件元数据与活动来源变化阻止后续阶段，但不承诺原子取消已经在途的事务；配置/凭据变化仍须用户维护停启。
 4. `/mc bind <六位码> -s <服务器名>` 只验证选中服；中文别名保留相同选服语义。未显式选服时最多探测 4 个当前可见模组服，开始后续探测前检查 40 秒预算；对所有候选均取得确定结果且只有一个命中才继续。任何未知/无权/超时或多重命中要求显式选服，不把错误当不存在；目标选定后再验证原代次，固定 server_id，不靠无码作用域缓存跳过歧义。
 5. 入口有界预算为每分钟成员/群/全局 6/60/120 次绑定尝试、同时 4 个宿主请求、最多 4096 个短期预算项。它是请求预算，不声称超时/无权限属于无效码；无码正文/昵称/凭据入预算。稳定事件来源元组及规范动作产生 request_key，UUIDv5 从该键产生可复现 operation_id，均不混入六码或可离线枚举的六码散列。全局发送 ledger 继续先落盘去重，聊天发送失败不新建关系。
@@ -868,7 +866,7 @@ CREATE TABLE bindings_qqofficial_ops (
 
 3. **管理员分页**：PageCache新增minimum_permission（1/3/4），管理查询/成员检测保存至少3；绑定及回执按取得结果时权限保存阈值。新消息page在读取和发送前复核当前事件角色、群配置修订、环境授权及阈值；管理员降为普通成员后旧管理页失效。缓存仍只属于原用户/群/实例/环境，10分钟，不保存原消息或回复凭据。
 
-4. **管理与显示**：batchadd使用名称:主机[:模组API端口]逗号分隔，最多20项；全部校验后一次配置修订，不采用部分成功。batchremove同样整批；move位置从0开始，swap须两个不同现有服务器。lastonline查询/开关消费status现有last_activity_time毫秒和last_activity_player，无可靠数据时不推断。nicknamecheck提供查询、开关、忽略/取消忽略及分页忽略名单；只修改提示策略，不影响游戏绑定。所有写仍先持久防重；只读开关查询不创建写回执。旧policy读取时补nickname_check_enabled=true，不触发写盘迁移。后台提供上述开关及原有绑定昵称规则/模板配置。
+4. **管理与显示**：batchadd使用名称:主机[:模组API端口]逗号分隔，最多20项；全部校验后一次配置修订，不采用部分成功。batchremove同样整批；move位置从0开始，swap须两个不同现有服务器。lastonline查询/开关消费status现有last_activity_time毫秒和last_activity_player，无可靠数据时不推断。nicknamecheck提供查询、开关、忽略/取消忽略及分页忽略名单；只修改提示策略，不影响游戏绑定。所有写仍先持久防重；只读开关查询不创建写回执。官方群 policy 必须包含共享群策略的全部字段（与 OneBot 的 `utils/group_policy.py` 一致）。state.json 读取 v1 时只补缺失字段并升到 v2；v2 缺字段直接判为文件损坏，不再静默补默认值。后台提供上述开关及原有绑定昵称规则/模板配置。
 
 5. **内邀成员读取**：第一方端点GET /v2/groups/{group_openid}/members，cursor分页，members数组最多30条/页，next_cursor空字符串为末页，60QPM。详情GET /members/{member_openid}为30QPM，本轮扫描不额外调用详情。两者内邀，未获权11253。成员结构含member_openid/username/member_role/bot/joined_at/union_openid，未保证member_nickname；username仅显示。列表扫描单并发、间隔至少1.05秒、55次/分钟、最多34页/1000人/45秒；8秒单请求、响应512KiB、无重试/重定向。结果内存缓存5分钟最多8范围，失败60秒；配置/权限每页复核，截断明确报告，不当实时完整群资格证明，不写盘成员名单。
 

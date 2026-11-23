@@ -1,4 +1,3 @@
 # 回归测试保留在 Git；发布源码归档不携带开发验证文件。
 /tests export-ignore
 /tests/** export-ignore
-/web-src/scripts/test-official-components.cjs export-ignore

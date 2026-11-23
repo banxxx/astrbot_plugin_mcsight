@@ -5,7 +5,7 @@ import time
 from .bind_rule import evaluate
 from .official_binding_service import BindingScope, PolicyLease
 from .official_bindings import BindingError, GAME_RE, TERMINAL, _revision
-from .official_core import OfficialError, OfficialScope, OfficialStore, identifier, permission
+from .official_core import OfficialError, OfficialScope, OfficialStore, identifier
 
 
 class OfficialBindingPolicy:
@@ -39,7 +39,7 @@ class OfficialBindingPolicy:
             group = next((row for row in state["groups"] if row["group_openid"] == scope.group_id), None)
             if group is None or not group["enabled"]:
                 raise BindingError("UNAUTHORIZED", "当前官方群未启用。")
-            level = permission(sender, group, state["environment_administrators"])
+            level = self.groups.access_level(sender, group, state["environment_administrators"])
             if level == 0:
                 raise BindingError("UNAUTHORIZED", "当前身份已被本群禁止使用插件。")
             targets = {server["server_id"] for server in group["servers"] if server["api_port"] is not None}

@@ -1,7 +1,7 @@
 """玩家统计每日采样（时间轴的驱动源）
 
 按日历给每个"被查询过的人"落一份当日累计快照，/查询 才有真正的 7 天窗口可用。
-名单取自快照表自身，服务器端点汇总自 group_configs/servers_*.json。
+名单取自快照表自身，服务器端点汇总自 onebot/<群号>/state.json。
 """
 import asyncio
 import glob
@@ -34,10 +34,13 @@ def _server_endpoints() -> Dict[str, Tuple[str, int]]:
     """服务器名（小写）→ (host, port)。各群配置里同名服务器视为同一台。"""
     wm = WhitelistManager()
     out = {}
-    for path in glob.glob(os.path.join(data_dir(), 'group_configs', 'servers_*.json')):
+    for path in glob.glob(os.path.join(data_dir(), 'onebot', '*', 'state.json')):
         try:
             with open(path, 'r', encoding='utf-8') as f:
-                servers = json.load(f).get("servers", [])
+                data = json.load(f)
+            if data.get("enabled", True) is False:
+                continue
+            servers = data.get("servers", [])
         except (OSError, ValueError) as e:
             logger.warning(f"[采样] 读取群配置失败 {os.path.basename(path)}: {e}")
             continue

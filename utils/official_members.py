@@ -98,7 +98,7 @@ class OfficialMembers:
                 raise OfficialError(message) from None
 
     def nickname_audit(self,scope,roster,group):
-        if not group["policy"].get("nickname_check_enabled",True):
+        if not group["policy"]["nickname_check_enabled"]:
             raise OfficialError("本群昵称检测已关闭，可用 /mc nicknamecheck 开。")
         unknown,bad,checked,ignored=0,[],0,0
         now=time.monotonic()

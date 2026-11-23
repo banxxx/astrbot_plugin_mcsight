@@ -14,7 +14,8 @@ const popup = ref<HTMLElement | null>(null);
 const listId = `groups-${useId()}`;
 const list = computed(() => {
   const query = filter.value.trim();
-  return query ? S.groups.filter((group) => group.gid.includes(query)) : S.groups;
+  if (!query) return S.groups;
+  return S.groups.filter((group) => group.gid.includes(query) || group.alias?.includes(query));
 });
 const { popupStyle, popupTarget, reposition } = useAnchoredPopup(open, box, popup, { minWidth: 280, maxHeight: 360 });
 function countOf(group: { gid: string; server_count: number }) {
@@ -74,7 +75,10 @@ watch(filter, () => { active.value = list.value.length ? 0 : -1; });
             type="button" role="option" :aria-selected="group.gid === S.gid" :data-active="index === active" tabindex="-1"
             @pointerdown.prevent @pointermove="active = index" @click="pick(group.gid)">
             <span class="selection"><UiIcon v-if="group.gid === S.gid" name="check" :size="16" /></span>
-            <span class="group-id">{{ group.gid }}</span>
+            <span class="group-main">
+              <span class="group-id">{{ group.gid }}</span>
+              <span v-if="group.alias" class="group-alias">{{ group.alias }}</span>
+            </span>
             <span class="count">{{ countOf(group) }} 台服务器</span>
           </button>
           <div v-if="!list.length" class="group-empty">没有匹配的群号</div>
@@ -97,9 +101,11 @@ watch(filter, () => { active.value = list.value.length ? 0 : -1; });
 .group-filter input { width: 0; min-width: 0; flex: 1 1 auto; padding: 0; border: none; outline: none; background: none; color: var(--ink); font-size: 13px; }
 .group-filter input::placeholder { color: var(--ink3); }
 .group-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.group-option { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 9px 10px; border: none; border-radius: 6px; background: none; color: var(--ink); font-size: 13px; text-align: left; cursor: pointer; }
+.group-option { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 6px 10px; border: none; border-radius: 6px; background: none; color: var(--ink); font-size: 13px; text-align: left; cursor: pointer; }
 .group-option .selection { display: inline-flex; flex: none; width: 16px; color: var(--ac); }
-.group-id { flex: 1 1 auto; min-width: 0; }
+.group-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; height: 40px; }
+.group-id { font-size: 13px; line-height: 20px; }
+.group-alias { color: var(--ink3); font-size: 12px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-option .count { color: var(--ink3); font-size: 12px; }
 .group-option.selected { background: var(--ac-soft); color: var(--ac); font-weight: 500; }
 .group-option.active:not(.selected), .group-option:hover:not(.selected) { background: #f8f9ff; }

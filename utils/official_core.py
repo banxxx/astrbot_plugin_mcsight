@@ -2,22 +2,37 @@
 from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass
+import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import tempfile
 from threading import RLock
 import time
+import unicodedata
 from uuid import UUID, uuid4
+
+from .group_policy import default_policy
 
 
 MAX_BYTES = 8 * 1024 * 1024
+# 官方 state.json 格式版本。v1 的群 policy 可能缺少后加的字段，
+# 读取时只补缺失字段并升到 v2；已有值原样保留。
+STATE_SCHEMA_VERSION = 2
 MAX_GROUPS = 100
 MAX_CANDIDATES = 1000
 MAX_SERVERS = 20
 CANDIDATE_TTL = 86400
 REGISTER_GAP = 30
+SETUP_TTL = 300
+SETUP_KEEP = 3600
+MAX_SETUP_CODES = 10
+SETUP_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+SETUP_CODE_RE = re.compile(r"^[A-HJ-NP-Z2-9]{6}$")
+SETUP_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 PLAYER_RE = re.compile(r"^[A-Za-z0-9_]{1,16}$")
 
 
@@ -48,8 +63,55 @@ def text(value, limit=80, *, empty=True):
     return value.strip()
 
 
+def normalize_motd_runs(value):
+    """规整 MOTD 彩色分段为 [[text, #hex|None], ...]；空/非法返回 []。
+
+    只信任长度有限的、纯文本 + 颜色 hex 的结构，任何怪形状都当没颜色。
+    """
+    if not isinstance(value, list):
+        return []
+    out = []
+    for item in value[:100]:
+        if (not isinstance(item, (list, tuple)) or len(item) != 2
+                or not isinstance(item[0], str) or not item[0]
+                or any(ord(c) < 32 for c in item[0])):
+            continue
+        text_seg = item[0][:80]
+        color = item[1]
+        if color is not None and (not isinstance(color, str) or not re.match(r"^#[0-9a-fA-F]{6}$", color)):
+            color = None
+        out.append([text_seg, color])
+    return out
+
+
+def _display_width(value):
+    """以显示宽度计数：全角/中日韩字符算 2，其余算 1。"""
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in value)
+
+
+def alias_text(value):
+    """群别名最多 8 个中文字符或 16 个英文字符；空串表示不设置别名。"""
+    value = text(value, 40, empty=True)
+    if _display_width(value) > 16:
+        raise OfficialError("群别名最多 8 个中文字符（或 16 个英文字符）。")
+    return value
+
+
+def display_group_text(value):
+    """QQ 群号只用于展示，但必须是纯数字。"""
+    value = text(value, 40)
+    if value and not (value.isascii() and value.isdigit()):
+        raise OfficialError("QQ 群号只能填写数字。")
+    return value
+
+
 def _get(obj, key, default=None):
     return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+
+
+def _setup_hash(environment, code):
+    """验证码只存哈希；环境前缀避免不同官方环境之间复用同一份摘要。"""
+    return hashlib.sha256(f"mcsight-setup:{environment}:{code}".encode("ascii")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -181,31 +243,99 @@ def read_json(path, default, limit=MAX_BYTES):
         raise OfficialError("官方配置缺损或无法读取；请恢复后重试，不会读取旧群配置。") from None
 
 
-def default_policy():
-    return {"enable_group_owner": True, "enable_group_admin": True,
-            "bind_require_nickname": True, "bind_nickname_rule": "paren",
-            "bind_nickname_template": "", "show_server_version": False, "show_server_latency": True,
-            "show_last_online": False,"nickname_check_enabled":True}
-
-
 class OfficialStore:
     """每环境一个原子提交单元，registry/candidates/groups 不跨文件提交。"""
-    def __init__(self, root, *, clock=time.time):
+    def __init__(self, root, *, clock=time.time, token_provider=None, policy_defaults=None,
+                 access_provider=None):
         self.root = Path(root)
         self.clock = clock
         self.lock = RLock()
+        # 模组 API Token 与 OneBot 共用全局插件配置；注入取值函数，官方目录不再另存凭据。
+        self.token_provider = token_provider or (lambda: "")
+        # 可选策略默认值注入；生产环境不再读取全局官方开关，已有群不回溯覆盖。
+        self.policy_defaults = policy_defaults
+        # 公共权限名单与 OneBot 共用；官方事件用 openid 做精确匹配。
+        self.access_provider = access_provider
+
+    def _new_policy(self):
+        try:
+            overrides = self.policy_defaults() if callable(self.policy_defaults) else None
+        except Exception:
+            overrides = None
+        return default_policy(overrides)
+
+    def access_lists(self):
+        """读取公共超级管理员/白名单管理员/黑名单，统一成字符串集合。坏值按空处理。"""
+        if not callable(self.access_provider):
+            return {}
+        try:
+            data = self.access_provider()
+        except Exception:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        result = {}
+        for key in ("super_admins", "whitelist_admins", "blacklist"):
+            value = data.get(key, [])
+            if isinstance(value, str):
+                value = re.split(r"[,，\s]+", value)
+            if not isinstance(value, (list, tuple, set)):
+                value = []
+            result[key] = frozenset(str(item).strip() for item in value if str(item).strip())
+        return result
+
+    def access_level(self, scope, group, environment_administrators=()):
+        """官方权限判断的唯一入口：本群名单 + 公共名单 + 环境管理员。"""
+        return permission(scope, group, environment_administrators, self.access_lists())
 
     def _path(self, environment):
         return self.root / uuid_value(environment) / "state.json"
 
+    def _console_token_path(self, environment, server_id):
+        return (self.root / uuid_value(environment) / "console_tokens"
+                / (uuid_value(server_id) + ".json"))
+
+    def _remark_path(self, environment, server_id):
+        return (self.root / uuid_value(environment) / "remarks"
+                / (uuid_value(server_id) + ".json"))
+
+    def _setup_dir(self, environment):
+        return self.root / uuid_value(environment) / "setup_codes"
+
+    def _setup_path(self, environment, setup_id):
+        return self._setup_dir(environment) / (uuid_value(setup_id) + ".json")
+
+    def _migrate_v1(self, environment, data):
+        """v1 -> v2：只补 policy 中缺失的字段，不覆盖用户已经设置的值。"""
+        expected = {"schema_version", "environment_id", "revision", "groups", "candidates",
+                    "environment_administrators", "authorization_history"}
+        if (not isinstance(data, dict) or data.get("schema_version") != 1
+                or set(data) != expected or data.get("environment_id") != environment):
+            return data, False
+        groups = data.get("groups")
+        if not isinstance(groups, list):
+            return data, False
+        if any(not isinstance(group, dict) or not isinstance(group.get("policy"), dict)
+               for group in groups):
+            return data, False
+        defaults = default_policy()
+        for group in groups:
+            for key, value in defaults.items():
+                group["policy"].setdefault(key, value)
+        data["schema_version"] = STATE_SCHEMA_VERSION
+        return data, True
+
     def _load(self, environment):
-        data = read_json(self._path(environment), {"schema_version": 1, "environment_id": environment,
-                         "revision": 0, "groups": [], "candidates": [],
-                         "environment_administrators": [], "authorization_history": []})
+        data = read_json(self._path(environment), {"schema_version": STATE_SCHEMA_VERSION,
+                         "environment_id": environment, "revision": 0, "groups": [],
+                         "candidates": [], "environment_administrators": [],
+                         "authorization_history": []})
+        data, migrated = self._migrate_v1(environment, data)
         try:
             if (not isinstance(data, dict) or set(data) != {"schema_version", "environment_id", "revision",
                     "groups", "candidates", "environment_administrators", "authorization_history"}
-                    or type(data["schema_version"]) is not int or data["schema_version"] != 1 or data["environment_id"] != environment
+                    or type(data["schema_version"]) is not int or data["schema_version"] != STATE_SCHEMA_VERSION
+                    or data["environment_id"] != environment
                     or type(data["revision"]) is not int or data["revision"] < 0
                     or not isinstance(data["groups"], list) or len(data["groups"]) > MAX_GROUPS
                     or not isinstance(data["candidates"], list) or len(data["candidates"]) > MAX_CANDIDATES
@@ -253,6 +383,8 @@ class OfficialStore:
                 candidate_ids.add(candidate["candidate_id"])
         except (KeyError, ValueError, TypeError, AttributeError):
             raise OfficialError("官方配置结构无效；已暂停使用，请恢复有效记录。") from None
+        if migrated:
+            atomic_json(self._path(environment), data)
         return data
 
     def _commit(self, data):
@@ -311,12 +443,157 @@ class OfficialStore:
             group = next((g for g in data["groups"] if g["group_openid"] == candidate["group_openid"]), None)
             if group is None:
                 group = {"config_id": str(uuid4()), "group_openid": candidate["group_openid"], "revision": 1,
-                         "alias": text(alias, 40, empty=False), "display_group": text(display_group, 40),
-                         "enabled": False, "servers": [], "policy": default_policy(),
+                         "alias": alias_text(alias), "display_group": display_group_text(display_group),
+                         "enabled": False, "servers": [], "policy": self._new_policy(),
                          "administrators": [], "blacklist": [], "nickname_ignore": []}
                 data["groups"].append(group)
             self._commit(data)
             return deepcopy(group)
+
+    def _load_setup(self, path):
+        try:
+            data = read_json(path, {}, limit=4096)
+        except OfficialError:
+            return None
+        try:
+            uuid_value(data["config_id"]) if data["config_id"] else None
+        except (OfficialError, KeyError, TypeError):
+            return None
+        if (not isinstance(data, dict)
+                or set(data) != {"schema_version", "environment_id", "setup_id", "alias",
+                                 "display_group", "code_hash", "created_at", "expires_at",
+                                 "used_at", "config_id"}
+                or type(data["schema_version"]) is not int or data["schema_version"] != 1
+                or data["environment_id"] != path.parent.parent.name
+                or data["setup_id"] != path.stem
+                or not isinstance(data["alias"], str) or len(data["alias"]) > 40
+                or any(ord(c) < 32 or ord(c) == 127 for c in data["alias"])
+                or not isinstance(data["display_group"], str) or len(data["display_group"]) > 40
+                or any(ord(c) < 32 or ord(c) == 127 for c in data["display_group"])
+                or not isinstance(data["code_hash"], str)
+                or (data["code_hash"] and not SETUP_HASH_RE.fullmatch(data["code_hash"]))
+                or type(data["created_at"]) not in (int, float)
+                or type(data["expires_at"]) not in (int, float)
+                or type(data["used_at"]) not in (int, float)
+                or data["used_at"] < 0 or data["expires_at"] < data["created_at"]
+                or (data["used_at"] > 0 and not data["config_id"])
+                or (data["used_at"] == 0 and (not data["code_hash"] or data["config_id"]))):
+            return None
+        return data
+
+    def create_setup_code(self, environment, alias, display_group=""):
+        """后台新增群时生成一次性验证码；只落哈希，明文仅在本次响应里返回。"""
+        environment = uuid_value(environment)
+        alias = alias_text(alias)
+        display_group = display_group_text(display_group)
+        with self.lock:
+            directory = self._setup_dir(environment)
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                raise OfficialError("无法创建验证码目录，请检查插件数据目录权限。") from None
+            now = self.clock()
+            pending = []
+            for path in directory.glob("*.json"):
+                data = self._load_setup(path)
+                if data is None or now > data["expires_at"] + SETUP_KEEP:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    continue
+                if data["used_at"] == 0 and data["expires_at"] > now:
+                    pending.append(data)
+            if len(pending) >= MAX_SETUP_CODES:
+                raise OfficialError("待使用的验证码过多，请等待旧验证码过期后再试。")
+            used = {entry["code_hash"] for entry in pending}
+            code = ""
+            for _ in range(20):
+                candidate = "".join(secrets.choice(SETUP_ALPHABET) for _ in range(6))
+                if _setup_hash(environment, candidate) not in used:
+                    code = candidate
+                    break
+            if not code:
+                raise OfficialError("生成验证码失败，请重试。")
+            setup_id = str(uuid4())
+            entry = {"schema_version": 1, "environment_id": environment, "setup_id": setup_id,
+                     "alias": alias, "display_group": display_group,
+                     "code_hash": _setup_hash(environment, code), "created_at": now,
+                     "expires_at": now + SETUP_TTL, "used_at": 0, "config_id": ""}
+            atomic_json(self._setup_path(environment, setup_id), entry, limit=4096)
+            return {"setup_id": setup_id, "code": code, "expires_at": entry["expires_at"], "now": now}
+
+    def setup_status(self, environment, setup_id):
+        with self.lock:
+            now = self.clock()
+            path = self._setup_path(environment, setup_id)
+            if not path.exists():
+                return {"status": "missing", "now": now}
+            data = self._load_setup(path)
+            if data is None:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                return {"status": "missing", "now": now}
+            if data["used_at"] > 0:
+                return {"status": "claimed", "config_id": data["config_id"], "now": now}
+            if data["expires_at"] <= now:
+                return {"status": "expired", "expires_at": data["expires_at"], "now": now}
+            return {"status": "pending", "expires_at": data["expires_at"], "now": now}
+
+    def cancel_setup_code(self, environment, setup_id):
+        with self.lock:
+            try:
+                self._setup_path(environment, setup_id).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def claim_setup_code(self, environment, code, group_openid):
+        """群内 /mc setup <验证码> 原子消费验证码并创建群配置；同码不能再用。"""
+        environment = uuid_value(environment)
+        group_openid = identifier(group_openid)
+        if not isinstance(code, str):
+            raise OfficialError("验证码无效或已过期，请回后台重新生成。")
+        code = code.strip().upper()
+        if not SETUP_CODE_RE.fullmatch(code):
+            raise OfficialError("验证码无效或已过期，请回后台重新生成。")
+        digest = _setup_hash(environment, code)
+        with self.lock:
+            directory = self._setup_dir(environment)
+            now = self.clock()
+            matched = None
+            for path in directory.glob("*.json"):
+                entry = self._load_setup(path)
+                if entry is None:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    continue
+                if entry["used_at"] or entry["expires_at"] <= now:
+                    continue
+                if hmac.compare_digest(entry["code_hash"], digest):
+                    matched = (path, entry)
+                    break
+            if matched is None:
+                raise OfficialError("验证码无效或已过期，请回后台重新生成。")
+            path, entry = matched
+            data = self._load(environment)
+            group = next((g for g in data["groups"] if g["group_openid"] == group_openid), None)
+            created = group is None
+            if created:
+                if len(data["groups"]) >= MAX_GROUPS:
+                    raise OfficialError("官方群数量已达上限，请先删除不再使用的群配置。")
+                group = {"config_id": str(uuid4()), "group_openid": group_openid, "revision": 1,
+                         "alias": entry["alias"], "display_group": entry["display_group"],
+                         "enabled": False, "servers": [], "policy": self._new_policy(),
+                         "administrators": [], "blacklist": [], "nickname_ignore": []}
+                data["groups"].append(group)
+                self._commit(data)
+            entry.update({"code_hash": "", "used_at": now, "config_id": group["config_id"]})
+            atomic_json(path, entry, limit=4096)
+            return deepcopy(group), created
 
     def authorize(self, environment, config_id, candidate_id, role, expected_revision):
         """只由已认证后台调用；候选本身不授予权限。"""
@@ -385,6 +662,10 @@ class OfficialStore:
             self._revision(group, expected_revision)
             previous_ids = {s["server_id"] for s in group["servers"]}
             changed = deepcopy(changes)
+            if "alias" in changed:
+                changed["alias"] = alias_text(changed["alias"])
+            if "display_group" in changed:
+                changed["display_group"] = display_group_text(changed["display_group"])
             if "servers" in changed:
                 if not isinstance(changed["servers"], list) or len(changed["servers"]) > MAX_SERVERS:
                     raise OfficialError("每群最多配置 20 台服务器。")
@@ -399,7 +680,36 @@ class OfficialStore:
             self._validate_group(group)
             group["revision"] += 1
             self._commit(data)
+            if "servers" in changed:
+                remaining = {server["server_id"] for server in group["servers"]}
+                for server_id in previous_ids - remaining:
+                    for path in (self._console_token_path(environment, server_id),
+                                 self._remark_path(environment, server_id)):
+                        try:
+                            path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
             return deepcopy(group)
+
+    def delete_group(self, environment, config_id, expected_revision):
+        """只移除后台群配置；模组侧已有绑定与授权审计保持不动。"""
+        with self.lock:
+            data = self._load(environment)
+            group = self._find_group(data, config_id)
+            self._revision(group, expected_revision)
+            data["groups"] = [g for g in data["groups"] if g["config_id"] != group["config_id"]]
+            data["candidates"] = [c for c in data["candidates"] if c["group_openid"] != group["group_openid"]]
+            self._commit(data)
+            # 群配置删除后，该群服务器的独立控制台令牌和 MOTD 缓存不再有归属；环境模组令牌保留。
+            for server in group["servers"]:
+                for path in (self._console_token_path(environment, server["server_id"]),
+                             self._remark_path(environment, server["server_id"])):
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            return {"config_id": group["config_id"], "group_openid": group["group_openid"],
+                    "alias": group["alias"]}
 
     @staticmethod
     def _revision(record, expected):
@@ -422,7 +732,7 @@ class OfficialStore:
             raise OfficialError("群配置结构无效。")
         uuid_value(group["config_id"])
         identifier(group["group_openid"])
-        group["alias"] = text(group["alias"], 40, empty=False)
+        group["alias"] = text(group["alias"], 40, empty=True)
         group["display_group"] = text(group["display_group"], 40)
         for field in ("administrators", "blacklist", "nickname_ignore"):
             values = group[field]
@@ -434,9 +744,6 @@ class OfficialStore:
                 raise OfficialError("官方名单包含重复身份。")
         policy = group["policy"]
         defaults = default_policy()
-        if isinstance(policy,dict):
-            # Backwards-compatible optional policy; no disk migration on reads.
-            policy.setdefault("nickname_check_enabled",True)
         if not isinstance(policy, dict) or set(policy) != set(defaults):
             raise OfficialError("群策略字段不完整。")
         for key, value in defaults.items():
@@ -474,35 +781,113 @@ class OfficialStore:
             ids.add(server["server_id"])
             names.add(name)
 
-    def token_is_set(self, environment):
-        """普通页面只看独立标记，不读取真实凭据内容。"""
-        path = self.root / uuid_value(environment) / "mod_token.json"
-        return path.is_file()
+    def _mod_token(self):
+        """只从全局插件配置取值；官方目录不保存、不返回明文凭据。"""
+        try:
+            raw = self.token_provider()
+        except Exception:
+            raise OfficialError("全局模组 API Token 读取失败，请检查插件配置。") from None
+        if not isinstance(raw, str) or len(raw) > 4096 or any(ord(c) < 33 or ord(c) > 126 for c in raw):
+            raise OfficialError("全局模组 API Token 配置无效，请到「全局参数 → 公共参数」重新保存。")
+        return raw
 
-    def save_token(self, environment, token):
-        if not isinstance(token, str) or len(token) > 4096 or any(ord(c) < 33 or ord(c) > 126 for c in token):
-            raise OfficialError("模组令牌必须为可见 ASCII 字符，清除时留空。")
+    def token_is_set(self, environment):
+        """面板只展示全局配置是否已填；值本身始终来自插件配置。"""
+        try:
+            return bool(self._mod_token())
+        except OfficialError:
+            return False
+
+    def server_remark(self, environment, server_id):
+        """备注来源与 MOTD 缓存单独存放；坏文件按手填空备注处理，不拖垮整页配置。"""
+        path = self._remark_path(environment, server_id)
+        try:
+            data = read_json(path, {}, limit=8192)
+        except OfficialError:
+            data = {}
+        try:
+            if (not isinstance(data, dict)
+                    or set(data) - {"remark_src", "remark_motd", "remark_motd_at", "remark_motd_runs"}
+                    or not {"remark_src", "remark_motd", "remark_motd_at"} <= set(data)
+                    or data["remark_src"] not in ("manual", "motd")
+                    or not isinstance(data["remark_motd"], str)
+                    or len(data["remark_motd"]) > 80
+                    or any(ord(c) < 32 or ord(c) == 127 for c in data["remark_motd"])
+                    or type(data["remark_motd_at"]) not in (int, float)):
+                raise ValueError
+            result = {"remark_src": data["remark_src"], "remark_motd": data["remark_motd"],
+                      "remark_motd_at": data["remark_motd_at"]}
+            runs = normalize_motd_runs(data.get("remark_motd_runs"))
+            if runs:
+                result["remark_motd_runs"] = runs
+            return result
+        except (KeyError, TypeError, ValueError):
+            return {"remark_src": "manual", "remark_motd": "", "remark_motd_at": 0}
+
+    def save_server_remark(self, environment, config_id, server_id, expected_revision, *,
+                           remark_src=None, remark_motd=None, remark_motd_runs=None):
+        """只写备注元数据，不改变群配置修订；服务器必须仍属于该群。"""
         with self.lock:
-            path = self.root / uuid_value(environment) / "mod_token.json"
+            data = self._load(environment)
+            group = self._find_group(data, config_id)
+            self._revision(group, expected_revision)
+            if not any(server["server_id"] == server_id for server in group["servers"]):
+                raise OfficialError("未找到该服务器。")
+            current = self.server_remark(environment, server_id)
+            if remark_src is not None:
+                if remark_src not in ("manual", "motd"):
+                    raise OfficialError("不支持的备注来源。")
+                current["remark_src"] = remark_src
+            if remark_motd is not None:
+                current["remark_motd"] = text(remark_motd, 80)
+                current["remark_motd_at"] = int(self.clock()) if current["remark_motd"] else 0
+            if remark_motd_runs is not None:
+                runs = normalize_motd_runs(remark_motd_runs)
+                if runs:
+                    current["remark_motd_runs"] = runs
+                else:
+                    current.pop("remark_motd_runs", None)
+            atomic_json(self._remark_path(environment, server_id), current, limit=8192)
+            return current
+
+    def save_console_token(self, environment, config_id, server_id, expected_revision, token):
+        """每服独立的控制台命令令牌；对应模组 consoleToken，留空即关闭该服控制台。"""
+        if not isinstance(token, str) or (token and (
+                len(token) < 16 or len(token) > 1024
+                or any(ord(c) <= 32 or ord(c) >= 127 for c in token))):
+            raise OfficialError("命令 Token 必须为 16–1024 个不含空格的可见 ASCII 字符，清除时留空。")
+        with self.lock:
+            data = self._load(environment)
+            group = self._find_group(data, config_id)
+            self._revision(group, expected_revision)
+            if not any(server["server_id"] == server_id for server in group["servers"]):
+                raise OfficialError("该服务器不属于当前官方群。")
+            if token and self.token_is_set(environment) and token == self.runtime_token(environment):
+                raise OfficialError("命令 Token 不能与全局模组 API Token 相同。")
+            path = self._console_token_path(environment, server_id)
             if token:
-                atomic_json(path, {"mod_api_token": token}, limit=8192)
+                atomic_json(path, {"console_token": token}, limit=8192)
             else:
                 try:
                     path.unlink(missing_ok=True)
                 except OSError:
-                    raise OfficialError("清除令牌失败，请刷新后确认。") from None
+                    raise OfficialError("清除命令 Token 失败，请刷新后确认。") from None
+            return {"server_id": server_id, "has_token": bool(token)}
+
+    def console_token_ids(self, environment):
+        """只返回已配置命令 Token 的服务器标识，不读取令牌内容。"""
+        with self.lock:
+            data = self._load(environment)
+            return [server["server_id"] for group in data["groups"] for server in group["servers"]
+                    if self._console_token_path(environment, server["server_id"]).is_file()]
 
     def runtime_token(self, environment):
-        """仅已选环境的运行请求调用；测试使用新临时目录的虚构值。"""
-        data = read_json(self.root / uuid_value(environment) / "mod_token.json", {}, limit=8192)
-        token = data.get("mod_api_token", "") if isinstance(data, dict) else None
-        if not isinstance(token, str) or len(token) > 4096 or any(ord(c) < 33 or ord(c) > 126 for c in token):
-            raise OfficialError("官方环境的模组令牌配置无效。")
-        return token
+        """仅已选环境的运行请求调用；值与 OneBot 的 mod_api_token 完全一致。"""
+        return self._mod_token()
 
     def runtime_console_token(self,environment,server_id):
         """Separate per-server owner file; only a currently authorized write uses it."""
-        path=self.root/uuid_value(environment)/"console_tokens"/(uuid_value(server_id)+".json")
+        path=self._console_token_path(environment,server_id)
         data=read_json(path,{},limit=8192)
         token=data.get("console_token","") if isinstance(data,dict) else None
         if not isinstance(token,str) or len(token)>1024 or token and (len(token)<16 or any(ord(c)<33 or ord(c)>126 for c in token)):
@@ -510,12 +895,16 @@ class OfficialStore:
         return token
 
 
-def permission(scope, group, environment_administrators=()):
+def permission(scope, group, environment_administrators=(), access=None):
+    """官方权限等级：本群黑名单 > 公共黑名单 > 环境管理员/公共超管 > 本群管理员/公共白名单 > 平台角色。"""
+    access = access if isinstance(access, dict) else {}
     if scope.user_id in group["blacklist"]:
         return 0
-    if scope.user_id in environment_administrators:
+    if scope.user_id in access.get("blacklist", ()):
+        return 0
+    if scope.user_id in environment_administrators or scope.user_id in access.get("super_admins", ()):
         return 4
-    if scope.user_id in group["administrators"]:
+    if scope.user_id in group["administrators"] or scope.user_id in access.get("whitelist_admins", ()):
         return 3
     policy = group["policy"]
     if (scope.role == "owner" and policy["enable_group_owner"]) or (scope.role == "admin" and policy["enable_group_admin"]):

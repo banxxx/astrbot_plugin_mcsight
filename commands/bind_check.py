@@ -56,10 +56,10 @@ async def handle_bindcheck(event: AstrMessageEvent, config, parts: list):
         return
 
     wm = WhitelistManager()
-    if not wm.use_central_db:
+    if not config.get_flag("use_central_db"):
         yield event.plain_result(
-            "❌ 本插件未启用中心数据库，没有可比对的绑定记录。\n"
-            "请在配置中开启 use_central_db 后重试。"
+            "❌ 本群未启用中心数据库，没有可比对的绑定记录。\n"
+            "请在「群与服务器 → 本群规则 → 启用中心数据库」中开启后重试。"
         )
         return
 

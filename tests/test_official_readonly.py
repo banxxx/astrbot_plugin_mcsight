@@ -107,12 +107,14 @@ class StoreTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="mcwatch-official-synthetic-")
         self.addCleanup(self.temp.cleanup)
         self.now = 1000000.0
-        self.store = core.OfficialStore(self.temp.name, clock=lambda: self.now)
+        self.api_token = ""
+        self.store = core.OfficialStore(self.temp.name, clock=lambda: self.now,
+                                        token_provider=lambda: self.api_token)
         self.scope = scope()
 
     def approve(self):
         c = self.store.register(self.scope, "合成备注")
-        group = self.store.approve(ENV, c["candidate_id"], self.store.list_state(ENV)["revision"], "测试群", "展示值")
+        group = self.store.approve(ENV, c["candidate_id"], self.store.list_state(ENV)["revision"], "测试群", "123456789")
         return c, group
 
     def test_setup_creates_only_expiring_candidate_not_group_or_authority(self):
@@ -123,6 +125,100 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(candidate, self.store.register(self.scope))
         self.now += 86401
         self.assertEqual(self.store.list_state(ENV)["candidates"], [])
+
+    def test_setup_code_is_hashed_single_use_and_creates_disabled_group(self):
+        created = self.store.create_setup_code(ENV, "测试群", "123456789")
+        self.assertRegex(created["code"], r"^[A-HJ-NP-Z2-9]{6}$")
+        path = Path(self.temp.name) / ENV / "setup_codes" / (created["setup_id"] + ".json")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        self.assertNotIn(created["code"], json.dumps(payload))
+        self.assertNotIn("code", payload)
+        self.assertEqual(self.store.setup_status(ENV, created["setup_id"])["status"], "pending")
+        with self.assertRaises(core.OfficialError):
+            self.store.claim_setup_code(ENV, "AAAAAA", GROUP)
+        group, was_created = self.store.claim_setup_code(ENV, created["code"].lower(), GROUP)
+        self.assertTrue(was_created)
+        self.assertEqual(group["alias"], "测试群")
+        self.assertEqual(group["display_group"], "123456789")
+        self.assertFalse(group["enabled"])
+        status = self.store.setup_status(ENV, created["setup_id"])
+        self.assertEqual(status["status"], "claimed")
+        self.assertEqual(status["config_id"], group["config_id"])
+        with self.assertRaises(core.OfficialError):
+            self.store.claim_setup_code(ENV, created["code"], GROUP)
+
+    def test_setup_code_expiry_cancel_and_existing_group(self):
+        expired = self.store.create_setup_code(ENV, "过期群")
+        self.now += core.SETUP_TTL + 1
+        self.assertEqual(self.store.setup_status(ENV, expired["setup_id"])["status"], "expired")
+        with self.assertRaises(core.OfficialError):
+            self.store.claim_setup_code(ENV, expired["code"], GROUP)
+        cancelled = self.store.create_setup_code(ENV, "取消群")
+        self.store.cancel_setup_code(ENV, cancelled["setup_id"])
+        self.assertEqual(self.store.setup_status(ENV, cancelled["setup_id"])["status"], "missing")
+        first = self.store.create_setup_code(ENV, "正式群")
+        group, created = self.store.claim_setup_code(ENV, first["code"], GROUP)
+        self.assertTrue(created)
+        second = self.store.create_setup_code(ENV, "重复群")
+        again, created = self.store.claim_setup_code(ENV, second["code"], GROUP)
+        self.assertFalse(created)
+        self.assertEqual(again["config_id"], group["config_id"])
+        self.assertEqual(again["alias"], "正式群")
+        self.assertEqual(self.store.setup_status(ENV, second["setup_id"])["status"], "claimed")
+
+    def test_setup_alias_width_and_display_group_digits(self):
+        # 8 个中文和 16 个英文都恰好达到上限；再长一位就应拒绝。
+        self.store.create_setup_code(ENV, "中文中文中文中文", "123456789")
+        self.store.create_setup_code(ENV, "abcdefghijklmnop")
+        with self.assertRaises(core.OfficialError):
+            self.store.create_setup_code(ENV, "中文中文中文中文中")
+        with self.assertRaises(core.OfficialError):
+            self.store.create_setup_code(ENV, "abcdefghijklmnopq")
+        with self.assertRaises(core.OfficialError):
+            self.store.create_setup_code(ENV, "测试群", "12ab")
+        with self.assertRaises(core.OfficialError):
+            self.store.create_setup_code(ENV, "测试群", "１２３")
+
+    def test_new_group_inherits_official_policy_defaults(self):
+        self.store.policy_defaults = lambda: {
+            "enable_group_owner": False, "enable_group_admin": False,
+            "show_server_latency": False, "show_server_version": "yes", "unknown": True,
+        }
+        created = self.store.create_setup_code(ENV, "默认群")
+        group, was_created = self.store.claim_setup_code(ENV, created["code"], GROUP)
+        self.assertTrue(was_created)
+        policy = group["policy"]
+        self.assertFalse(policy["enable_group_owner"])
+        self.assertFalse(policy["enable_group_admin"])
+        self.assertFalse(policy["show_server_latency"])
+        # 非布尔值和未知键不能穿透到群策略。
+        self.assertFalse(policy["show_server_version"])
+        self.assertNotIn("unknown", policy)
+        # 已有群的策略不随后续全局默认值变化。
+        self.store.policy_defaults = lambda: {"enable_group_owner": True}
+        latest = self.store.list_state(ENV)["groups"][0]
+        self.assertFalse(latest["policy"]["enable_group_owner"])
+
+    def test_v1_group_policy_is_migrated(self):
+        _, group = self.approve()
+        path = Path(self.temp.name) / ENV / "state.json"
+        state = json.loads(path.read_text(encoding="utf-8"))
+        state["schema_version"] = 1
+        del state["groups"][0]["policy"]["use_central_db"]
+        path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        loaded = self.store.group(ENV, group_id=GROUP)
+        self.assertEqual(loaded["config_id"], group["config_id"])
+        self.assertFalse(loaded["policy"]["use_central_db"])
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["schema_version"], 2)
+
+    def test_v2_group_without_required_policy_key_is_rejected(self):
+        self.approve()
+        path = Path(self.temp.name) / ENV / "state.json"
+        state = json.loads(path.read_text(encoding="utf-8"))
+        del state["groups"][0]["policy"]["use_central_db"]
+        path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        with self.assertRaises(core.OfficialError):
+            self.store.group(ENV, group_id=GROUP)
 
     def test_group_and_members_limits_do_not_grant_privileges(self):
         for i in range(20):
@@ -150,6 +246,86 @@ class StoreTests(unittest.TestCase):
         next_group = self.store.update(ENV, group["config_id"], 2, {"servers": updated["servers"]})
         self.assertEqual(next_group["servers"][0]["server_id"], saved_id)
 
+    def test_delete_group_requires_matching_revision_and_keeps_other_groups(self):
+        _, group = self.approve()
+        updated = self.store.update(ENV, group["config_id"], group["revision"], {"servers": [server()]})
+        token_path = Path(self.temp.name) / ENV / "console_tokens" / (updated["servers"][0]["server_id"] + ".json")
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text("{}", encoding="utf-8")
+        other_candidate = self.store.register(scope(group="SYNTHETIC_GROUP_B", user="SYNTHETIC_USER_B"))
+        other = self.store.approve(ENV, other_candidate["candidate_id"],
+                                   self.store.list_state(ENV)["revision"], "第二群", "")
+        with self.assertRaises(core.OfficialError):
+            self.store.delete_group(ENV, group["config_id"], 0)
+        removed = self.store.delete_group(ENV, group["config_id"], updated["revision"])
+        self.assertEqual(removed["config_id"], group["config_id"])
+        state = self.store.list_state(ENV)
+        self.assertEqual([g["config_id"] for g in state["groups"]], [other["config_id"]])
+        self.assertIsNone(self.store.group(ENV, config_id=group["config_id"]))
+        self.assertFalse(token_path.exists())
+        self.assertFalse(any(c["group_openid"] == GROUP for c in state["candidates"]))
+
+    def test_console_token_is_per_server_and_cannot_equal_api_token(self):
+        _, group = self.approve()
+        updated = self.store.update(ENV, group["config_id"], group["revision"], {"servers": [server()]})
+        server_id = updated["servers"][0]["server_id"]
+        token = "SYNTHETIC_CONSOLE_TOKEN_123"
+        with self.assertRaises(core.OfficialError):
+            self.store.save_console_token(ENV, group["config_id"], server_id, 0, token)
+        with self.assertRaises(core.OfficialError):
+            self.store.save_console_token(ENV, group["config_id"], server_id, updated["revision"], "too-short")
+        with self.assertRaises(core.OfficialError):
+            self.store.save_console_token(ENV, group["config_id"], OTHER_ENV, updated["revision"], token)
+        self.store.save_console_token(ENV, group["config_id"], server_id, updated["revision"], token)
+        self.assertEqual(self.store.console_token_ids(ENV), [server_id])
+        self.api_token = "SYNTHETIC_API_TOKEN_123456"
+        self.assertTrue(self.store.token_is_set(ENV))
+        with self.assertRaises(core.OfficialError):
+            self.store.save_console_token(ENV, group["config_id"], server_id, updated["revision"],
+                                          "SYNTHETIC_API_TOKEN_123456")
+        self.store.save_console_token(ENV, group["config_id"], server_id, updated["revision"], "")
+        self.assertEqual(self.store.console_token_ids(ENV), [])
+        self.assertFalse((Path(self.temp.name) / ENV / "console_tokens" / (server_id + ".json")).exists())
+
+    def test_removing_server_deletes_its_console_token(self):
+        _, group = self.approve()
+        updated = self.store.update(ENV, group["config_id"], group["revision"], {"servers": [server()]})
+        server_id = updated["servers"][0]["server_id"]
+        self.store.save_console_token(ENV, group["config_id"], server_id, updated["revision"],
+                                      "SYNTHETIC_CONSOLE_TOKEN_123")
+        self.assertEqual(self.store.console_token_ids(ENV), [server_id])
+        self.store.update(ENV, group["config_id"], updated["revision"], {"servers": []})
+        self.assertEqual(self.store.console_token_ids(ENV), [])
+        self.assertFalse((Path(self.temp.name) / ENV / "console_tokens" / (server_id + ".json")).exists())
+
+    def test_server_remark_source_and_motd_cache_are_per_server_and_cleaned_on_removal(self):
+        _, group = self.approve()
+        updated = self.store.update(ENV, group["config_id"], group["revision"], {"servers": [server()]})
+        server_id = updated["servers"][0]["server_id"]
+        self.assertEqual(self.store.server_remark(ENV, server_id),
+                         {"remark_src": "manual", "remark_motd": "", "remark_motd_at": 0})
+        with self.assertRaises(core.OfficialError):
+            self.store.save_server_remark(ENV, group["config_id"], server_id, 0, remark_src="motd")
+        with self.assertRaises(core.OfficialError):
+            self.store.save_server_remark(ENV, group["config_id"], server_id, updated["revision"],
+                                          remark_src="other")
+        saved = self.store.save_server_remark(ENV, group["config_id"], server_id, updated["revision"],
+                                              remark_src="motd", remark_motd="SYNTHETIC_MOTD")
+        self.assertEqual(saved["remark_src"], "motd")
+        self.assertEqual(saved["remark_motd"], "SYNTHETIC_MOTD")
+        self.assertEqual(saved["remark_motd_at"], int(self.now))
+        self.now += 60
+        kept = self.store.save_server_remark(ENV, group["config_id"], server_id, updated["revision"],
+                                             remark_src="manual")
+        self.assertEqual(kept["remark_motd"], "SYNTHETIC_MOTD")
+        self.assertEqual(kept["remark_motd_at"], int(self.now - 60))
+        path = Path(self.temp.name) / ENV / "remarks" / (server_id + ".json")
+        self.assertTrue(path.exists())
+        path.write_text("not json", encoding="utf-8")
+        self.assertEqual(self.store.server_remark(ENV, server_id)["remark_src"], "manual")
+        self.store.update(ENV, group["config_id"], updated["revision"], {"servers": []})
+        self.assertFalse(path.exists())
+
     def test_new_server_cannot_impersonate_existing_external_identity(self):
         _, group = self.approve()
         with self.assertRaises(core.OfficialError):
@@ -167,6 +343,18 @@ class StoreTests(unittest.TestCase):
         revoked = self.store.revoke(ENV, group["config_id"], USER, 3, "blacklist")
         self.assertEqual(core.permission(self.scope, revoked), 3)
         self.assertNotIn("bindings", self.store.list_state(ENV))
+
+    def test_public_lists_apply_to_official_openids_and_global_blacklist_wins(self):
+        _, group = self.approve()
+        self.store.access_provider = lambda: {
+            "super_admins": f"SYNTHETIC_USER_B,{USER}", "whitelist_admins": [], "blacklist": []}
+        self.assertEqual(self.store.access_level(self.scope, group), 4)
+        self.store.access_provider = lambda: {
+            "super_admins": [USER], "whitelist_admins": [USER], "blacklist": [USER]}
+        self.assertEqual(self.store.access_level(self.scope, group), 0)
+        self.store.access_provider = lambda: {
+            "super_admins": [], "whitelist_admins": [USER], "blacklist": []}
+        self.assertEqual(self.store.access_level(self.scope, group), 3)
 
     def test_environment_administrator_is_environment_wide_and_blacklist_still_wins(self):
         candidate, group = self.approve()
@@ -203,16 +391,18 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(core.OfficialError): self.store.register(self.scope)
         self.assertEqual(path.read_bytes(), before)
 
-    def test_normal_state_does_not_read_secret_file(self):
+    def test_normal_state_does_not_read_or_store_secret_file(self):
         self.approve()
-        self.store.save_token(ENV, "SYNTHETIC_NOT_A_REAL_TOKEN")
+        self.api_token = "SYNTHETIC_NOT_A_REAL_TOKEN"
         original = core.read_json
         def guarded(path, *args, **kwargs):
             if Path(path).name == "mod_token.json": forbidden()
             return original(path, *args, **kwargs)
         with patch.object(core, "read_json", side_effect=guarded):
             self.assertTrue(self.store.token_is_set(ENV))
+            self.assertEqual(self.store.runtime_token(ENV), "SYNTHETIC_NOT_A_REAL_TOKEN")
             self.assertNotIn("mod_api_token", json.dumps(self.store.list_state(ENV)))
+        self.assertFalse((Path(self.temp.name) / ENV / "mod_token.json").exists())
 
     def test_policy_and_server_inputs_are_strict(self):
         _, group = self.approve()
@@ -347,12 +537,25 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         runtime.store = self.store
         return runtime
 
-    async def test_setup_registration_and_help_only_before_activation(self):
+    async def test_setup_code_creates_group_and_help_only_before_activation(self):
         runtime = self.make_runtime()
-        event = Event("/mc setup 测试")
+        event = Event("/mc setup")
         await runtime.handle(event)
-        self.assertIn("已登记", event.sent[0][1])
+        self.assertIn("生成验证码", event.sent[0][1])
         self.assertEqual(runtime.store.list_state(ENV)["groups"], [])
+        bad = Event("/mc setup ABCDEF", message_id="EVENT_SETUP_BAD")
+        await runtime.handle(bad)
+        self.assertIn("验证码无效或已过期", bad.sent[0][1])
+        created = self.store.create_setup_code(ENV, "测试群")
+        event = Event(f"/mc setup {created['code'].lower()}", message_id="EVENT_SETUP_OK")
+        await runtime.handle(event)
+        self.assertIn("已创建本群配置「测试群」", event.sent[0][1])
+        groups = runtime.store.list_state(ENV)["groups"]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["alias"], "测试群")
+        again = Event(f"/mc setup {created['code']}", message_id="EVENT_SETUP_AGAIN")
+        await runtime.handle(again)
+        self.assertIn("验证码无效或已过期", again.sent[0][1])
         other = Event("/mc status", message_id="EVENT_B")
         runtime.queries = SimpleNamespace(query=forbidden)
         await runtime.handle(other)
@@ -364,7 +567,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await runtime.handle(event)
         self.assertEqual(len(event.sent), 1)
         self.assertEqual(event.sent[0][0], "text")
-        self.assertIn("尚未开放", event.sent[0][1])
+        self.assertIn("开放绑定", event.sent[0][1])
         self.assertIn("旧 OneBot", event.sent[0][1])
         self.assertNotIn("请发送 /绑定", event.sent[0][1])
 
@@ -415,7 +618,8 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(next_page.sent[0], ("image", b"page2"))
         writes = Event("/mc unbind Player_A", message_id="EVENT_C")
         await runtime.handle(writes)
-        self.assertIn("尚未", writes.sent[0][1])
+        # 本群未开启中心库，写入走本地路径且该服无 API 端口，必须保持关闭。
+        self.assertIn("能力未就绪", writes.sent[0][1])
 
     async def test_permission_change_during_query_prevents_sending_stale_image(self):
         runtime = self.make_runtime()
@@ -586,6 +790,22 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
             _ok=lambda data: data, MAX_SERVERS_PER_GROUP=20, _plugin_version=lambda: "synthetic", PLUGIN_NAME="synthetic",
             WhitelistManager=forbidden, ConfigManager=forbidden, _group_ids=forbidden)
         self.assertEqual((await handler())["groups"], [])
+
+    async def test_onebot_preview_summary_scans_groups_while_official_selected(self):
+        class Request:
+            query = {"platform": "onebot"}
+        class Config:
+            def __init__(self, group_id): self.group_id = group_id
+            def get_all_servers(self): return []
+            def get_alias(self): return ""
+        class Whitelist:
+            def has_mod_api(self, server): return False
+        handler = isolated_function("web/api.py", "view_summary",
+            platform_activation=SimpleNamespace(status=lambda: {"selection": SELECTION}),
+            web_request=Request(), _ok=lambda data: data, MAX_SERVERS_PER_GROUP=20,
+            _plugin_version=lambda: "synthetic", PLUGIN_NAME="synthetic",
+            WhitelistManager=Whitelist, ConfigManager=Config, _group_ids=lambda: ["100000001"])
+        self.assertEqual([g["gid"] for g in (await handler())["groups"]], ["100000001"])
 
     async def test_activation_accepts_only_selected_raw_official_group_but_old_business_stays_closed(self):
         store = activation.SelectionStore()

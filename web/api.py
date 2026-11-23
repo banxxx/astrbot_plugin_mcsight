@@ -28,10 +28,13 @@ from ..config.server_config import (
     REMARK_SOURCES,
     REMARK_SRC_MOTD,
     clean_motd,
+    motd_runs,
     console_token_of,
+    delete_group_config,
     effective_remark,
-    group_config_path,
+    has_group_config,
     is_hidden,
+    remark_runs_of,
     remark_src_of,
     validate_remark,
     validate_server_name,
@@ -40,9 +43,12 @@ from ..config.server_config import (
 from ..config.whitelist_config import WhitelistManager
 from ..features.player_status.checker import query_one
 from ..utils import mod_http, platform_activation, official_runtime
+from ..utils.official_binding_service import BindingScope
 from ..utils.official_core import OfficialError
+from ..utils.official_transport import ModTarget, TransportError, V2ModClient
 from ..utils.bind_rule import validate as validate_bind_rule
 from ..utils.host_validator import normalize_host_input, validate_host
+from ..utils.group_policy import POLICY_BOOL_KEYS
 from ..utils.plugin_paths import PLUGIN_NAME, sub_dir
 from .constants import ROWS
 
@@ -74,23 +80,19 @@ def _plugin_version() -> str:
 SECRET_KEYS = ("mod_api_token", "db_password")
 # 群号要拼进配置文件名，先卡死字符集再碰文件系统
 GROUP_ID_RE = re.compile(r"^\d{5,12}$")
+# 公共管理名单：QQ 号或官方 openid；只接受 ASCII 英文/数字，杜绝中文与符号
+MEMBER_LIST_KEYS = ("super_admins", "whitelist_admins", "blacklist")
+MEMBER_LIST_LABELS = {"super_admins": "超级管理员", "whitelist_admins": "白名单管理员", "blacklist": "黑名单"}
+QQ_MEMBER_RE = re.compile(r"^\d{5,12}$")
+OPENID_RE = re.compile(r"^[A-Za-z0-9]{16,64}$")
 REDACTED = "«已隐藏»"
 
 # 全局参数的分区展示：(分区名, 分区说明, 键)；键必须与 _conf_schema.json 一致，漏列的自动归「其他」
+# 两个平台共用连接与权限名单；群级开关统一放到「群与服务器」。
 SECTIONS = (
-    ("生效机器人", "本插件一次只处理一个机器人实例",
-     ("active_platform", "active_bot_instance")),
-    ("状态与权限", "决定谁能用功能",
-     ("enable_group_owner", "enable_group_admin",
-      "super_admins", "whitelist_admins", "blacklist")),
-    ("模组 API", "插件调用服务器内模组时的鉴权",
-     ("mod_api_token",)),
-    ("中心数据库", "绑定数据的云端落点",
-     ("use_central_db", "db_host", "db_port", "db_user",
-      "db_password", "db_name")),
-    ("卡片显示", "影响 /在线 状态卡片内容",
-     ("show_server_version", "show_server_latency")),
-    ("其他", "兜底参数", ("default_group_id",)),
+    ("公共参数", "两个平台共用的权限名单、Token 与中心数据库连接",
+     ("mod_api_token", "super_admins", "whitelist_admins", "blacklist",
+      "db_host", "db_port", "db_user", "db_password", "db_name")),
 )
 
 _plugin_config = None
@@ -119,15 +121,25 @@ def _clean_gid(raw) -> str:
 
 
 def _group_ids() -> list:
-    """扫出可用的群配置文件：只认 5-12 位数字群号，其他会话文件不进面板"""
-    base = sub_dir("group_configs")
-    ids = []
-    for name in os.listdir(base):
-        if not (name.startswith("servers_") and name.endswith(".json")):
-            continue
-        gid = name[len("servers_"):-len(".json")]
-        if GROUP_ID_RE.match(gid):
-            ids.append(gid)
+    """扫出新旧两种 OneBot 群配置：只认 5-12 位数字群号，其他会话文件不进面板。"""
+    ids = set()
+    new_base = sub_dir("onebot")
+    try:
+        for name in os.listdir(new_base):
+            if GROUP_ID_RE.match(name) and os.path.exists(os.path.join(new_base, name, "state.json")):
+                ids.add(name)
+    except OSError:
+        pass
+    legacy_base = sub_dir("group_configs")
+    try:
+        for name in os.listdir(legacy_base):
+            if not (name.startswith("servers_") and name.endswith(".json")):
+                continue
+            gid = name[len("servers_"):-len(".json")]
+            if GROUP_ID_RE.match(gid):
+                ids.add(gid)
+    except OSError:
+        pass
     return sorted(ids)
 
 
@@ -144,6 +156,8 @@ def _server_view(entry: dict) -> dict:
         "remark_motd": entry.get("remark_motd", ""),
         "remark_motd_at": entry.get("remark_motd_at", 0),
         "remark_display": effective_remark(entry),
+        # MOTD 备注当前生效时的彩色分段；手填/无颜色时为 None，前端按纯文本渲染
+        "remark_runs": remark_runs_of(entry),
         "hidden": is_hidden(entry),
         "has_token": bool(console_token_of(entry)),
     }
@@ -160,16 +174,15 @@ def _group_payload(gid: str) -> dict:
     wm = WhitelistManager()
     return {
         "gid": gid,
-        "file": f"servers_{gid}.json",
+        "file": f"onebot/{gid}/state.json",
+        "alias": cm.get_alias(),
         "servers": [_server_view(s) for s in servers],
         "mod_count": sum(1 for s in servers if wm.has_mod_api(s)),
         "token_count": _token_count(servers),
-        "last_online_enabled": cm.is_last_online_enabled(),
-        "nickname_check_enabled": cm.is_nickname_check_enabled(),
-        "bind_require_nickname": cm.is_bind_require_nickname(),
-        "bind_nickname_rule": cm.get_bind_nickname_rule(),
-        "bind_nickname_template": cm.get_bind_nickname_template(),
-        "nickname_check_ignore_ids": cm.get_nickname_check_ignore_ids(),
+        "enabled": cm.is_group_enabled(),
+        # 群规则统一放在 policy 下，字段与 QQ 官方的群对象一致。
+        "policy": cm.get_policy(),
+        "nickname_ignore": cm.get_nickname_ignore(),
         "max_servers_per_group": MAX_SERVERS_PER_GROUP,
     }
 
@@ -191,16 +204,29 @@ def _parse_port(raw):
 
 async def view_summary():
     selection = platform_activation.status().get("selection") or {}
-    if selection.get("platform") == "qq_official":
+    # 页面上的 OneBot / QQ 官方 是「配置视图」，默认仍跟随实际生效平台；
+    # 显式传 platform=onebot 时允许在官方生效期间预览 OneBot 群配置。
+    request = globals().get("web_request")
+    preview = ""
+    if request is not None:
+        try:
+            preview = str(request.query.get("platform", "") or "").strip()
+        except Exception:
+            preview = ""
+    if preview not in ("onebot", "qq_official"):
+        preview = ""
+    if preview == "qq_official" or (not preview and selection.get("platform") == "qq_official"):
         return _ok({"groups": [], "max_servers_per_group": MAX_SERVERS_PER_GROUP,
                     "plugin_version": _plugin_version(), "plugin_name": PLUGIN_NAME,
                     "platform": "qq_official"})
     groups = []
     wm = WhitelistManager()
     for gid in _group_ids():
-        servers = ConfigManager(group_id=int(gid)).get_all_servers()
+        cm = ConfigManager(group_id=int(gid))
+        servers = cm.get_all_servers()
         groups.append({
             "gid": gid,
+            "alias": cm.get_alias(),
             "server_count": len(servers),
             "mod_count": sum(1 for s in servers if wm.has_mod_api(s)),
             "token_count": sum(1 for s in servers if s.get("console_token")),
@@ -217,8 +243,8 @@ async def view_group():
     gid = _clean_gid(web_request.query.get("gid", ""))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     return _ok(_group_payload(gid))
 
 
@@ -229,9 +255,31 @@ async def view_group_create():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if os.path.exists(group_config_path(gid)):
-        return _err(f"该群已有配置文件 servers_{gid}.json")
-    ConfigManager(group_id=int(gid))  # 构造函数即建文件，与 /mc add 首次落盘同一路径
+    if has_group_config(gid):
+        return _err("该群已有配置文件")
+    cm = ConfigManager(group_id=int(gid))  # 构造函数即建文件，与 /mc add 首次落盘同一路径
+    alias = str(body.get("alias") or "")
+    if alias:
+        ok, why = cm.set_alias(alias)
+        if not ok:
+            return _err(why)
+    return _ok(_group_payload(gid))
+
+
+async def view_group_update():
+    body, err = await _body()
+    if err:
+        return _err(err)
+    gid = _clean_gid(body.get("gid"))
+    if not gid:
+        return _err("群号必须是 5-12 位数字")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
+    cm = ConfigManager(group_id=int(gid))
+    alias = str(body.get("alias") or "")
+    ok, why = cm.set_alias(alias)
+    if not ok:
+        return _err(why)
     return _ok(_group_payload(gid))
 
 
@@ -242,10 +290,9 @@ async def view_group_delete():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    path = group_config_path(gid)
-    if not os.path.exists(path):
-        return _err(f"servers_{gid}.json 不存在")
-    os.remove(path)
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
+    delete_group_config(gid)
     return _ok({"gid": gid})
 
 
@@ -258,19 +305,17 @@ async def view_group_flag():
         return _err("群号必须是 5-12 位数字")
     key = body.get("key")
     value = body.get("value")
-    if key not in ("last_online_enabled", "nickname_check_enabled", "bind_require_nickname"):
+    if key != "enabled" and key not in POLICY_BOOL_KEYS:
         return _err("不支持的开关项")
     if not isinstance(value, bool):
         return _err("开关值必须是 true/false")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     cm = ConfigManager(group_id=int(gid))
-    if key == "last_online_enabled":
-        cm.set_last_online_enabled(value)
-    elif key == "nickname_check_enabled":
-        cm.set_nickname_check_enabled(value)
+    if key == "enabled":
+        cm.set_group_enabled(value)
     else:
-        cm.set_bind_require_nickname(value)
+        cm.set_flag(key, value)
     return _ok({"key": key, "value": value})
 
 
@@ -286,8 +331,8 @@ async def view_group_bind_rule():
     why = validate_bind_rule(rule, template)
     if why:
         return _err(why)
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     cm = ConfigManager(group_id=int(gid))
     cm.set_bind_nickname_rule(rule)
     cm.set_bind_nickname_template(template)
@@ -301,18 +346,18 @@ async def view_group_ignore_add():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     qq = str(body.get("qq", "")).strip()
     if not qq.isdecimal():
         return _err("QQ 号必须是纯数字")
     cm = ConfigManager(group_id=int(gid))
-    ids = cm.get_nickname_check_ignore_ids()
+    ids = cm.get_nickname_ignore()
     if qq in ids:
         return _err(f"QQ「{qq}」已在忽略列表中")
     ids.append(qq)
-    cm.set_nickname_check_ignore_ids(ids)
-    return _ok({"nickname_check_ignore_ids": ids})
+    cm.set_nickname_ignore(ids)
+    return _ok({"nickname_ignore": ids})
 
 
 async def view_group_ignore_remove():
@@ -322,16 +367,16 @@ async def view_group_ignore_remove():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     qq = str(body.get("qq", "")).strip()
     cm = ConfigManager(group_id=int(gid))
-    ids = cm.get_nickname_check_ignore_ids()
+    ids = cm.get_nickname_ignore()
     if qq not in ids:
         return _err(f"QQ「{qq}」不在忽略列表中")
     ids.remove(qq)
-    cm.set_nickname_check_ignore_ids(ids)
-    return _ok({"nickname_check_ignore_ids": ids})
+    cm.set_nickname_ignore(ids)
+    return _ok({"nickname_ignore": ids})
 
 
 async def view_server_create():
@@ -341,8 +386,8 @@ async def view_server_create():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     name = str(body.get("name", "")).strip()
     host = normalize_host_input(str(body.get("host", "")))
     if not name:
@@ -395,8 +440,8 @@ async def view_server_update():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     cm = ConfigManager(group_id=int(gid))
     name = str(body.get("name", ""))
     servers = cm.get_all_servers()
@@ -439,8 +484,8 @@ async def view_server_delete():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     name = str(body.get("name", ""))
     cm = ConfigManager(group_id=int(gid))
     if not cm.remove_server(name):
@@ -455,8 +500,8 @@ async def view_server_move():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     name = str(body.get("name", ""))
     try:
         index = int(body.get("index"))
@@ -476,8 +521,8 @@ async def view_server_hide():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     name = str(body.get("name", ""))
     hidden = body.get("hidden")
     if not isinstance(hidden, bool):
@@ -501,8 +546,8 @@ async def view_server_token():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     name = str(body.get("name", ""))
     token = body.get("token")
     if not isinstance(token, str):
@@ -537,8 +582,8 @@ async def view_server_batch_add():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     raw = str(body.get("text", ""))
     cm = ConfigManager(group_id=int(gid))
     success, failed = cm.batch_add(
@@ -560,8 +605,8 @@ async def view_server_batch_remove():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     names = body.get("names")
     if not isinstance(names, list):
         return _err("names 必须是数组")
@@ -603,8 +648,8 @@ async def view_server_whitelist():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     name = str(body.get("name", ""))
     enabled = body.get("enabled")
     if not isinstance(enabled, bool):
@@ -639,7 +684,7 @@ async def view_server_whitelist():
 async def _read_motd(entry: dict, wm, token: str):
     """取一台的 MOTD（清洗后）：先问模组 /api/status，拿不到再回落 mcstatus 的 SLP。
 
-    返回 (文本, 失败原因)。回落是有意的：没装模组的服 SLP 也带 motd，那份就是
+    返回 (文本, 彩色分段, 失败原因)。回落是有意的：没装模组的服 SLP 也带 motd，那份就是
     server.properties 里的原值；而装了旧版模组的服虽然没这个字段，SLP 照样能补上。
     """
     reasons = []
@@ -650,20 +695,20 @@ async def _read_motd(entry: dict, wm, token: str):
         if ok and isinstance(payload, dict):
             data = payload.get("data") or {}
             if "motd" in data:
-                text = clean_motd(data.get("motd"))
+                text, runs = motd_runs(data.get("motd"))
                 if text:
-                    return text, ""
+                    return text, runs, ""
                 reasons.append("模组回的 motd 是空串")
             else:
                 reasons.append("该服模组版本没有 motd 字段")
         else:
             reasons.append(str(payload or "模组未响应"))
     raw = await query_one(entry)
-    text = str(raw.get("motd") or "").strip()
+    text, runs = motd_runs(str(raw.get("motd") or "").strip())
     if text:
-        return text, ""
+        return text, runs, ""
     reasons.append(str(raw.get("error") or "SLP 没返回 motd（服务器没开着？）"))
-    return "", "；".join(reasons)
+    return "", [], "；".join(reasons)
 
 
 async def view_server_motd_preview():
@@ -684,10 +729,10 @@ async def view_server_motd_preview():
     if port_err:
         return _err(port_err)
     entry = {"name": "", "host": host, "api_port": port}
-    text, why = await _read_motd(entry, WhitelistManager(), _mod_token())
+    text, runs, why = await _read_motd(entry, WhitelistManager(), _mod_token())
     if not text:
         return _err(why or "没拿到 MOTD")
-    return _ok({"motd": text})
+    return _ok({"motd": text, "runs": runs})
 
 
 async def view_remark_sync():
@@ -698,8 +743,8 @@ async def view_remark_sync():
     gid = _clean_gid(body.get("gid"))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     cm = ConfigManager(group_id=int(gid))
     wm = WhitelistManager()
     token = _mod_token()
@@ -713,12 +758,12 @@ async def view_remark_sync():
     pairs = await asyncio.gather(*(_read_motd(s, wm, token) for s in targets))
     synced = []
     failed = []
-    for entry, (text, why) in zip(targets, pairs):
+    for entry, (text, runs, why) in zip(targets, pairs):
         name = str(entry.get("name") or "")
         if not text:
             failed.append({"name": name, "reason": why})
             continue
-        cm.set_remark_motd(name, text, captured_at)
+        cm.set_remark_motd(name, text, captured_at, runs=runs)
         synced.append(name)
 
     still_empty = [
@@ -743,8 +788,8 @@ async def view_server_mod_state():
     gid = _clean_gid(web_request.query.get("gid", ""))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    if not os.path.exists(group_config_path(gid)):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
     wm = WhitelistManager()
     token = _mod_token()
     servers = ConfigManager(group_id=int(gid)).get_all_servers()
@@ -774,18 +819,19 @@ async def view_json_group():
     gid = _clean_gid(web_request.query.get("gid", ""))
     if not gid:
         return _err("群号必须是 5-12 位数字")
-    path = group_config_path(gid)
-    if not os.path.exists(path):
-        return _err(f"servers_{gid}.json 不存在")
+    if not has_group_config(gid):
+        return _err("该群配置不存在")
+    cm = ConfigManager(group_id=int(gid))  # 旧文件在这里完成一次性迁移
+    path = cm.config_file
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
-        return _err(f"读取 servers_{gid}.json 失败：{e}")
+        return _err(f"读取群配置失败：{e}")
     for entry in data.get("servers", []):
         if isinstance(entry, dict) and "console_token" in entry:
             entry["console_token"] = REDACTED
-    return _ok({"file": f"servers_{gid}.json",
+    return _ok({"file": f"onebot/{gid}/state.json",
                 "text": json.dumps(data, ensure_ascii=False, indent=2)})
 
 
@@ -821,6 +867,15 @@ def _normalize_list(value) -> list:
     return [str(x).strip() for x in value if str(x).strip()]
 
 
+def _member_id_error(value: str) -> str:
+    """QQ 号 5–12 位数字；openid 16–64 位英文/数字；其他内容一律拒绝。"""
+    if not re.fullmatch(r"[A-Za-z0-9]+", value):
+        return "只能包含英文字母和数字，不能包含中文、空格或符号"
+    if value.isdigit():
+        return "" if QQ_MEMBER_RE.fullmatch(value) else "QQ 号应为 5–12 位数字"
+    return "" if OPENID_RE.fullmatch(value) else "openid 应为 16–64 位英文字母或数字"
+
+
 def _coerce(kind: str, key: str, value):
     if key == "active_platform" and value not in ("onebot", "qq_official"):
         return None, "生效平台只允许 onebot 或 qq_official"
@@ -844,12 +899,23 @@ def _coerce(kind: str, key: str, value):
     if kind == "list":
         if not isinstance(value, list):
             return None, f"{key} 必须是列表"
-        return _normalize_list(value), ""
+        values = _normalize_list(value)
+        if key in MEMBER_LIST_KEYS:
+            label = MEMBER_LIST_LABELS[key]
+            for index, item in enumerate(values, 1):
+                why = _member_id_error(item)
+                if why:
+                    return None, f"{label}第 {index} 项无效：{why}"
+        return values, ""
     if value is None:
         return "", ""
     if not isinstance(value, str):
         return None, f"{key} 必须是文本"
-    return value.strip(), ""
+    value = value.strip()
+    options = _schema.get(key, {}).get("options")
+    if isinstance(options, list) and options and value not in options:
+        return None, f"{key} 只能是：" + "、".join(str(option) for option in options)
+    return value, ""
 
 
 def _config_item(key: str) -> dict:
@@ -873,6 +939,7 @@ def _config_item(key: str) -> dict:
         "desc": meta.get("description", key),
         "hint": meta.get("hint", ""),
         "default": meta.get("default"),
+        "options": meta.get("options") if isinstance(meta.get("options"), list) else None,
         "secret": secret,
         "value": value,
         "has_value": has_value,
@@ -888,8 +955,9 @@ async def view_config():
     # 按分区顺序出条目：schema 的书写顺序与分区无关，直接沿用它会把同一个分区拆成好几张卡
     ordered = [k for _, _, keys in SECTIONS for k in keys if k in _schema]
     ordered += [k for k in known if k not in ordered]
-    # 选择在专用区域整组保存，旧字段只保留首次初始化兼容。
-    items = [_config_item(k) for k in ordered if k not in platform_activation.ACTIVE_KEYS]
+    # 选择在专用区域整组保存，不在通用配置列表里展示。
+    items = [_config_item(k) for k in ordered
+             if k not in platform_activation.ACTIVE_KEYS]
     extra = [k for k in _plugin_config.keys() if k not in _schema]
     return _ok({
         "items": items,
@@ -1058,10 +1126,297 @@ async def view_activation_update():
         return _err(str(error))
 
 
+async def _official_motd(server, token):
+    """与 OneBot 相同的采集口径：先问模组 /api/status，拿不到再回落 SLP。
+
+    返回 (文本, 彩色分段, 失败原因)。
+    """
+    reasons = []
+    if server["api_port"] is not None and token:
+        ok, payload = await mod_http.request(
+            server["host"], server["api_port"], "/api/status", method="GET",
+            token=token, timeout=MOD_READ_TIMEOUT)
+        if ok and isinstance(payload, dict):
+            data = payload.get("data") or {}
+            if "motd" in data:
+                motd, runs = motd_runs(data.get("motd"))
+                if motd:
+                    return motd, runs, ""
+                reasons.append("模组回的 motd 是空串")
+            else:
+                reasons.append("该服模组版本没有 motd 字段")
+        else:
+            reasons.append(str(payload or "模组未响应"))
+    try:
+        raw = await query_one({"host": f"{server['host']}:{server['game_port']}",
+                               "name": server.get("name", ""), "remark": ""})
+        motd, runs = motd_runs(str(raw.get("motd") or "").strip())
+        if motd:
+            return motd, runs, ""
+        reasons.append(str(raw.get("error") or "SLP 没返回 motd（服务器没开着？）"))
+    except Exception as error:
+        reasons.append(str(error) or "SLP 查询失败")
+    return "", [], "；".join(reasons)
+
+
 async def view_official_state():
     try:
         environment = web_request.query.get("environment_id", "")
         return _ok(official_runtime.current().state(environment))
+    except OfficialError as error:
+        return _err(str(error))
+
+
+async def view_official_mod_state():
+    """与 OneBot 的 server/mod_state 同一套读数：按 server_id 返回每服登录开关。"""
+    try:
+        runtime = official_runtime.current()
+        environment = runtime.environment(web_request.query.get("environment_id", ""))
+        group = runtime.store.group(environment, config_id=web_request.query.get("config_id", ""))
+        if group is None:
+            raise OfficialError("未找到该官方环境的群配置。")
+        token_error = ""
+        try:
+            token = runtime.store.runtime_token(environment) if runtime.store.token_is_set(environment) else ""
+        except OfficialError as error:
+            token, token_error = "", str(error)
+
+        async def one(entry):
+            server_id = entry["server_id"]
+            if entry["api_port"] is None:
+                return server_id, {"reachable": False, "enabled": None, "writable": False,
+                                   "reason": "未配置模组 API 端口，开关不可用"}
+            if not token:
+                return server_id, {"reachable": False, "enabled": None, "writable": False,
+                                   "reason": token_error or "未配置全局 mod_api_token"}
+            ok, payload = await mod_http.request(
+                entry["host"], entry["api_port"], "/api/status", method="GET",
+                token=token, timeout=MOD_READ_TIMEOUT)
+            if not ok or not isinstance(payload, dict):
+                return server_id, {"reachable": False, "enabled": None, "writable": False,
+                                   "reason": str(payload or "模组未响应")}
+            data = payload.get("data") or {}
+            if "whitelist_check_enabled" not in data:
+                return server_id, {"reachable": True, "enabled": None, "writable": False,
+                                   "reason": "该服模组版本没有登录开关，需更新模组后重启服务器"}
+            return server_id, {"reachable": True, "enabled": bool(data["whitelist_check_enabled"]),
+                               "writable": data.get("whitelist_check_writable") is True,
+                               "reason": ""}
+
+        pairs = await asyncio.gather(*(one(entry) for entry in group["servers"]))
+        return _ok({"states": dict(pairs)})
+    except OfficialError as error:
+        return _err(str(error))
+
+
+async def view_official_whitelist():
+    """与 OneBot 的 server/whitelist 同义：只下发该服模组的登录开关，不改群配置修订。"""
+    body, err = await _body()
+    if err:
+        return _err(err)
+    if set(body) != {"environment_id", "config_id", "expected_revision", "server_id", "enabled"}:
+        return _err("请求包含不支持的字段。")
+    try:
+        runtime = official_runtime.current()
+        environment = runtime.environment(body.get("environment_id"))
+        group = runtime.store.group(environment, config_id=body.get("config_id"))
+        if group is None:
+            raise OfficialError("未找到该官方环境的群配置。")
+        if type(body.get("expected_revision")) is not int or body["expected_revision"] != group["revision"]:
+            raise OfficialError("配置已被其它操作修改，请刷新后重试。")
+        server = next((entry for entry in group["servers"]
+                       if entry["server_id"] == body.get("server_id")), None)
+        if server is None:
+            raise OfficialError("未找到该服务器。")
+        enabled = body.get("enabled")
+        if type(enabled) is not bool:
+            raise OfficialError("开关值必须是 true/false。")
+        if server["api_port"] is None:
+            raise OfficialError(f"服务器「{server['name']}」未配置模组 API 端口，无法下发。")
+        if not runtime.store.token_is_set(environment):
+            raise OfficialError("未配置全局 mod_api_token，无法调用模组接口。")
+        token = runtime.store.runtime_token(environment)
+        try:
+            scope = BindingScope(environment, group["group_openid"], server["server_id"])
+            target = ModTarget(scope, server["host"], server["api_port"])
+        except OfficialError:
+            raise OfficialError("该服的模组连接参数无效，请检查地址与端口。") from None
+
+        def revalidate():
+            """发请求前再确认配置没被换掉；避免按旧页面把开关写到另一台服。"""
+            runtime.environment(environment)
+            latest = runtime.store.group(environment, config_id=group["config_id"])
+            entry = next((item for item in (latest or {}).get("servers", [])
+                          if item["server_id"] == server["server_id"]), None)
+            if (latest is None or latest["revision"] != group["revision"] or entry is None
+                    or entry["host"] != server["host"] or entry["api_port"] != server["api_port"]):
+                raise TransportError("CONFLICT", "stale_configuration")
+
+        client = V2ModClient(target, total_timeout=MOD_WRITE_TIMEOUT)
+        try:
+            data = await asyncio.wait_for(
+                asyncio.to_thread(client.request, "settings/whitelist", {"enabled": enabled},
+                                  token=token, revalidate=revalidate),
+                timeout=MOD_WRITE_TIMEOUT + 1)
+        except TransportError as error:
+            if error.code == "NOT_SUPPORTED":
+                raise OfficialError("该服模组版本过旧，没有官方在线开关接口；请更新模组后重启服务器。") from None
+            if error.code == "UNAUTHORIZED":
+                raise OfficialError("模组拒绝了全局 mod_api_token，请确认插件与模组配置一致。") from None
+            if error.code == "RESULT_UNKNOWN":
+                raise OfficialError("模组已收到写入，但回执不完整；请重新读取该服状态确认。") from None
+            if error.code == "CONFLICT":
+                raise OfficialError("该服配置刚被修改，请刷新后重试。") from None
+            raise OfficialError(f"模组下发失败：{str(error)}") from None
+        except asyncio.TimeoutError:
+            raise OfficialError("模组响应超时，请稍后重新读取该服状态确认。") from None
+        back = bool(data.get("enabled", enabled))
+        released = int(data.get("released") or 0)
+        message = f"「{server['name']}」登录开关已{'开启' if back else '关闭'}"
+        if not back and released:
+            message += f"，放开 {released} 名在线受限玩家"
+        if data.get("persisted") is False:
+            message += "（模组配置文件写入失败，重启后会回到旧值）"
+        return _ok({"enabled": back, "released": released,
+                    "persisted": data.get("persisted"), "message": message})
+    except OfficialError as error:
+        return _err(str(error))
+
+
+async def view_official_motd_preview():
+    body, err = await _body()
+    if err:
+        return _err(err)
+    if set(body) - {"environment_id", "host", "game_port", "api_port"}:
+        return _err("请求包含不支持的字段。")
+    try:
+        runtime = official_runtime.current()
+        environment = runtime.environment(body.get("environment_id"))
+        host = normalize_host_input(str(body.get("host", "")))
+        host_err = validate_host(host, allow_private=True)
+        if host_err:
+            return _err(host_err)
+        game_port = body.get("game_port")
+        if type(game_port) is not int or not 1 <= game_port <= 65535:
+            return _err("游戏端口必须是 1–65535 的整数。")
+        api_port, port_err = _parse_port(body.get("api_port"))
+        if port_err:
+            return _err(port_err)
+        token = ""
+        if runtime.store.token_is_set(environment):
+            try:
+                token = runtime.store.runtime_token(environment)
+            except OfficialError:
+                token = ""
+        motd, runs, why = await _official_motd(
+            {"host": host, "game_port": game_port, "api_port": api_port, "name": ""}, token)
+        if not motd:
+            return _err(why or "没拿到 MOTD")
+        return _ok({"motd": motd, "runs": runs})
+    except OfficialError as error:
+        return _err(str(error))
+
+
+async def view_official_remark_sync():
+    body, err = await _body()
+    if err:
+        return _err(err)
+    if set(body) != {"environment_id", "config_id", "expected_revision", "server_id"}:
+        return _err("请求包含不支持的字段。")
+    try:
+        runtime = official_runtime.current()
+        environment = runtime.environment(body.get("environment_id"))
+        group = runtime.store.group(environment, config_id=body.get("config_id"))
+        if group is None:
+            raise OfficialError("未找到该官方环境的群配置。")
+        if type(body.get("expected_revision")) is not int or body["expected_revision"] != group["revision"]:
+            raise OfficialError("配置已被其它操作修改，请刷新后重试。")
+        server = next((entry for entry in group["servers"]
+                       if entry["server_id"] == body.get("server_id")), None)
+        if server is None:
+            raise OfficialError("未找到该服务器。")
+        token = ""
+        if runtime.store.token_is_set(environment):
+            try:
+                token = runtime.store.runtime_token(environment)
+            except OfficialError:
+                token = ""
+        motd, runs, why = await _official_motd(server, token)
+        if not motd:
+            raise OfficialError(why or "没拿到 MOTD")
+        runtime.store.save_server_remark(environment, group["config_id"], server["server_id"],
+                                         group["revision"], remark_motd=motd,
+                                         remark_motd_runs=runs)
+        return _ok(runtime.state(environment))
+    except OfficialError as error:
+        return _err(str(error))
+
+
+async def view_official_remark_src():
+    body, err = await _body()
+    if err:
+        return _err(err)
+    if set(body) != {"environment_id", "config_id", "expected_revision", "server_id", "remark_src"}:
+        return _err("请求包含不支持的字段。")
+    try:
+        runtime = official_runtime.current()
+        environment = runtime.environment(body.get("environment_id"))
+        group = runtime.store.group(environment, config_id=body.get("config_id"))
+        if group is None:
+            raise OfficialError("未找到该官方环境的群配置。")
+        if type(body.get("expected_revision")) is not int or body["expected_revision"] != group["revision"]:
+            raise OfficialError("配置已被其它操作修改，请刷新后重试。")
+        runtime.store.save_server_remark(environment, group["config_id"], body.get("server_id"),
+                                         group["revision"], remark_src=body.get("remark_src"))
+        return _ok(runtime.state(environment))
+    except OfficialError as error:
+        return _err(str(error))
+
+
+async def view_official_setup_create():
+    """后台新增官方群时生成一次性验证码；明文只返回这一次。"""
+    body, err = await _body()
+    if err:
+        return _err(err)
+    if set(body) != {"environment_id", "alias", "display_group"}:
+        return _err("请求包含不支持的字段。")
+    try:
+        runtime = official_runtime.current()
+        environment = runtime.environment(body.get("environment_id"))
+        return _ok(runtime.store.create_setup_code(
+            environment, body.get("alias"), body.get("display_group", "")))
+    except OfficialError as error:
+        return _err(str(error))
+
+
+async def view_official_setup_status():
+    """新增群弹窗轮询：验证码是否已被群内 /mc setup 消费。"""
+    values = dict(web_request.query)
+    if set(values) != {"environment_id", "setup_id"}:
+        return _err("查询字段无效。")
+    try:
+        runtime = official_runtime.current()
+        environment = runtime.environment(values.get("environment_id"))
+        result = runtime.store.setup_status(environment, values.get("setup_id"))
+        if result.get("status") == "claimed":
+            result["state"] = runtime.state(environment)
+        return _ok(result)
+    except OfficialError as error:
+        return _err(str(error))
+
+
+async def view_official_setup_cancel():
+    """重新生成前撤销旧验证码，避免同时留下多个可用码。"""
+    body, err = await _body()
+    if err:
+        return _err(err)
+    if set(body) != {"environment_id", "setup_id"}:
+        return _err("请求包含不支持的字段。")
+    try:
+        runtime = official_runtime.current()
+        environment = runtime.environment(body.get("environment_id"))
+        runtime.store.cancel_setup_code(environment, body.get("setup_id"))
+        return _ok({})
     except OfficialError as error:
         return _err(str(error))
 
@@ -1072,7 +1427,7 @@ async def view_official_update():
     if err:
         return _err(err)
     if set(body) - {"environment_id", "action", "candidate_id", "config_id", "expected_revision",
-                    "alias", "display_group", "changes", "role", "user_id", "token"}:
+                    "alias", "display_group", "changes", "role", "user_id", "server_id", "token"}:
         return _err("请求包含不支持的字段。")
     try:
         runtime = official_runtime.current()
@@ -1099,7 +1454,12 @@ async def view_official_update():
             store.revoke(environment, body.get("config_id"), body.get("user_id"),
                          body.get("expected_revision"), body.get("role"))
         elif action == "token":
-            store.save_token(environment, body.get("token"))
+            raise OfficialError("模组 API Token 已统一在「全局参数 → 公共参数」中配置。")
+        elif action == "server_token":
+            store.save_console_token(environment, body.get("config_id"), body.get("server_id"),
+                                     body.get("expected_revision"), body.get("token"))
+        elif action == "delete":
+            store.delete_group(environment, body.get("config_id"), body.get("expected_revision"))
         else:
             raise OfficialError("不支持的官方群配置操作。")
         runtime.pages.clear()
@@ -1192,6 +1552,14 @@ ROUTES = (
     ("activation", view_activation, ["GET"], "读取生效机器人与实例列表"),
     ("activation/update", view_activation_update, ["POST"], "整组保存生效机器人选择，完整重启后应用"),
     ("official/state", view_official_state, ["GET"], "读取指定官方环境的登记与配置"),
+    ("official/mod_state", view_official_mod_state, ["GET"], "读取官方群各服模组登录状态"),
+    ("official/whitelist", view_official_whitelist, ["POST"], "下发官方群服务器登录开关"),
+    ("official/motd_preview", view_official_motd_preview, ["POST"], "预览官方服务器 MOTD"),
+    ("official/remark_sync", view_official_remark_sync, ["POST"], "同步官方服务器 MOTD 备注"),
+    ("official/remark_src", view_official_remark_src, ["POST"], "切换官方服务器备注来源"),
+    ("official/setup_create", view_official_setup_create, ["POST"], "生成官方群一次性验证码"),
+    ("official/setup_status", view_official_setup_status, ["GET"], "查询官方群验证码是否已使用"),
+    ("official/setup_cancel", view_official_setup_cancel, ["POST"], "撤销尚未使用的官方群验证码"),
     ("official/update", view_official_update, ["POST"], "审核登记、保存官方独立配置与授权"),
     ("official/operations", view_official_operations, ["GET"], "当前官方群操作摘要与范围分页"),
     ("official/operation", view_official_operation, ["GET"], "查询原官方操作及分项待办"),
@@ -1199,6 +1567,7 @@ ROUTES = (
     ("summary", view_summary, ["GET"], "群与服务器总览"),
     ("group", view_group, ["GET"], "读取单个群的配置"),
     ("group/create", view_group_create, ["POST"], "创建群配置文件"),
+    ("group/update", view_group_update, ["POST"], "编辑群别名"),
     ("group/delete", view_group_delete, ["POST"], "删除群配置文件"),
     ("group/flag", view_group_flag, ["POST"], "本群开关"),
     ("group/bind_rule", view_group_bind_rule, ["POST"], "绑定群名片匹配规则"),
