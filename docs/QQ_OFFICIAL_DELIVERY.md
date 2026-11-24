@@ -33,7 +33,7 @@
 
 - 插件仍只选一个官方实例和一个应用环境；官方群和玩家重新登记/绑定，禁止导入旧OneBot身份或表。
 - 插件数据目录中的 `qq_official/<environment_uuid>/center_settings.json`：中心模式使用 `examples/qq-official-center.json.example`；纯local使用 `examples/qq-official-local.json.example`。用户自行填写真实值。`enabled` 默认false，只在维护准备完成后改true。
-- 超管在官方群内用 `/mc whitelist add|remove @成员`、`/mc whitelist super add|remove @成员`、`/mc blacklist add|remove @成员` 维护的补充名单保存在 `qq_official/<environment_uuid>/access.json`，与 OneBot 共用的公共名单只读合并。该文件按群成员标识生效，换群需重新添加；备份/恢复官方配置时与 `state.json` 一并处理。官方列表命令与回执脱敏，不要求用户提供或回显 openid。
+- 超管在官方群内用 `/mc whitelist add|remove @成员`、`/mc whitelist super add|remove @成员`、`/mc blacklist add|remove @成员` 维护的补充名单保存在 `qq_official/<environment_uuid>/config.sqlite3` 的 `environment_access` 表，与 OneBot 共用的公共名单只读合并。该名单按群成员标识生效，换群需重新添加；备份/恢复官方配置时以 `config.sqlite3` 为准（旧版 `state.json` / `access.json` 已迁入 `legacy/`）。官方列表命令与回执脱敏，不要求用户提供或回显 openid。
 - `storage_mode` 为默认模式，`server_modes` 是可选的稳定服务器UUID→hybrid/remote/local映射；空映射沿用默认值。它不是同群多身份域：中心分区仍必须共享同一账号体系，各local服是独立权威。官方环境不进行双平台双活。
 - hybrid/remote使用同一官方中心两表、相同结构核验和断库策略。remote现也持久保留自己的可信镜像/副作用待办；断库保留既有登录，暂停新增/解绑，不自动切换local权威。
 - local只使用本服单个官方原子状态文件；绑定、操作、预占墓碑和白名单/在线待办同次提交，不依赖中心。local不接受中心sync。配置中省略official.database，allowCenterSync=false。
@@ -48,7 +48,7 @@
 
 ## 用户维护窗口
 
-1. 自行备份插件选择、官方配置、官方两表、各服完整官方状态、原版名单及相关玩家限制标记。备份由用户保管，不发给助手。记录未决编号和固定目标，在窗口内暂停新命令。
+1. 自行备份插件选择、官方配置、官方两表、各服完整官方状态、原版名单及相关玩家限制标记。官方群配置优先在后台「更多群操作 → 导出配置备份」导出 JSON（不含验证码、控制台 Token 和审计明细）；也可停服后复制整个 `qq_official/<环境>/`。不要直接改 `config.sqlite3`，`legacy/` 只是迁移留档。备份由用户保管，不发给助手。记录未决编号和固定目标，在窗口内暂停新命令。
 2. 全部停服和停止旧插件入口，确保单一实例。中心执行DDL、填写安全配置，待本轮源码必要验证并重新构建后安装对应加载器包；不要以2026-11-19旧Jar验本轮新功能。Forge使用含依赖且重混淆的all.jar，一台服务器只装一个对应加载器包。
 3. 按上述两次启动完成首次官方状态初始化。官方选择须完整停启，不在线切换环境/应用/权威/令牌或serverId。
 4. 启动模组并查看 `/qqbind status`；启用插件官方实例、后台确认群/管理员/服务器，填写独立模组令牌。用户自己检查QQ角色/昵称、媒体权限及框架入口日志对虚构码的处理。

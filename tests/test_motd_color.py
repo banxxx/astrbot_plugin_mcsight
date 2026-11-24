@@ -28,6 +28,7 @@ bind_rule.normalize_rule = lambda x: x
 sys.modules[PACKAGE + ".utils.bind_rule"] = bind_rule
 
 from _mcwatch_synthetic_motd.config import server_config as sc
+from _mcwatch_synthetic_motd.config import onebot_store
 
 
 class MotdRunsTest(unittest.TestCase):
@@ -132,8 +133,10 @@ class SetRemarkMotdRunsTest(unittest.TestCase):
 
         self.patch = patch.object(sc, "sub_dir", side_effect=sub_dir)
         self.patch.start()
+        onebot_store.close_store()
 
     def tearDown(self):
+        onebot_store.close_store()
         self.patch.stop()
         self.temp.cleanup()
 

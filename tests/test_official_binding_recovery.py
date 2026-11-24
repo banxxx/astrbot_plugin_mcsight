@@ -260,7 +260,9 @@ class RecoveryLifecycleTests(unittest.IsolatedAsyncioTestCase):
         fixture = prior.RuntimeTests("test_setup_code_creates_group_and_help_only_before_activation")
         fixture.setUp()
         self.addCleanup(fixture.temp.cleanup)
+        self.addCleanup(fixture.store.close)
         runtime = fixture.make_runtime()
+        self.addCleanup(runtime._original_store.close)
         loop, ran = asyncio.get_running_loop(), asyncio.Event()
         calls = []
         def run_once():

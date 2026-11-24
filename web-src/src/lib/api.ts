@@ -2,7 +2,11 @@ import { call, getBridge, type RawBridge } from "./bridge";
 import type {
   ActivationSave,
   ActivationStatus,
+  OfficialBackup,
+  OfficialImportPayload,
   OfficialState,
+  OneBotBackup,
+  OneBotImportPayload,
   BatchPayload,
   BindRule,
   BindRulePayload,
@@ -60,6 +64,10 @@ export const api = {
   activation: () => get<ActivationStatus>("activation"),
   activationUpdate: (value: ActivationSave) => post<ActivationStatus>("activation/update", value),
   officialState: (environment_id: string) => get<OfficialState>("official/state", { environment_id }),
+  officialExport: (environment_id: string) =>
+    get<OfficialBackup>("official/export", { environment_id }),
+  officialImport: (environment_id: string, expected_revision: number, backup: OfficialBackup) =>
+    post<OfficialImportPayload>("official/import", { environment_id, expected_revision, backup }),
   officialModState: (environment_id: string, config_id: string) =>
     get<ModStatePayload>("official/mod_state", { environment_id, config_id }),
   officialWhitelist: (environment_id: string, config_id: string, expected_revision: number,
@@ -127,6 +135,9 @@ export const api = {
     post<BatchPayload>("server/batch_remove", { gid, names }),
 
   jsonGroup: (gid: string) => get<JsonPayload>("json/group", { gid }),
+  onebotExport: () => get<OneBotBackup>("onebot/export"),
+  onebotImport: (expected_revision: number, backup: OneBotBackup) =>
+    post<OneBotImportPayload>("onebot/import", { expected_revision, backup }),
   config: () => get<ConfigPayload>("config"),
   configUpdate: (key: string, value: unknown) => post<ConfigUpdatePayload>("config/update", { key, value }),
   configSecret: (key: string, value: string) => post<SecretPayload>("config/secret", { key, value }),

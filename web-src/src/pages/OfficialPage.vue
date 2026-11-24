@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { api, officialBusy, officialDraftPending, openDialog, S, toast } from "../store";
-import type { BindRule, ModState, OfficialGroup, OfficialServer, OfficialState } from "../lib/types";
+import type { BindRule, ModState, OfficialBackup, OfficialGroup, OfficialServer, OfficialState } from "../lib/types";
 import UiBadge from "../components/UiBadge.vue";
 import UiButton from "../components/UiButton.vue";
 import UiIcon from "../components/UiIcon.vue";
@@ -52,6 +52,15 @@ const showBatchDeleteConfirm = ref(false);
 const batchDeleteSelected = reactive<Record<string, boolean>>({});
 const batchDeleteError = ref("");
 const showGroupMeta = ref(false);
+const showBackupImport = ref(false);
+const backupInput = ref<HTMLInputElement | null>(null);
+const backupFileName = ref("");
+const backupDocument = ref<OfficialBackup | null>(null);
+const backupError = ref("");
+const backupBusy = ref(false);
+const backupGroupCount = computed(() => backupDocument.value?.groups.length ?? 0);
+const backupServerCount = computed(() => (backupDocument.value?.groups ?? [])
+  .reduce((count, item) => count + (Array.isArray(item?.servers) ? item.servers.length : 0), 0));
 
 /* 官方配置改为和 OneBot 一样逐项即时保存；保留 busy 给切页/切群做防抖。 */
 watch(busy, saving => {
@@ -248,6 +257,8 @@ const groupItems = computed(() => [
   ] : []),
   { value: "edit-group", label: "编辑群信息", icon: "pencil", disabled: !group.value || working.value },
   { value: "copy-openid", label: "复制群 OpenID", icon: "copy", disabled: !group.value },
+  { value: "export-backup", label: "导出环境配置备份", icon: "download", disabled: !state.value || !environment.value || working.value },
+  { value: "import-backup", label: "导入环境配置备份", icon: "upload", disabled: !state.value || !environment.value || working.value },
   { value: "delete-group", label: "删除群配置", icon: "trash", danger: true, disabled: !group.value || working.value },
 ]);
 async function groupAction(value: string) {
@@ -265,6 +276,14 @@ async function groupAction(value: string) {
   }
   if (value === "batch-del") {
     openBatchDelete();
+    return;
+  }
+  if (value === "export-backup") {
+    void exportBackup();
+    return;
+  }
+  if (value === "import-backup") {
+    openBackupImport();
     return;
   }
   if (value === "delete-group") {
@@ -285,6 +304,107 @@ async function groupAction(value: string) {
     } catch {
       toast("复制失败，请在“编辑群信息”中手动复制");
     }
+  }
+}
+function backupStamp(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
+    + `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+async function exportBackup() {
+  if (working.value || !environment.value || !state.value) return;
+  busy.value = true;
+  error.value = "";
+  try {
+    const backup = await api.officialExport(environment.value);
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `mcsight-official-${environment.value}-${backupStamp()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const servers = backup.groups.reduce((count, item) => count + item.servers.length, 0);
+    toast(`已导出 ${backup.groups.length} 个群、${servers} 台服务器`);
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "导出失败";
+    toast(error.value);
+  } finally {
+    busy.value = false;
+  }
+}
+function openBackupImport() {
+  if (working.value || !state.value) return;
+  backupFileName.value = "";
+  backupDocument.value = null;
+  backupError.value = "";
+  showBackupImport.value = true;
+}
+function closeBackupImport() {
+  if (backupBusy.value) return;
+  showBackupImport.value = false;
+  backupFileName.value = "";
+  backupDocument.value = null;
+  backupError.value = "";
+}
+function chooseBackupFile() {
+  if (!backupBusy.value) backupInput.value?.click();
+}
+async function onBackupFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0] ?? null;
+  backupFileName.value = file?.name ?? "";
+  backupDocument.value = null;
+  backupError.value = "";
+  if (!file) return;
+  try {
+    const parsed: unknown = JSON.parse(await file.text());
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("文件不是有效的 JSON 对象。");
+    }
+    const document = parsed as OfficialBackup;
+    if (document.format !== "mcsight.qq_official.backup" || document.format_version !== 1) {
+      throw new Error("不是 MCSight 官方配置备份。");
+    }
+    if (document.environment_id !== environment.value) {
+      throw new Error("备份属于另一个官方环境，不能导入当前环境。");
+    }
+    if (!Array.isArray(document.groups) || !Array.isArray(document.candidates)
+      || !Array.isArray(document.environment_administrators)
+      || !document.environment_access || typeof document.environment_access !== "object"
+      || !document.server_remarks || typeof document.server_remarks !== "object") {
+      throw new Error("备份结构不完整。");
+    }
+    backupDocument.value = document;
+  } catch (e) {
+    backupError.value = e instanceof Error ? `无法读取备份：${e.message}` : "无法读取备份。";
+  } finally {
+    input.value = "";
+  }
+}
+async function confirmBackupImport() {
+  const document = backupDocument.value;
+  const current = state.value;
+  if (!document || !current || backupBusy.value || working.value) return;
+  backupBusy.value = true;
+  busy.value = true;
+  backupError.value = "";
+  error.value = "";
+  try {
+    const result = await api.officialImport(environment.value, current.revision, document);
+    accept(result.state);
+    showBackupImport.value = false;
+    backupFileName.value = "";
+    backupDocument.value = null;
+    toast(`已导入 ${result.summary.groups} 个群、${result.summary.servers} 台服务器`);
+  } catch (e) {
+    backupError.value = e instanceof Error ? e.message : "导入失败";
+  } finally {
+    backupBusy.value = false;
+    busy.value = false;
   }
 }
 function openBatchAdd() {
@@ -1054,6 +1174,30 @@ function serverAction(value: string, server: OfficialServer, index: number) {
       <p class="official-json-help">只读预览；不包含模组 API Token 或命令 Token。</p>
       <template #foot>
         <UiButton @click="showJson = false">关闭</UiButton>
+      </template>
+    </UiModal>
+
+    <UiModal v-if="showBackupImport" cls="m-confirm" title="导入配置备份"
+      sub="用 JSON 备份整份替换当前官方环境的群配置" @close="closeBackupImport">
+      <UiNotice tone="warn">将替换当前环境的全部群、服务器、名单与备注。控制台 Token 按 server_id 保留；验证码与审计明细不导入。</UiNotice>
+      <input ref="backupInput" type="file" accept=".json,application/json" style="display: none"
+        @change="onBackupFile" />
+      <div class="dialog-copy">
+        <UiButton kind="sec" :disabled="backupBusy" @click="chooseBackupFile">
+          <UiIcon name="upload" :size="16" />选择 JSON 备份
+        </UiButton>
+        <span v-if="backupFileName" class="official-id">{{ backupFileName }}</span>
+      </div>
+      <UiNotice v-if="backupDocument" tone="info">
+        将导入 {{ backupGroupCount }} 个群、{{ backupServerCount }} 台服务器；当前修订 {{ state?.revision }}，
+        备份修订 {{ backupDocument.revision }}，导入后会提升修订号。
+      </UiNotice>
+      <UiNotice v-if="backupError" tone="bad">{{ backupError }}</UiNotice>
+      <template #foot>
+        <UiButton :disabled="backupBusy" @click="closeBackupImport">取消</UiButton>
+        <UiButton kind="danger" :disabled="backupBusy || !backupDocument" @click="confirmBackupImport">
+          <UiIcon name="upload" :size="16" />{{ backupBusy ? "导入中…" : "确认导入" }}
+        </UiButton>
       </template>
     </UiModal>
 

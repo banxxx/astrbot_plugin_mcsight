@@ -100,7 +100,7 @@ AstrBot/data/plugins/astrbot_plugin_mcsight/
 
 一轮只展示第一页，其它页发送 `/mc page <页码>`，缓存限本人、群、应用环境及配置修订，10 分钟失效。统计图完整单页输出；图片能力不可用或超过安全大小时返回分页文字。固定 AstrBot 4.29.1 事件族的本地图片载荷已核对公开源码，未知事件族继续文字降级。不会为发送图片把玩家数据上传到私人图床。合成测试覆盖本插件的单次 HTTP 调用与超时不重发；QQ 图片权限、限额及 WebSocket/Webhook 实际收发仍需用户环境验收。
 
-新增群验证码5分钟有效、用过即失效，同一验证码不能再次创建。创建配置不自动授予管理员权限；原生角色只取author.member_role，未知角色不提权，群昵称缺失不拿username代替。群主/管理员角色默认可作为管理命令使用者，黑名单优先；退群、被踢或聊天黑名单不自动游戏解绑。昵称检测忽略名单在群内使用 `/mc nicknamecheck 忽略 @成员` 管理。超管可在官方群内用 `/mc whitelist add|remove @成员`、`/mc whitelist super add|remove @成员`、`/mc blacklist add|remove @成员` 维护本环境的补充名单：只接受 @ 唯一一位成员，不要求也不回显 openid，写入 `qq_official/<环境>/access.json`，不修改 OneBot 共用的公共名单；成员标识按群匹配，换群后需重新添加，`/mc whitelist list` 只显示脱敏标识。`/mc help`、`/mc bindhelp` 使用官方独立帮助图，说明官方登记、绑定与未决操作流程，不沿用OneBot QQ号或旧码；无图片能力时回退官方文字。
+新增群验证码5分钟有效、用过即失效，同一验证码不能再次创建。创建配置不自动授予管理员权限；原生角色只取author.member_role，未知角色不提权，群昵称缺失不拿username代替。群主/管理员角色默认可作为管理命令使用者，黑名单优先；退群、被踢或聊天黑名单不自动游戏解绑。昵称检测忽略名单在群内使用 `/mc nicknamecheck 忽略 @成员` 管理。超管可在官方群内用 `/mc whitelist add|remove @成员`、`/mc whitelist super add|remove @成员`、`/mc blacklist add|remove @成员` 维护本环境的补充名单：只接受 @ 唯一一位成员，不要求也不回显 openid，写入 `qq_official/<环境>/config.sqlite3` 的 `environment_access` 表，不修改 OneBot 共用的公共名单；成员标识按群匹配，换群后需重新添加，`/mc whitelist list` 只显示脱敏标识。`/mc help`、`/mc bindhelp` 使用官方独立帮助图，说明官方登记、绑定与未决操作流程，不沿用OneBot QQ号或旧码；无图片能力时回退官方文字。
 
 官方群还可发送 `/mc guide [1|2]`（或 `/mc 命令指引`）获得 Markdown + 自定义按钮菜单，不必把全部命令塞进 QQ 群命令面板（平台上限 10 项）。第 1 页为 2 列 5 行常用查询与帮助入口；第 2 页为 3 列 4 行管理命令，仅群管理员（级别 ≥3）可看，需发送 `/mc guide 2` 进入，不再额外放“管理指引”按钮。服务器列表、操作查询、控制台、操作回执、令牌与权限名单等不放入按钮，仍可直接输入对应命令。按钮属于“填入命令”型（`action.type=2`）：在群聊点击只会把 `@机器人 /mc …` 填入输入框，仍要用户自己点发送，官方群不支持按钮点击后直接执行；`/mc add` 等带参数命令需继续补充参数。Markdown 自定义内容一般可直接使用；自定义按钮目前属于内邀开通 / 按钮模版能力，客户端版本和应用权限仍可能影响显示。平台明确拒绝时插件回退为纯文本命令清单，发送结果未知或进入审核时不重复补发。该功能只存在于官方运行时，OneBot 命令与交互不受影响。
 
@@ -129,16 +129,18 @@ AstrBot/data/plugins/astrbot_plugin_mcsight/
 2026-11-20：F01–F05已修源码，包括统一API域名、member_role、上传file_name、err_code与异步审核分类、中心失败时本服预占查询分流；尚未测试。完整[OneBot功能对照及待验收清单](docs/QQ_OFFICIAL_TEST_CHECKLIST.md)记录已补能力和平台条件。
 ### 权限与显示（OneBot：群与服务器 → 本群规则）
 
-OneBot 的群主/管理员权限和卡片显示**按群**保存，统一放在 `policy` 对象里，字段名、类型、默认值与 QQ 官方的群对象完全一致。每个群一个目录、一个 `state.json`：
+OneBot 的群主/管理员权限和卡片显示**按群**保存，统一放在 `policy` 对象里，字段名、类型、默认值与 QQ 官方的群对象完全一致。全部群保存在同一个 SQLite 库里，按 `(scope_kind, scope_id)` 区分群聊与私聊作用域：
 
-`data/plugin_data/astrbot_plugin_mcsight/onebot/<群号>/state.json`
+`data/plugin_data/astrbot_plugin_mcsight/onebot/config.sqlite3`
+
+后台「群与服务器 → 更多群操作 → 导出群配置备份」会把整库导出成可编辑 JSON（不含命令 Token），其中每个群对应下面的群对象；修改后可整份导入。
 
 ```json
 {
-  "schema_version": 1,
-  "platform": "onebot",
-  "group_id": "123456789",
+  "scope_kind": "group",
+  "scope_id": "123456789",
   "enabled": true,
+  "alias": "",
   "servers": [],
   "policy": {
     "enable_group_owner": true,
@@ -158,6 +160,9 @@ OneBot 的群主/管理员权限和卡片显示**按群**保存，统一放在 `
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
+| `scope_kind` | string | `"group"` | `group`＝群聊，`private`＝私聊；导入备份时用于区分作用域 |
+| `scope_id` | string | - | 群号或私聊会话 ID，字符串保存，不参与路径拼接 |
+| `alias` | string | `""` | 群别名，仅用于后台显示 |
 | `enabled` | bool | `true` | 本群功能总开关；关闭后本群所有 OneBot 命令不再响应，后台每日采样也跳过本群 |
 | `policy.enable_group_owner` | bool | `true` | 本群群主是否可用管理功能 |
 | `policy.enable_group_admin` | bool | `true` | 本群群管理员是否可用管理功能 |
@@ -171,7 +176,7 @@ OneBot 的群主/管理员权限和卡片显示**按群**保存，统一放在 `
 | `policy.use_central_db` | bool | `false` | 本群绑定是否使用中心数据库；连接参数仍取「公共参数」 |
 | `nickname_ignore` | list | `[]` | 昵称检测忽略的 QQ 号 |
 
-这是 2.0.1 的配置断代：旧全局群开关不再读取，也不会在 `_conf_schema.json` 中保留为隐藏兜底键。旧版 `group_configs/servers_<群号>.json` 会在插件启动时一次性迁移到 `onebot/<群号>/state.json`：`servers`、旧的群级开关、绑定昵称规则和忽略名单都会映射到新结构；旧文件保留不动，便于核对。迁移完成后运行时只读新目录；旧文件可以确认无误后自行删除。`default_group_id` 已完全移除，群号只从当前事件获取。
+旧全局群开关不再读取，也不会在 `_conf_schema.json` 中保留为隐藏兜底键。2.0.1 的 `onebot/<群号>/state.json` 与更早的 `group_configs/servers_<群号>.json` 会在升级后首次打开时一次性导入 `onebot/config.sqlite3`：`servers`、群级开关、绑定昵称规则和忽略名单都会映射到新结构；导入成功后才把原文件移到 `onebot/legacy/` 留档。同一群两种来源同时存在时，以 `onebot/<群号>/state.json` 为准。迁移完成后运行时只读 SQLite，`legacy/` 仅供核对；正式库缺失但留档仍在时插件会失败关闭，不会静默创建空库。`default_group_id` 已完全移除，群号只从当前事件获取。
 
 切换中心库模式**不会自动迁移已有绑定**：本地切到中心后，玩家需要重新绑定或重新检测；中心切回本地后，读取的是各服模组自己的数据。切换前请先确认现有绑定数据。
 
@@ -187,7 +192,7 @@ OneBot 的群主/管理员权限和卡片显示**按群**保存，统一放在 `
 
 权限名单按平台各自的发送者 ID 精确匹配：OneBot 用 QQ 号，QQ 官方用 `member_openid`。同一份名单可以混填两种 ID，另一种平台的条目不会报错，也不会误匹配。格式校验：QQ 号必须是 5–12 位数字；openid 必须是 16–64 位英文字母或数字；中文、空格和其他符号会被拒绝。
 
-QQ 官方群内用 `@成员` 添加的补充名单单独保存在 `qq_official/<环境UUID>/access.json`，与上面的公共名单合并生效，但不会写入这里，也不影响 OneBot 的名单展示与匹配。官方 `member_openid` 按群区分，因此补充条目只在添加时的当前群匹配生效；换群后需重新 @成员 添加。群内指令只接受 @ 提及，避免用户手动粘贴或回显官方标识；`/mc whitelist list` 对两类名单统一脱敏显示。
+QQ 官方群内用 `@成员` 添加的补充名单单独保存在 `qq_official/<环境UUID>/config.sqlite3` 的 `environment_access` 表，与上面的公共名单合并生效，但不会写入这里，也不影响 OneBot 的名单展示与匹配。官方 `member_openid` 按群区分，因此补充条目只在添加时的当前群匹配生效；换群后需重新 @成员 添加。群内指令只接受 @ 提及，避免用户手动粘贴或回显官方标识；`/mc whitelist list` 对两类名单统一脱敏显示。
 
 注意：QQ 官方的 `member_openid` 通常按群区分，同一个用户在不同官方群可能是不同 openid。因此全局名单里的 openid 主要在该群生效；需要跨群管理时，请逐群添加，或使用官方环境管理员/本群管理员。OneBot 的 QQ 号则天然跨群稳定。
 
@@ -195,7 +200,7 @@ QQ 官方群内用 `@成员` 添加的补充名单单独保存在 `qq_official/<
 
 官方群不再有全局专用开关；群主/管理员权限、卡片显示和中心数据库启用都放到「群与服务器 → QQ 官方 → 本群规则」逐群设置。
 
-官方群「本群规则」中的字段与 OneBot 完全一致，使用同一个 `policy` 结构：启用中心数据库（本群）、允许群主使用管理功能、允许群管理员使用管理功能、显示服务器版本、显示服务器延迟、显示上次在线时间、昵称检测、绑定昵称规则。新建官方群的初始值为群主/管理员开启、版本关闭、延迟开启、昵称检测开启、中心数据库关闭，之后按群独立修改。官方 `state.json` 的 v1 文件会在首次读取时补齐缺失的 policy 字段并升到 v2，已有值保持不变。
+官方群「本群规则」中的字段与 OneBot 完全一致，使用同一个 `policy` 结构：启用中心数据库（本群）、允许群主使用管理功能、允许群管理员使用管理功能、显示服务器版本、显示服务器延迟、显示上次在线时间、昵称检测、绑定昵称规则。新建官方群的初始值为群主/管理员开启、版本关闭、延迟开启、昵称检测开启、中心数据库关闭，之后按群独立修改。旧版官方 `state.json` 会在环境首次打开时迁移到 `config.sqlite3`；其中 v1 文件只补齐缺失的 policy 字段，已有值保持不变，原 JSON 移到同目录 `legacy/` 留档。
 
 升级说明：旧版全局 `official_center_enabled` / `official_center_mode` 已删除。已有官方群在首次读取时按**中心数据库关闭**处理；需要继续使用中心库的群，请在「本群规则」中打开「启用中心数据库（本群）」，并按 [`sql/qq_official_v1.sql`](sql/qq_official_v1.sql) 建表。环境级 `qq_official/<环境UUID>/center_settings.json` 仍可作为高级覆盖，设置 `storage_mode` 和按服 `server_modes`。
 
@@ -205,38 +210,58 @@ QQ 官方群内用 `@成员` 添加的补充名单单独保存在 `qq_official/<
 
 | 平台 | 路径 | 组织方式 |
 |------|------|----------|
-| OneBot | `onebot/<群号>/state.json` | **一个群一个目录、一个文件**，只含本群的 `servers` / `policy` / `nickname_ignore`；旧 `group_configs/servers_<群号>.json` 启动时自动迁移 |
-| QQ 官方 | `qq_official/<环境UUID>/state.json` | **一个环境一个原子文件**，内部 `groups` 数组保存该环境所有群，同时保存 `revision`、候选群、环境管理员和授权历史 |
-| QQ 官方 | `qq_official/<环境UUID>/console_tokens/<server_id>.json`<br>`qq_official/<环境UUID>/remarks/<server_id>.json` | 每服独立凭据 / 备注缓存，避免把明文 Token 写进群对象 |
-| QQ 官方 | `qq_official/<环境UUID>/setup_codes/`、`center_settings.json` | 一次性验证码、环境级中心库覆盖 |
+| OneBot | `onebot/config.sqlite3` | **整个平台一个 SQLite 库**（WAL），`groups` 按 `(scope_kind, scope_id)` 保存群与私聊作用域，`servers` 保存服务器条目，`server_tokens` 单独保存命令 Token；`meta.revision` 用于导出/导入的并发校验 |
+| OneBot | `onebot/legacy/` | 旧 `onebot/<群号>/state.json` 与 `group_configs/servers_<群号>.json` 导入成功后的原文件留档，只读核对用 |
+| QQ 官方 | `qq_official/<环境UUID>/config.sqlite3` | **一个环境一个 SQLite 库**（WAL），保存该环境所有群、服务器、群成员名单、候选群、环境管理员、授权审计、补充名单、验证码和备注；`meta.revision` 为环境级修订号 |
+| QQ 官方 | `qq_official/<环境UUID>/console_tokens/<server_id>.json` | 每服独立的控制台命令 Token；值不进入 SQLite，也不回传 WebUI |
+| QQ 官方 | `qq_official/<环境UUID>/center_settings.json` | 环境级中心库覆盖（仍为 JSON） |
+| QQ 官方 | `qq_official/<环境UUID>/legacy/` | 升级时从旧 `state.json` / `access.json` / `setup_codes/` / `remarks/` 导入成功后的原文件留档，只读核对用 |
 
 ```text
 data/plugin_data/astrbot_plugin_mcsight/
   onebot/
-    1072429487/
-      state.json
+    config.sqlite3
+    legacy/                 # 仅在从旧版升级时出现
+      groups/
+        1072429487/
+          state.json
+      group_configs/
+        servers_1072429487.json
   qq_official/
     <环境UUID>/
-      state.json
+      config.sqlite3
       console_tokens/
-      remarks/
-      setup_codes/
       center_settings.json
-  group_configs/          # 旧版 OneBot 目录，只在升级时读取
-    servers_1072429487.json
+      legacy/               # 仅在从旧版升级时出现
+        state.json
+        access.json
+        setup_codes/
+        remarks/
 ```
 
-两种平台的**目录不同是刻意的**，不是格式没统一：
+两个平台的**容器不同，但都使用 SQLite**：
 
 - 群对象的字段已经统一：`enabled`、`servers`、`policy`、`nickname_ignore`，`policy` 的字段名和默认值完全一致。
-- 官方 `state.json` 不只是群列表，它承担“环境级原子提交”：群配置、候选群、环境管理员、授权历史和 `revision` 必须在同一个文件里一次写入。把官方群拆成每群一个文件，就要引入跨文件事务；在官方群上限 100 个的规模下，单文件更简单、更不容易出现半写状态。
-- 不建议为了目录整齐把两边硬塞进同一个文件或同一个目录；那会破坏官方现有的原子语义，收益只是路径看起来一致。
+- OneBot 仍以 QQ 群号为作用域 ID，私聊用会话 ID；所有群共享一个库。服务器有稳定的内部 `server_id`，改群号、改名或导入备份时命令 Token 按 `server_id` 继续匹配。
+- 所有写入都在 `BEGIN IMMEDIATE` 事务中完成：改一个服务器不再重写整群文件，导出时也不会读到写了一半的配置。官方环境的群配置、候选、管理员和授权审计同样同库提交。
+- 旧版 OneBot 与官方 JSON 都在首次打开时一次性导入 SQLite；导入成功后才把原文件移到 `legacy/`。数据库损坏、版本不符或缺少正式库但留档仍在时失败关闭，不自动覆盖，也不回退读取旧 JSON。
+- 命令 Token 不随普通读取或导出返回：WebUI 只显示“是否已设置”，导出的 JSON 不含 Token。OneBot 的 Token 保存在 `server_tokens` 表，官方仍按服保存在 `console_tokens/`。
+- OpenID 只作为字段值保存，不参与路径拼接；群使用平台提供的作用域标识，服务器使用稳定内部 `server_id`。
 
-容量参考（按上限估算）：
+容量参考（Windows、热缓存、20 台服务器/群；QQ 官方环境，`config.sqlite3` 常驻一条 WAL 连接）：
 
-- OneBot：每群最多 20 台服务器，一份群文件约 7–8 KB，`json.loads` 约 0.04 ms。
-- QQ 官方：每环境最多 100 个群 × 每群 20 台服务器，`state.json` 约 0.8 MB，读取约 5 ms，内存深拷贝约 15 ms；当前实际文件只有约 5 KB。
-- 真正的耗时在模组/QQ API、数据库和图片生成，JSON 读写不是瓶颈。官方每次写群规则会重写整个环境 `state.json`，但在 100 群上限内仍远低于 8 MB 上限；如果以后官方群数量级远大于 100，再考虑按群拆文件或换 SQLite。
+| 群数 / 服务器数 | 点读一个群 | 环境管理员 | 读取全部群+服务器（管理页） | 修改一个群 |
+|---:|---:|---:|---:|---:|
+| 20 / 400 | 约 0.5 ms | 约 0.2 ms | 约 1.8 ms | 约 1 ms |
+| 200 / 4,000 | 约 0.5 ms | 约 0.2 ms | 约 18 ms | 约 1 ms |
+| 2,000 / 40,000 | 约 0.5 ms | 约 0.2 ms | 约 210 ms | 约 1 ms |
+
+- 群内消息只走点读（群 + 环境管理员），不加载全部群；2,000 群时单次权限检查仍约 0.5 ms。
+- 管理页需要展示全部群时会线性增长；2,000 群、40,000 服约 210 ms，数据库约 12 MB。若未来接近 10,000 群上限，应优先给管理页加分页，而不是继续扩大全量响应。
+- 当前上限：每环境 10,000 个群、每群 20 台服务器、候选 1,000、环境管理员 1,000、授权审计 10,000 条；OneBot 仍为每群 20 台服务器。旧版 JSON 的 8 MB 文件上限只用于兼容迁移和命令回执等独立 JSON。
+- OneBot 的实际规模通常远小于官方环境（每群 20 台服务器、群数由机器人所在 QQ 群决定）；一个库中按 `(scope_kind, scope_id)` 点读本群，`/在线`、权限检查和每日采样都只取需要的行，不随群数增长。
+- 后台「群与服务器 → 更多群操作」提供「导出群配置备份 / 导入群配置备份」：OneBot 备份包含全部群、服务器、policy、隐藏标记、备注与 MOTD 缓存，不含命令 Token；导入会整份替换并在单事务中提升修订号，`server_id` 保留时 Token 继续生效。官方环境对应「导出环境配置备份 / 导入环境配置备份」，备份包含成员名单、环境管理员、补充名单和备注，不含验证码、控制台 Token 与审计明细。
+- `config.sqlite3` 是内部存储，不建议用 SQLite 工具直接修改；需要批量编辑或备份时用后台导出的 JSON，改完再导入。`legacy/` 只是迁移留档，改了不会生效。正式库缺失但 `legacy/` 仍有历史配置时，插件会失败关闭并提示，避免静默建空库；请先导入备份，或确认留档不再需要后移走 `legacy/` 再重建。
 
 ### 中心数据库（公共连接 + 按群开关）
 
@@ -348,7 +373,9 @@ data/plugin_data/astrbot_plugin_mcsight/
 
 | 路径 | 内容 |
 |------|------|
-| `onebot/<群号>/state.json` | 每个群一份服务器列表与群规则（私聊用会话 ID 命名）；旧 `group_configs/servers_<群号>.json` 启动时自动迁移 |
+| `onebot/config.sqlite3` | OneBot 全部群、服务器、群规则与命令 Token（SQLite/WAL）；旧 `onebot/<群号>/state.json` 与 `group_configs/servers_<群号>.json` 首次打开时导入并移到 `onebot/legacy/` |
+| `qq_official/<环境UUID>/config.sqlite3` | 官方环境的群、服务器、名单、候选、管理员、审计、验证码与备注（SQLite/WAL）；旧 JSON 首次打开时迁移到 `legacy/` |
+| `qq_official/<环境UUID>/console_tokens/<server_id>.json` | 官方每服独立的控制台命令 Token，不在 WebUI 回显 |
 | `stats_snapshots.sqlite3` | 玩家统计每日快照，保留 30 天 |
 | `avatar_cache/` | 头像磁盘缓存，过期 7 天，另有一层内存缓存 |
 | `help_cache/` | `/帮助`、`/绑定帮助` 渲染出的 PNG；删掉文件即重新渲染 |

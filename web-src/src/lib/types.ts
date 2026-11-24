@@ -64,6 +64,8 @@ export interface GroupPolicy {
 export interface GroupPayload {
   gid: string;
   file: string;
+  /** OneBot 正式库位置，例如 onebot/config.sqlite3 */
+  storage?: string;
   /** 群别名（选填）；未设置时为空串 */
   alias: string;
   servers: ServerEntry[];
@@ -153,6 +155,44 @@ export interface BatchPayload {
 export interface JsonPayload {
   file: string;
   text: string;
+}
+
+/** OneBot 可编辑备份；不包含命令 Token。 */
+export interface OneBotBackupServer {
+  server_id?: string;
+  name: string;
+  host: string;
+  api_port: number | null;
+  hidden: boolean;
+  remark: string;
+  remark_src: RemarkSrc;
+  remark_motd: string;
+  remark_motd_at: number;
+  remark_motd_runs?: RemarkRun[] | null;
+}
+
+export interface OneBotBackupGroup {
+  scope_kind: "group" | "private";
+  scope_id: string;
+  enabled: boolean;
+  alias: string;
+  policy: GroupPolicy;
+  nickname_ignore: string[];
+  servers: OneBotBackupServer[];
+}
+
+export interface OneBotBackup {
+  format: string;
+  format_version: number;
+  exported_at: number;
+  schema_version: number;
+  revision: number;
+  groups: OneBotBackupGroup[];
+}
+
+export interface OneBotImportPayload {
+  summary: { groups: number; servers: number; revision: number };
+  groups: GroupBrief[];
 }
 
 export type ConfigKind = "bool" | "int" | "list" | "string";
@@ -299,6 +339,33 @@ export interface OfficialState {
   binding_ready: boolean | null;
   binding_readiness?: string;
   message_delivery: { ready: boolean; receipts_count: number | null; capacity: number; message: string };
+}
+
+export interface OfficialRemark {
+  remark_src: "manual" | "motd";
+  remark_motd: string;
+  remark_motd_at: number;
+  remark_motd_runs?: RemarkRun[];
+}
+
+/** 后台导出的可编辑备份；不含验证码、控制台 Token 与审计明细。 */
+export interface OfficialBackup {
+  format: string;
+  format_version: number;
+  exported_at: number;
+  schema_version: number;
+  environment_id: string;
+  revision: number;
+  groups: OfficialGroup[];
+  candidates: OfficialCandidate[];
+  environment_administrators: string[];
+  environment_access: Record<string, string[]>;
+  server_remarks: Record<string, OfficialRemark>;
+}
+
+export interface OfficialImportPayload {
+  summary: { groups: number; servers: number; revision: number };
+  state: OfficialState;
 }
 
 export interface ConfigUpdatePayload {

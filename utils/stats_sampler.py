@@ -1,22 +1,18 @@
 """玩家统计每日采样（时间轴的驱动源）
 
 按日历给每个"被查询过的人"落一份当日累计快照，/查询 才有真正的 7 天窗口可用。
-名单取自快照表自身，服务器端点汇总自 onebot/<群号>/state.json。
+名单取自快照表自身，服务器端点汇总自 OneBot SQLite 配置库。
 """
 import asyncio
-import glob
-import json
-import os
 import time
 from datetime import datetime, timedelta
 from typing import Dict, Tuple
 
 from astrbot.api import logger
 
-from ..config.server_config import is_hidden
+from ..config.server_config import all_enabled_server_endpoints
 from ..config.whitelist_config import WhitelistManager
 from . import mod_http, platform_activation, stats_snapshot, official_runtime
-from .plugin_paths import data_dir
 
 # 每天本地时间 04:37：避开整点，也和备份/其它服任务错开
 SAMPLE_AT = (4, 37)
@@ -32,24 +28,16 @@ _task: asyncio.Task = None
 
 def _server_endpoints() -> Dict[str, Tuple[str, int]]:
     """服务器名（小写）→ (host, port)。各群配置里同名服务器视为同一台。"""
-    wm = WhitelistManager()
     out = {}
-    for path in glob.glob(os.path.join(data_dir(), 'onebot', '*', 'state.json')):
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            if data.get("enabled", True) is False:
-                continue
-            servers = data.get("servers", [])
-        except (OSError, ValueError) as e:
-            logger.warning(f"[采样] 读取群配置失败 {os.path.basename(path)}: {e}")
-            continue
-        for srv in servers:
-            name = str(srv.get("name", "")).strip().lower()
-            # 隐藏的服务器承诺「一个查询都不发」，采样也不能例外
-            if not name or is_hidden(srv) or not wm.has_mod_api(srv):
-                continue
-            out[name] = (srv["host"], wm.get_server_port(srv))
+    try:
+        rows = all_enabled_server_endpoints()
+    except Exception as e:
+        logger.warning(f"[采样] 读取 OneBot 配置失败: {e}")
+        return out
+    for name, host, port in rows:
+        name = str(name).strip().lower()
+        if name:
+            out[name] = (host, port)
     return out
 
 

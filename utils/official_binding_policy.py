@@ -33,13 +33,13 @@ class OfficialBindingPolicy:
                     or self.clock() >= self.expires):
                 raise BindingError("NOT_SUPPORTED", "当前官方事件已失效，请使用新消息。")
             try:
-                state = self.groups.list_state(scope.environment_id)
+                group = self.groups.group(scope.environment_id, group_id=scope.group_id)
+                admins = self.groups.environment_administrators(scope.environment_id)
             except OfficialError:
                 raise BindingError("STORAGE_ERROR", "官方群配置暂不可用。") from None
-            group = next((row for row in state["groups"] if row["group_openid"] == scope.group_id), None)
             if group is None or not group["enabled"]:
                 raise BindingError("UNAUTHORIZED", "当前官方群未启用。")
-            level = self.groups.access_level(sender, group, state["environment_administrators"])
+            level = self.groups.access_level(sender, group, admins)
             if level == 0:
                 raise BindingError("UNAUTHORIZED", "当前身份已被本群禁止使用插件。")
             targets = {server["server_id"] for server in group["servers"] if server["api_port"] is not None}

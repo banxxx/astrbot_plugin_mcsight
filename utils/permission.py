@@ -2,7 +2,8 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from ..config.whitelist_config import WhitelistManager
-from ..config.server_config import read_group_flag
+from ..config.server_config import read_group_flags
+from ..config.onebot_store import OneBotError
 
 # 权限等级定义
 LEVEL_BLACKLIST = 0
@@ -84,8 +85,17 @@ async def get_user_permission_level(event: AstrMessageEvent) -> int:
     # 于是「允许群主」关掉后，只要「允许管理员」还开着，群主照样能过——那个开关等于没生效。
     role = await get_group_role(event)
     group_id = event.get_group_id()
-    owner_enabled = read_group_flag(group_id, "enable_group_owner") if group_id else True
-    admin_enabled = read_group_flag(group_id, "enable_group_admin") if group_id else True
+    if group_id:
+        try:
+            flags = read_group_flags(group_id, ("enable_group_owner", "enable_group_admin"))
+        except OneBotError as e:
+            # 配置存储损坏时按关闭处理，宁可少放行也不能把群管理权限误开。
+            logger.error(f"[permission] 读取本群权限开关失败，按关闭处理: {e}")
+            flags = {"enable_group_owner": False, "enable_group_admin": False}
+        owner_enabled = flags["enable_group_owner"]
+        admin_enabled = flags["enable_group_admin"]
+    else:
+        owner_enabled = admin_enabled = True
     if role == 'owner' and owner_enabled:
         logger.debug(f"用户 {user_id} 是群主，且本群开关已启用")
         return LEVEL_GROUP_ADMIN

@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Image as AstrImage
 from astrbot.api import logger
-from ..config.server_config import ConfigManager
+from ..config.server_config import ConfigManager, OneBotError
 from ..config.whitelist_config import WhitelistManager
 from ..utils.permission import (ADMIN_CMDS, check_permission, is_astrbot_super_admin,
                                 PERMISSION_REQUIRED, LEVEL_SUPER_ADMIN)
@@ -31,10 +31,16 @@ async def handle_mc_command(event: AstrMessageEvent):
         await official_runtime.handle(event)
         return
     group_id = event.get_group_id()
-    if group_id:
-        config = ConfigManager(group_id=group_id)
-    else:
-        config = ConfigManager(session_id=event.session_id)
+    try:
+        if group_id:
+            config = ConfigManager(group_id=group_id)
+        else:
+            config = ConfigManager(session_id=event.session_id)
+    except OneBotError as e:
+        # 正式库缺失/损坏时失败关闭：给用户一句可操作提示，不要让异常冒到框架层
+        logger.error(f"[群配置] OneBot 配置存储不可用: {e}")
+        yield event.plain_result(f"群配置存储不可用：{e}")
+        return
 
     # 黑名单闸门：配置承诺黑名单用户无法使用插件的所有功能，
     # 所有命令都汇聚到本入口，在这里统一拦截（在防抖与解析之前）。

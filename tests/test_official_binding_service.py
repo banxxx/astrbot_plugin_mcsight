@@ -387,6 +387,7 @@ class EventPolicyGuardTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="official-policy-synthetic-")
         self.addCleanup(self.temp.cleanup)
         self.groups = core.OfficialStore(Path(self.temp.name))
+        self.addCleanup(self.groups.close)
         self.event = core.event_scope(prior.Event(message_id="SYNTHETIC_POLICY_EVENT"), prior.SELECTION)
         candidate = self.groups.register(self.event, "synthetic")
         group = self.groups.approve(ENV, candidate["candidate_id"], self.groups.list_state(ENV)["revision"],

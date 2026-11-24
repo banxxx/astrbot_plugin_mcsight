@@ -35,9 +35,37 @@ const groupItems = computed(() => [
     ...batchItems.value,
   ] : []),
   { value: "edit-group", label: "编辑群信息", icon: "pencil", disabled: !g.value },
+  { value: "export-backup", label: "导出群配置备份", icon: "download" },
+  { value: "import-backup", label: "导入群配置备份", icon: "upload" },
   { value: "del-group", label: "删除群配置", icon: "trash", danger: true, disabled: !g.value },
 ]);
-function groupAction(value: string) { openDialog(value); }
+function groupAction(value: string) {
+  if (value === "export-backup") { void exportBackup(); return; }
+  if (value === "import-backup") { openDialog("onebot-import"); return; }
+  openDialog(value);
+}
+
+/** 导出整库可编辑 JSON；不包含命令 Token，导入时按 server_id 保留现有 Token。 */
+async function exportBackup() {
+  try {
+    const backup = await api.onebotExport();
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const now = new Date();
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    link.href = url;
+    link.download = `mcsight-onebot-backup-${stamp}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast(`已导出 ${backup.groups.length} 个群的配置备份`);
+  } catch (err) {
+    toast(err instanceof Error ? err.message : "导出失败");
+  }
+}
 function serverItems(index: number) {
   return [
     { value: "up", label: "上移", icon: "arrow-up", disabled: index === 0 },

@@ -41,7 +41,7 @@
 | 官方环境 | environment_id、公开应用引用、实例关联 | 不要求助手读取AppSecret；应用改变不得自动复用旧环境 |
 | 官方群配置 | config_id、environment_id、group_openid、alias、display_group、servers、policy、revision | config_id为安全随机内部键 |
 | 服务器条目 | server_id、name、host、game_port/api_port、绑定目标信息、已有凭据引用 | 同名/同地址不自动合并 |
-| 官方名单 | 环境级超管、群级管理员/黑名单/昵称忽略项、环境独立 `access.json` 补充名单 | 范围显式；不沿用旧数字QQ身份；群内 @成员 只写补充名单，不改 OneBot 公共名单；openid 按群匹配，换群需重加 |
+| 官方名单 | 环境级超管、群级管理员/黑名单/昵称忽略项、环境库 `environment_access` 补充名单 | 范围显式；不沿用旧数字QQ身份；群内 @成员 只写补充名单，不改 OneBot 公共名单；openid 按群匹配，换群需重加 |
 
 不将任意OpenID直接拼入文件路径。OneBot继续旧配置路径，官方使用独立目录/安全键；活动范围由统一解析器提供给聊天、WebUI与采样。
 
@@ -574,7 +574,8 @@ CREATE TABLE bindings_qqofficial_ops (
 ## 附录 G：S2 当前实现与验收边界
 
 - 官方入口新增 accepts 实例门禁与独立 official_runtime 分发，allows 仍只授权旧 OneBot 业务；因此已选官方的合法群事件可登记/查询，C2C、频道、身份不一致或非活动实例提前退出。所有别名遵守相同门禁，广播别名也不能先构造旧群配置。
-- 每环境的 state.json 作为一个原子配置提交单元，集中保存 groups、candidates、环境管理员与 authorization_history；这是第 2 节 registry/群配置的具体实现，不声称跨多个文件有事务。OpenID 不参与路径拼接，群和服务器有独立内部 ID。环境超管在环境级存储；群黑名单、群管、昵称忽略分别保留，撤销一种权限不删除其它名单。群内 `@成员` 名单管理另写环境目录 `access.json`（schema_version=1，三类名单各限 200 项），与 OneBot 公共名单只读合并；不修改公共名单。名单文件损坏时失败关闭；群内列表与回执不回显完整官方标识。
+- 每环境使用一个 `config.sqlite3`（WAL）作为原子配置提交单元，集中保存 groups、servers、group_members、candidates、environment_admins、audit_log、environment_access、setup_codes 与 server_remarks；`meta.revision` 为环境级修订号，群级 `groups.revision` 独立。所有写入在 `BEGIN IMMEDIATE` 事务中完成；这是第 2 节 registry/群配置的具体实现，不声称跨数据库有事务。OpenID 只作为字段值，不参与路径拼接，群和服务器有独立内部 ID。环境超管在环境级存储；群黑名单、群管、昵称忽略分别保留，撤销一种权限不删除其它名单。群内 `@成员` 名单管理写 `environment_access`（三类名单各限 200 项），与 OneBot 公共名单只读合并；不修改公共名单。数据库损坏、schema 版本或环境 UUID 不匹配时失败关闭；正式库缺失但 `legacy/` 仍有迁移留档时同样失败关闭，不静默建空库。后台可导出可编辑 JSON 备份（群、服务器、policy、名单、备注；不含验证码、控制台 Token 与审计明细），导入时整份校验、单事务替换并提升修订号；明确导入时允许在留档存在的情况下重建并恢复。群内列表与回执不回显完整官方标识。
+- 旧版 `state.json` / `access.json` / `setup_codes/` / `remarks/` 在环境首次打开时一次性导入 SQLite，成功后移到同目录 `legacy/` 留档；导入失败不创建正式库，也不覆盖旧文件。每服控制台 Token 仍保存在 `console_tokens/<server_id>.json`，不进入 SQLite、不回传 WebUI。
 - 模组 API Token 与 OneBot 共用插件全局配置 mod_api_token，官方目录不另存凭据；运行时按需从注入的配置读取器取值，普通状态页面只检查是否已配置，不返回凭据内容。旧 OneBot 名单不自动复用；测试用临时目录与虚构值。
 - setup 不访问 MC 或绑定表，普通成员只能建立限量且过期的候选。后台授权检查候选所属群，记录目标身份、来源群、候选回执、授权/撤销种类及时间。后台主体依赖框架认证，不接受请求体 actor 提权。
 - 只读请求仅允许 /api/status、/api/tps、/api/stats/<合法玩家名>、/api/stats/all；关闭重定向、代理环境与自动重试，响应限 4MiB，不打印请求/响应或异常原文。无模组在线查询使用 mcstatus；隐藏条目不查询。官方统计按环境、群和稳定 server_id 写入独立 SQLite，仅存合成/公开数值字段，保留 30 日 UTC 日快照并复用共享六类统计图；同日覆盖，不导入 OneBot 历史，历史不可用时仍可读生涯统计。完整统计图保持单页，超编码限制回退分页文字。本人排行关联仍依赖 S3 当前官方绑定，不能读取旧 bindings 兜底。
@@ -869,7 +870,7 @@ CREATE TABLE bindings_qqofficial_ops (
 
 3. **管理员分页**：PageCache新增minimum_permission（1/3/4），管理查询/成员检测保存至少3；绑定及回执按取得结果时权限保存阈值。新消息page在读取和发送前复核当前事件角色、群配置修订、环境授权及阈值；管理员降为普通成员后旧管理页失效。缓存仍只属于原用户/群/实例/环境，10分钟，不保存原消息或回复凭据。
 
-4. **管理与显示**：batchadd使用名称:主机[:模组API端口]逗号分隔，最多20项；全部校验后一次配置修订，不采用部分成功。batchremove同样整批；move位置从0开始，swap须两个不同现有服务器。lastonline查询/开关消费status现有last_activity_time毫秒和last_activity_player，无可靠数据时不推断。nicknamecheck提供查询、开关、忽略/取消忽略及分页忽略名单；只修改提示策略，不影响游戏绑定。所有写仍先持久防重；只读开关查询不创建写回执。官方群 policy 必须包含共享群策略的全部字段（与 OneBot 的 `utils/group_policy.py` 一致）。state.json 读取 v1 时只补缺失字段并升到 v2；v2 缺字段直接判为文件损坏，不再静默补默认值。后台提供上述开关及原有绑定昵称规则/模板配置。
+4. **管理与显示**：batchadd使用名称:主机[:模组API端口]逗号分隔，最多20项；全部校验后一次配置修订，不采用部分成功。batchremove同样整批；move位置从0开始，swap须两个不同现有服务器。lastonline查询/开关消费status现有last_activity_time毫秒和last_activity_player，无可靠数据时不推断。nicknamecheck提供查询、开关、忽略/取消忽略及分页忽略名单；只修改提示策略，不影响游戏绑定。所有写仍先持久防重；只读开关查询不创建写回执。官方群 policy 必须包含共享群策略的全部字段（与 OneBot 的 `utils/group_policy.py` 一致）。旧版 state.json 迁移 v1 时只补缺失 policy 字段；v2 缺字段直接判为文件损坏，不再静默补默认值。进入 SQLite 后，读取缺字段的 policy 一律按损坏处理。后台提供上述开关及原有绑定昵称规则/模板配置。
 
 5. **内邀成员读取**：第一方端点GET /v2/groups/{group_openid}/members，cursor分页，members数组最多30条/页，next_cursor空字符串为末页，60QPM。详情GET /members/{member_openid}为30QPM，本轮扫描不额外调用详情。两者内邀，未获权11253。成员结构含member_openid/username/member_role/bot/joined_at/union_openid，未保证member_nickname；username仅显示。列表扫描单并发、间隔至少1.05秒、55次/分钟、最多34页/1000人/45秒；8秒单请求、响应512KiB、无重试/重定向。结果内存缓存5分钟最多8范围，失败60秒；配置/权限每页复核，截断明确报告，不当实时完整群资格证明，不写盘成员名单。
 

@@ -32,6 +32,9 @@ from ..config.server_config import (
     console_token_of,
     delete_group_config,
     effective_remark,
+    ensure_store_ready,
+    import_store_state,
+    group_summaries,
     has_group_config,
     is_hidden,
     remark_runs_of,
@@ -40,6 +43,7 @@ from ..config.server_config import (
     validate_server_name,
     visible_servers,
 )
+from ..config.onebot_store import OneBotError
 from ..config.whitelist_config import WhitelistManager
 from ..features.player_status.checker import query_one
 from ..utils import mod_http, platform_activation, official_runtime
@@ -49,7 +53,7 @@ from ..utils.official_transport import ModTarget, TransportError, V2ModClient
 from ..utils.bind_rule import validate as validate_bind_rule
 from ..utils.host_validator import normalize_host_input, validate_host
 from ..utils.group_policy import POLICY_BOOL_KEYS
-from ..utils.plugin_paths import PLUGIN_NAME, sub_dir
+from ..utils.plugin_paths import PLUGIN_NAME
 from .constants import ROWS
 
 ROUTE_PREFIX = f"/{PLUGIN_NAME}/view"
@@ -120,27 +124,8 @@ def _clean_gid(raw) -> str:
     return gid if GROUP_ID_RE.match(gid) else ""
 
 
-def _group_ids() -> list:
-    """扫出新旧两种 OneBot 群配置：只认 5-12 位数字群号，其他会话文件不进面板。"""
-    ids = set()
-    new_base = sub_dir("onebot")
-    try:
-        for name in os.listdir(new_base):
-            if GROUP_ID_RE.match(name) and os.path.exists(os.path.join(new_base, name, "state.json")):
-                ids.add(name)
-    except OSError:
-        pass
-    legacy_base = sub_dir("group_configs")
-    try:
-        for name in os.listdir(legacy_base):
-            if not (name.startswith("servers_") and name.endswith(".json")):
-                continue
-            gid = name[len("servers_"):-len(".json")]
-            if GROUP_ID_RE.match(gid):
-                ids.add(gid)
-    except OSError:
-        pass
-    return sorted(ids)
+def _storage_label(gid: str) -> str:
+    return f"onebot/config.sqlite3#group={gid}"
 
 
 def _server_view(entry: dict) -> dict:
@@ -170,19 +155,21 @@ def _token_count(servers: list) -> int:
 
 def _group_payload(gid: str) -> dict:
     cm = ConfigManager(group_id=int(gid))
-    servers = cm.get_all_servers()
+    snapshot = cm.snapshot()
+    servers = snapshot["servers"]
     wm = WhitelistManager()
     return {
         "gid": gid,
-        "file": f"onebot/{gid}/state.json",
-        "alias": cm.get_alias(),
+        "file": _storage_label(gid),
+        "storage": "onebot/config.sqlite3",
+        "alias": snapshot["alias"],
         "servers": [_server_view(s) for s in servers],
         "mod_count": sum(1 for s in servers if wm.has_mod_api(s)),
         "token_count": _token_count(servers),
-        "enabled": cm.is_group_enabled(),
+        "enabled": snapshot["enabled"],
         # 群规则统一放在 policy 下，字段与 QQ 官方的群对象一致。
-        "policy": cm.get_policy(),
-        "nickname_ignore": cm.get_nickname_ignore(),
+        "policy": snapshot["policy"],
+        "nickname_ignore": snapshot["nickname_ignore"],
         "max_servers_per_group": MAX_SERVERS_PER_GROUP,
     }
 
@@ -219,18 +206,10 @@ async def view_summary():
         return _ok({"groups": [], "max_servers_per_group": MAX_SERVERS_PER_GROUP,
                     "plugin_version": _plugin_version(), "plugin_name": PLUGIN_NAME,
                     "platform": "qq_official"})
-    groups = []
-    wm = WhitelistManager()
-    for gid in _group_ids():
-        cm = ConfigManager(group_id=int(gid))
-        servers = cm.get_all_servers()
-        groups.append({
-            "gid": gid,
-            "alias": cm.get_alias(),
-            "server_count": len(servers),
-            "mod_count": sum(1 for s in servers if wm.has_mod_api(s)),
-            "token_count": sum(1 for s in servers if s.get("console_token")),
-        })
+    groups = [
+        item for item in group_summaries()
+        if GROUP_ID_RE.match(item["gid"])
+    ]
     return _ok({
         "groups": groups,
         "max_servers_per_group": MAX_SERVERS_PER_GROUP,
@@ -257,7 +236,7 @@ async def view_group_create():
         return _err("群号必须是 5-12 位数字")
     if has_group_config(gid):
         return _err("该群已有配置文件")
-    cm = ConfigManager(group_id=int(gid))  # 构造函数即建文件，与 /mc add 首次落盘同一路径
+    cm = ConfigManager(group_id=int(gid))  # 构造函数会写入默认群配置，与 /mc 首次使用时一致
     alias = str(body.get("alias") or "")
     if alias:
         ok, why = cm.set_alias(alias)
@@ -821,17 +800,13 @@ async def view_json_group():
         return _err("群号必须是 5-12 位数字")
     if not has_group_config(gid):
         return _err("该群配置不存在")
-    cm = ConfigManager(group_id=int(gid))  # 旧文件在这里完成一次性迁移
-    path = cm.config_file
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        return _err(f"读取群配置失败：{e}")
+    data = ConfigManager(group_id=int(gid)).snapshot()
+    data.pop("scope_kind", None)
+    data.pop("scope_id", None)
     for entry in data.get("servers", []):
         if isinstance(entry, dict) and "console_token" in entry:
             entry["console_token"] = REDACTED
-    return _ok({"file": f"onebot/{gid}/state.json",
+    return _ok({"file": _storage_label(gid),
                 "text": json.dumps(data, ensure_ascii=False, indent=2)})
 
 
@@ -1163,6 +1138,38 @@ async def view_official_state():
     try:
         environment = web_request.query.get("environment_id", "")
         return _ok(official_runtime.current().state(environment))
+    except OfficialError as error:
+        return _err(str(error))
+
+
+async def view_official_export():
+    values = dict(web_request.query)
+    if set(values) != {"environment_id"}:
+        return _err("查询字段无效。")
+    try:
+        runtime = official_runtime.current()
+        environment = runtime.environment(values.get("environment_id"))
+        return _ok(runtime.store.export_state(environment))
+    except OfficialError as error:
+        return _err(str(error))
+
+
+async def view_official_import():
+    body, err = await _body()
+    if err:
+        return _err(err)
+    if set(body) != {"environment_id", "expected_revision", "backup"}:
+        return _err("请求包含不支持的字段。")
+    try:
+        runtime = official_runtime.current()
+        environment = runtime.environment(body.get("environment_id"))
+        backup = body.get("backup")
+        if not isinstance(backup, dict):
+            raise OfficialError("官方配置备份格式无效。")
+        summary = runtime.store.import_state(
+            environment, backup, body.get("expected_revision"))
+        runtime.pages.clear()
+        return _ok({"summary": summary, "state": runtime.state(environment)})
     except OfficialError as error:
         return _err(str(error))
 
@@ -1533,9 +1540,49 @@ async def view_official_operation_action():
         return _err("恢复结果待确认；请查询原操作，不要重复提交。")
 
 
+async def view_onebot_export():
+    """导出 OneBot 整库可编辑备份；不包含命令 Token。"""
+    return _ok(ensure_store_ready().export_state())
+
+
+async def view_onebot_import():
+    body, err = await _body()
+    if err:
+        return _err(err)
+    if set(body) != {"expected_revision", "backup"}:
+        return _err("请求包含不支持的字段。")
+    backup = body.get("backup")
+    if not isinstance(backup, dict):
+        return _err("OneBot 配置备份格式无效。")
+    summary = import_store_state(backup, body.get("expected_revision"))
+    return _ok({"summary": summary, "groups": group_summaries()})
+
+
+def _onebot_guarded(handler):
+    @wraps(handler)
+    async def wrapper():
+        try:
+            return await handler()
+        except OneBotError as e:
+            return _err(str(e))
+        except Exception:
+            logger.exception("[MCSight] OneBot 配置操作失败")
+            return _err("OneBot 配置操作失败，请稍后重试。")
+    return wrapper
+
+
 REMOTE_ROUTES = frozenset({
     "server/whitelist", "server/motd_preview", "server/remark_sync",
     "server/mod_state",
+})
+
+ONEBOT_ROUTES = frozenset({
+    "summary", "group", "group/create", "group/update", "group/delete",
+    "group/flag", "group/bind_rule", "group/ignore_add", "group/ignore_remove",
+    "server/create", "server/update", "server/delete", "server/move",
+    "server/hide", "server/token", "server/batch_add", "server/batch_remove",
+    "server/whitelist", "server/motd_preview", "server/remark_sync",
+    "server/mod_state", "json/group", "onebot/export", "onebot/import",
 })
 
 
@@ -1552,6 +1599,10 @@ ROUTES = (
     ("activation", view_activation, ["GET"], "读取生效机器人与实例列表"),
     ("activation/update", view_activation_update, ["POST"], "整组保存生效机器人选择，完整重启后应用"),
     ("official/state", view_official_state, ["GET"], "读取指定官方环境的登记与配置"),
+    ("official/export", view_official_export, ["GET"], "导出官方环境可编辑配置备份"),
+    ("official/import", view_official_import, ["POST"], "从可编辑配置备份整份恢复官方环境"),
+    ("onebot/export", view_onebot_export, ["GET"], "导出 OneBot 可编辑配置备份"),
+    ("onebot/import", view_onebot_import, ["POST"], "从可编辑配置备份整份恢复 OneBot 配置"),
     ("official/mod_state", view_official_mod_state, ["GET"], "读取官方群各服模组登录状态"),
     ("official/whitelist", view_official_whitelist, ["POST"], "下发官方群服务器登录开关"),
     ("official/motd_preview", view_official_motd_preview, ["POST"], "预览官方服务器 MOTD"),
@@ -1608,9 +1659,9 @@ def register_view_api(context, config=None) -> None:
     _plugin_config = config
     _schema = _load_schema()
     for name, handler, methods, desc in ROUTES:
-        registered_handler = (
-            _active_remote_handler(handler) if name in REMOTE_ROUTES else handler
-        )
+        registered_handler = _onebot_guarded(handler) if name in ONEBOT_ROUTES else handler
+        if name in REMOTE_ROUTES:
+            registered_handler = _active_remote_handler(registered_handler)
         context.register_web_api(
             f"{ROUTE_PREFIX}/{name}", registered_handler, methods,
             f"MCSight 配置页 · {desc}")

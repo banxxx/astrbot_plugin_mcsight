@@ -1,10 +1,12 @@
 """S2 隔离测试：只加载允许的纯源码，临时目录与虚构身份，无真实框架/网络。"""
 import ast
 import asyncio
+from contextlib import closing
 import copy
 import importlib.util
 import json
 from pathlib import Path
+import sqlite3
 import sys
 import tempfile
 from types import ModuleType, SimpleNamespace
@@ -111,7 +113,14 @@ class StoreTests(unittest.TestCase):
         self.api_token = ""
         self.store = core.OfficialStore(self.temp.name, clock=lambda: self.now,
                                         token_provider=lambda: self.api_token)
+        self.addCleanup(self.store.close)
         self.scope = scope()
+
+    def db_path(self, root=None):
+        return Path(root or self.temp.name) / ENV / core.DB_FILE_NAME
+
+    def db(self, root=None):
+        return closing(sqlite3.connect(self.db_path(root)))
 
     def approve(self):
         c = self.store.register(self.scope, "合成备注")
@@ -130,10 +139,16 @@ class StoreTests(unittest.TestCase):
     def test_setup_code_is_hashed_single_use_and_creates_disabled_group(self):
         created = self.store.create_setup_code(ENV, "测试群", "123456789")
         self.assertRegex(created["code"], r"^[A-HJ-NP-Z2-9]{6}$")
-        path = Path(self.temp.name) / ENV / "setup_codes" / (created["setup_id"] + ".json")
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        self.assertNotIn(created["code"], json.dumps(payload))
-        self.assertNotIn("code", payload)
+        path = self.db_path()
+        with closing(sqlite3.connect(path)) as conn:
+            row = conn.execute(
+                "SELECT alias, display_group, code_hash, used_at, config_id "
+                "FROM setup_codes WHERE setup_id = ?", (created["setup_id"],)).fetchone()
+        self.assertIsNotNone(row)
+        self.assertNotIn(created["code"], json.dumps(row))
+        self.assertRegex(row[2], r"^[0-9a-f]{64}$")
+        self.assertEqual(row[3], 0)
+        self.assertEqual(row[4], "")
         self.assertEqual(self.store.setup_status(ENV, created["setup_id"])["status"], "pending")
         with self.assertRaises(core.OfficialError):
             self.store.claim_setup_code(ENV, "AAAAAA", GROUP)
@@ -200,26 +215,226 @@ class StoreTests(unittest.TestCase):
         latest = self.store.list_state(ENV)["groups"][0]
         self.assertFalse(latest["policy"]["enable_group_owner"])
 
-    def test_v1_group_policy_is_migrated(self):
+    def test_v1_group_policy_is_migrated_from_legacy_json(self):
         _, group = self.approve()
-        path = Path(self.temp.name) / ENV / "state.json"
-        state = json.loads(path.read_text(encoding="utf-8"))
-        state["schema_version"] = 1
+        legacy_root = Path(self.temp.name) / "legacy-v1"
+        legacy_dir = legacy_root / ENV
+        legacy_dir.mkdir(parents=True)
+        state = {"schema_version": 1, "environment_id": ENV, "revision": 1,
+                 "groups": [copy.deepcopy(group)], "candidates": [],
+                 "environment_administrators": [], "authorization_history": []}
         del state["groups"][0]["policy"]["use_central_db"]
+        path = legacy_dir / "state.json"
         path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-        loaded = self.store.group(ENV, group_id=GROUP)
+
+        migrated = core.OfficialStore(legacy_root, clock=lambda: self.now,
+                                      token_provider=lambda: self.api_token)
+        self.addCleanup(migrated.close)
+        loaded = migrated.group(ENV, group_id=GROUP)
         self.assertEqual(loaded["config_id"], group["config_id"])
         self.assertFalse(loaded["policy"]["use_central_db"])
-        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["schema_version"], 2)
+        self.assertTrue((legacy_dir / "legacy" / "state.json").exists())
+        self.assertFalse(path.exists())
+        with closing(sqlite3.connect(self.db_path(legacy_root))) as conn:
+            self.assertEqual(
+                conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0],
+                str(core.DB_SCHEMA_VERSION))
+
+    def test_legacy_access_setup_remarks_and_console_tokens_are_migrated(self):
+        _, group = self.approve()
+        group = self.store.update(ENV, group["config_id"], group["revision"],
+                                  {"servers": [server()]})
+        server_id = group["servers"][0]["server_id"]
+        legacy_root = Path(self.temp.name) / "legacy-all"
+        legacy_dir = legacy_root / ENV
+        (legacy_dir / "setup_codes").mkdir(parents=True)
+        (legacy_dir / "remarks").mkdir()
+        (legacy_dir / "console_tokens").mkdir()
+        state = {"schema_version": 2, "environment_id": ENV, "revision": 3,
+                 "groups": [copy.deepcopy(group)],
+                 "candidates": [], "environment_administrators": [USER],
+                 "authorization_history": []}
+        (legacy_dir / "state.json").write_text(
+            json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        (legacy_dir / "access.json").write_text(json.dumps({
+            "schema_version": 1, "super_admins": ["SYNTHETIC_SUPER"],
+            "whitelist_admins": ["SYNTHETIC_WHITE"], "blacklist": []}),
+            encoding="utf-8")
+        code = "ABCDEF"
+        setup_id = str(core.uuid4())
+        (legacy_dir / "setup_codes" / (setup_id + ".json")).write_text(json.dumps({
+            "schema_version": 1, "environment_id": ENV, "setup_id": setup_id,
+            "alias": "旧群", "display_group": "", "code_hash": core._setup_hash(ENV, code),
+            "created_at": self.now, "expires_at": self.now + core.SETUP_TTL,
+            "used_at": 0, "config_id": ""}), encoding="utf-8")
+        (legacy_dir / "remarks" / (server_id + ".json")).write_text(json.dumps({
+            "remark_src": "motd", "remark_motd": "旧 MOTD",
+            "remark_motd_at": int(self.now), "remark_motd_runs": [["旧 MOTD", "#ffffff"]]}),
+            encoding="utf-8")
+        (legacy_dir / "console_tokens" / (server_id + ".json")).write_text(json.dumps({
+            "console_token": "SYNTHETIC_CONSOLE_TOKEN_123"}), encoding="utf-8")
+
+        migrated = core.OfficialStore(legacy_root, clock=lambda: self.now,
+                                      token_provider=lambda: self.api_token)
+        self.addCleanup(migrated.close)
+        self.assertEqual(migrated.access_lists(ENV)["super_admins"], frozenset({"SYNTHETIC_SUPER"}))
+        self.assertIn(USER, migrated.environment_administrators(ENV))
+        self.assertEqual(migrated.setup_status(ENV, setup_id)["status"], "pending")
+        self.assertEqual(migrated.server_remark(ENV, server_id)["remark_motd"], "旧 MOTD")
+        self.assertEqual(migrated.console_token_ids(ENV), [server_id])
+        self.assertEqual(migrated.runtime_console_token(ENV, server_id),
+                         "SYNTHETIC_CONSOLE_TOKEN_123")
+        for name in ("state.json", "access.json", "setup_codes", "remarks"):
+            self.assertFalse((legacy_dir / name).exists())
+            self.assertTrue((legacy_dir / "legacy" / name).exists())
+        self.assertTrue((legacy_dir / "console_tokens" / (server_id + ".json")).exists())
+
+    def test_backup_export_import_round_trip_restores_config_access_and_remarks(self):
+        _, group = self.approve()
+        group = self.store.update(ENV, group["config_id"], group["revision"],
+                                  {"servers": [server()]})
+        server_id = group["servers"][0]["server_id"]
+        self.store.save_server_remark(ENV, group["config_id"], server_id, group["revision"],
+                                      remark_src="motd", remark_motd="备份 MOTD")
+        self.assertTrue(self.store.update_official_access(
+            ENV, "super_admins", "SYNTHETIC_SUPER", True))
+        self.store.save_console_token(ENV, group["config_id"], server_id,
+                                      group["revision"], "SYNTHETIC_CONSOLE_TOKEN")
+        backup = self.store.export_state(ENV)
+        self.assertEqual(backup["format"], core.BACKUP_FORMAT)
+        self.assertNotIn("authorization_history", backup)
+        self.assertNotIn("setup_codes", backup)
+        self.assertEqual(backup["environment_access"]["super_admins"], ["SYNTHETIC_SUPER"])
+        self.assertEqual(backup["server_remarks"][server_id]["remark_motd"], "备份 MOTD")
+        self.assertNotIn("SYNTHETIC_CONSOLE_TOKEN", json.dumps(backup, ensure_ascii=False))
+
+        changed = self.store.update(ENV, group["config_id"], group["revision"],
+                                    {"alias": "临时改名"})
+        self.assertEqual(changed["alias"], "临时改名")
+        revision = self.store.list_state(ENV)["revision"]
+        summary = self.store.import_state(ENV, backup, revision)
+        self.assertEqual((summary["groups"], summary["servers"]), (1, 1))
+        restored = self.store.group(ENV, group_id=GROUP)
+        self.assertEqual(restored["alias"], group["alias"])
+        self.assertGreater(restored["revision"], changed["revision"])
+        self.assertEqual(self.store.server_remark(ENV, server_id)["remark_motd"], "备份 MOTD")
+        self.assertEqual(self.store.access_lists(ENV)["super_admins"],
+                         frozenset({"SYNTHETIC_SUPER"}))
+        self.assertEqual(self.store.runtime_console_token(ENV, server_id),
+                         "SYNTHETIC_CONSOLE_TOKEN")
+
+    def test_backup_import_rejects_wrong_environment_and_missing_key_without_changes(self):
+        _, group = self.approve()
+        backup = self.store.export_state(ENV)
+        before = self.store.list_state(ENV)
+        wrong = copy.deepcopy(backup)
+        wrong["environment_id"] = OTHER_ENV
+        with self.assertRaises(core.OfficialError):
+            self.store.import_state(ENV, wrong, before["revision"])
+        broken = copy.deepcopy(backup)
+        del broken["server_remarks"]
+        with self.assertRaises(core.OfficialError):
+            self.store.import_state(ENV, broken, before["revision"])
+        self.assertEqual(self.store.list_state(ENV), before)
+        self.assertEqual(self.store.group(ENV, group_id=GROUP)["revision"], group["revision"])
+
+    def test_import_removes_console_token_for_server_absent_from_backup(self):
+        _, group = self.approve()
+        group = self.store.update(ENV, group["config_id"], group["revision"],
+                                  {"servers": [server("one"), server("two")]})
+        first, second = (entry["server_id"] for entry in group["servers"])
+        for server_id in (first, second):
+            self.store.save_console_token(ENV, group["config_id"], server_id,
+                                          group["revision"], "SYNTHETIC_CONSOLE_TOKEN")
+        backup = self.store.export_state(ENV)
+        backup["groups"][0]["servers"] = [
+            entry for entry in backup["groups"][0]["servers"]
+            if entry["server_id"] == first]
+        backup["server_remarks"] = {
+            key: value for key, value in backup["server_remarks"].items()
+            if key == first}
+        revision = self.store.list_state(ENV)["revision"]
+        summary = self.store.import_state(ENV, backup, revision)
+        self.assertEqual(summary["servers"], 1)
+        self.assertEqual(self.store.console_token_ids(ENV), [first])
+        self.assertFalse(self.store._console_token_path(ENV, second).exists())
+
+    def test_missing_database_with_legacy_archive_fails_closed_and_accepts_explicit_import(self):
+        _, group = self.approve()
+        legacy_root = Path(self.temp.name) / "legacy-missing"
+        legacy_dir = legacy_root / ENV
+        legacy_dir.mkdir(parents=True)
+        state = {"schema_version": 2, "environment_id": ENV, "revision": 1,
+                 "groups": [copy.deepcopy(group)], "candidates": [],
+                 "environment_administrators": [], "authorization_history": []}
+        (legacy_dir / "state.json").write_text(
+            json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        migrated = core.OfficialStore(legacy_root, clock=lambda: self.now,
+                                      token_provider=lambda: self.api_token)
+        self.addCleanup(migrated.close)
+        backup = migrated.export_state(ENV)
+        migrated.close()
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            Path(str(self.db_path(legacy_root)) + suffix).unlink(missing_ok=True)
+        self.assertFalse(self.db_path(legacy_root).exists())
+
+        probe = core.OfficialStore(legacy_root, clock=lambda: self.now,
+                                   token_provider=lambda: self.api_token)
+        self.addCleanup(probe.close)
+        with self.assertRaises(core.OfficialError):
+            probe.list_state(ENV)
+        self.assertFalse(self.db_path(legacy_root).exists())
+        # 显式导入会临时建库；修订号不匹配失败后必须删掉空库，不能遮住 legacy/。
+        with self.assertRaises(core.OfficialError):
+            probe.import_state(ENV, backup, 5)
+        self.assertFalse(self.db_path(legacy_root).exists())
+        summary = probe.import_state(ENV, backup, 0)
+        self.assertEqual((summary["groups"], summary["servers"]), (1, 0))
+        self.assertEqual(probe.group(ENV, group_id=GROUP)["config_id"], group["config_id"])
+        self.assertTrue((legacy_dir / "legacy" / "state.json").exists())
+
+    def test_database_environment_binding_fails_closed(self):
+        self.approve()
+        with closing(sqlite3.connect(self.db_path())) as conn:
+            conn.execute("UPDATE meta SET value = ? WHERE key = 'environment_id'",
+                         (OTHER_ENV,))
+            conn.commit()
+        self.store.close()
+        with self.assertRaises(core.OfficialError):
+            self.store.list_state(ENV)
+
+    def test_retained_server_keeps_remark_when_group_config_changes(self):
+        _, group = self.approve()
+        group = self.store.update(ENV, group["config_id"], group["revision"],
+                                  {"servers": [server()]})
+        server_id = group["servers"][0]["server_id"]
+        self.store.save_server_remark(ENV, group["config_id"], server_id, group["revision"],
+                                      remark_src="motd", remark_motd="保留的 MOTD")
+        changed = copy.deepcopy(group["servers"])
+        changed[0]["remark"] = "新的手填备注"
+        group = self.store.update(ENV, group["config_id"], group["revision"],
+                                  {"servers": changed})
+        self.assertEqual(group["servers"][0]["remark"], "新的手填备注")
+        self.assertEqual(self.store.server_remark(ENV, server_id)["remark_motd"], "保留的 MOTD")
 
     def test_v2_group_without_required_policy_key_is_rejected(self):
-        self.approve()
-        path = Path(self.temp.name) / ENV / "state.json"
-        state = json.loads(path.read_text(encoding="utf-8"))
+        _, group = self.approve()
+        legacy_root = Path(self.temp.name) / "legacy-v2"
+        legacy_dir = legacy_root / ENV
+        legacy_dir.mkdir(parents=True)
+        state = {"schema_version": 2, "environment_id": ENV, "revision": 1,
+                 "groups": [copy.deepcopy(group)], "candidates": [],
+                 "environment_administrators": [], "authorization_history": []}
         del state["groups"][0]["policy"]["use_central_db"]
-        path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        (legacy_dir / "state.json").write_text(
+            json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        broken = core.OfficialStore(legacy_root, clock=lambda: self.now,
+                                    token_provider=lambda: self.api_token)
+        self.addCleanup(broken.close)
         with self.assertRaises(core.OfficialError):
-            self.store.group(ENV, group_id=GROUP)
+            broken.group(ENV, group_id=GROUP)
+        self.assertFalse(self.db_path(legacy_root).exists())
+        self.assertTrue((legacy_dir / "state.json").exists())
 
     def test_group_and_members_limits_do_not_grant_privileges(self):
         for i in range(20):
@@ -230,8 +445,9 @@ class StoreTests(unittest.TestCase):
     def test_openid_never_becomes_path_and_other_environment_stays_empty(self):
         strange = scope(group="../../SYNTHETIC_GROUP")
         self.store.register(strange)
-        paths = [str(p.relative_to(self.temp.name)) for p in Path(self.temp.name).rglob("*.json")]
-        self.assertEqual(paths, [str(Path(ENV) / "state.json")])
+        self.assertTrue(self.db_path().is_file())
+        self.assertFalse(any("SYNTHETIC_GROUP" in str(path)
+                             for path in Path(self.temp.name).rglob("*")))
         self.assertEqual(self.store.list_state(OTHER_ENV)["groups"], [])
         with self.assertRaises(core.OfficialError): self.store.list_state("../outside")
 
@@ -320,12 +536,19 @@ class StoreTests(unittest.TestCase):
                                              remark_src="manual")
         self.assertEqual(kept["remark_motd"], "SYNTHETIC_MOTD")
         self.assertEqual(kept["remark_motd_at"], int(self.now - 60))
-        path = Path(self.temp.name) / ENV / "remarks" / (server_id + ".json")
-        self.assertTrue(path.exists())
-        path.write_text("not json", encoding="utf-8")
+        with closing(sqlite3.connect(self.db_path())) as conn:
+            row = conn.execute(
+                "SELECT remark_src, remark_motd, remark_motd_at FROM server_remarks "
+                "WHERE server_id = ?", (server_id,)).fetchone()
+            self.assertEqual(row, ("manual", "SYNTHETIC_MOTD", int(self.now - 60)))
+            conn.execute("UPDATE server_remarks SET remark_src = 'broken' WHERE server_id = ?",
+                         (server_id,))
+            conn.commit()
         self.assertEqual(self.store.server_remark(ENV, server_id)["remark_src"], "manual")
         self.store.update(ENV, group["config_id"], updated["revision"], {"servers": []})
-        self.assertFalse(path.exists())
+        with closing(sqlite3.connect(self.db_path())) as conn:
+            self.assertIsNone(conn.execute(
+                "SELECT 1 FROM server_remarks WHERE server_id = ?", (server_id,)).fetchone())
 
     def test_new_server_cannot_impersonate_existing_external_identity(self):
         _, group = self.approve()
@@ -366,11 +589,15 @@ class StoreTests(unittest.TestCase):
         self.assertIn(target, self.store.access_lists(ENV)["whitelist_admins"])
         self.assertNotIn(target, self.store.access_lists(OTHER_ENV)["whitelist_admins"])
         self.assertEqual(public["whitelist_admins"], [])
-        path = Path(self.temp.name) / ENV / "access.json"
-        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["schema_version"], 1)
+        with closing(sqlite3.connect(self.db_path())) as conn:
+            self.assertEqual(conn.execute(
+                "SELECT role, user_id FROM environment_access").fetchall(),
+                [("whitelist_admins", target)])
         self.assertTrue(self.store.update_official_access(ENV, "whitelist_admins", target, False))
         self.assertNotIn(target, self.store.access_lists(ENV)["whitelist_admins"])
-        path.write_text("{}", encoding="utf-8")
+        with closing(sqlite3.connect(self.db_path())) as conn:
+            conn.execute("DROP TABLE environment_access")
+            conn.commit()
         with self.assertRaises(core.OfficialError):
             self.store.access_lists(ENV)
 
@@ -393,20 +620,23 @@ class StoreTests(unittest.TestCase):
         self.store.revoke(ENV, other["config_id"], USER, state["revision"], "environment_admin")
         self.assertNotIn(USER, self.store.list_state(ENV)["environment_administrators"])
 
-    def test_failed_atomic_replace_retains_config_and_revision(self):
+    def test_failed_commit_retains_config_and_revision(self):
         _, group = self.approve()
         before = self.store.list_state(ENV)
-        with patch.object(core.os, "replace", side_effect=OSError("synthetic error")):
-            with self.assertRaises(core.OfficialError): self.store.update(ENV, group["config_id"], 1, {"enabled": True})
+        with patch.object(self.store, "_commit", side_effect=core.OfficialError("synthetic error")):
+            with self.assertRaises(core.OfficialError):
+                self.store.update(ENV, group["config_id"], 1, {"enabled": True})
         self.assertEqual(self.store.list_state(ENV), before)
         self.assertEqual(list(Path(self.temp.name).rglob("*.tmp")), [])
 
     def test_corruption_never_silently_overwrites_existing_config(self):
         self.approve()
-        path = Path(self.temp.name) / ENV / "state.json"
-        path.write_text('{"schema_version":1,"schema_version":2}', encoding="utf-8")
+        path = self.db_path()
+        self.store.close()
+        path.write_bytes(b"not a sqlite database")
         before = path.read_bytes()
-        with self.assertRaises(core.OfficialError): self.store.register(self.scope)
+        with self.assertRaises(core.OfficialError):
+            self.store.register(self.scope)
         self.assertEqual(path.read_bytes(), before)
 
     def test_normal_state_does_not_read_or_store_secret_file(self):
@@ -744,7 +974,12 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         async def query(*args): return "构造标题", ["构造结果"]
         runtime = runtime_module.OfficialRuntime(self.temp.name, Activation(),
                     queries=SimpleNamespace(query=query), renderer=lambda *a: [b"page1", b"page2"], sender=Sender)
+        # 绑定/写命令组件在构造时已持有 runtime.store；测试改用共享 store 时，
+        # 原 store 仍可能被这些组件打开连接，必须在临时目录清理前关闭。
+        original_store = runtime.store
         runtime.store = self.store
+        runtime._original_store = original_store
+        self.addCleanup(original_store.close)
         return runtime
 
     async def test_setup_code_creates_group_and_help_only_before_activation(self):
@@ -1434,7 +1669,9 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
             platform_activation=SimpleNamespace(status=lambda: {"selection": SELECTION}),
             web_request=Request(), _ok=lambda data: data, MAX_SERVERS_PER_GROUP=20,
             _plugin_version=lambda: "synthetic", PLUGIN_NAME="synthetic",
-            WhitelistManager=Whitelist, ConfigManager=Config, _group_ids=lambda: ["100000001"])
+            GROUP_ID_RE=SimpleNamespace(match=lambda value: True),
+            group_summaries=lambda: [{"gid": "100000001", "alias": "",
+                                      "server_count": 0, "mod_count": 0, "token_count": 0}])
         self.assertEqual([g["gid"] for g in (await handler())["groups"]], ["100000001"])
 
     async def test_activation_accepts_only_selected_raw_official_group_but_old_business_stays_closed(self):

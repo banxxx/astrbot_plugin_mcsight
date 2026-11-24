@@ -30,7 +30,7 @@ import {
 } from "../store";
 import { ApiError } from "../lib/bridge";
 import { aliasUnits, clipAlias, clipDigits } from "../lib/groupFields";
-import type { ConfigItem, RemarkRun, ServerEntry } from "../lib/types";
+import type { ConfigItem, OneBotBackup, RemarkRun, ServerEntry } from "../lib/types";
 import RemarkText from "./RemarkText.vue";
 
 const d = computed(() => S.dialog);
@@ -75,6 +75,19 @@ let setupSeq = 0;
 const officialAlias = computed({
   get: () => f.alias ?? "",
   set: value => { f.alias = clipAlias(value); },
+});
+/* OneBot 整库备份导入：文件先在前端解析预览，确认后才提交整份替换。 */
+const obFile = ref<HTMLInputElement | null>(null);
+const obImport = reactive({
+  name: "",
+  backup: null as OneBotBackup | null,
+  error: "",
+  groups: 0,
+  servers: 0,
+  /* 当前库修订号在打开弹窗时锁定，导入期间被别处改动就拒绝覆盖 */
+  revision: -1,
+  /* 正式库缺失但留档仍在：允许从备份重建，修订号按空库 0 提交 */
+  recovery: false,
 });
 const officialDisplay = computed({
   get: () => f.display ?? "",
@@ -122,6 +135,8 @@ const title = computed(() => {
     case "json-group":
     case "json-config":
       return "查看 JSON";
+    case "onebot-import":
+      return "导入 OneBot 配置备份";
     case "ignore-list":
       return "昵称检测忽略名单";
     case "list-manage": {
@@ -169,6 +184,8 @@ const sub = computed(() => {
       return "当前群配置 / 只读预览";
     case "json-config":
       return "全局配置 / 只读预览";
+    case "onebot-import":
+      return "用 JSON 备份整份替换 OneBot 群与服务器配置";
     case "reload-plugin":
       return "已保存的全局配置将在重载后生效。";
     default:
@@ -211,6 +228,7 @@ const footerDisabled = computed(
     (name.value === "add-server" && servers.value.length >= S.maxServers) ||
     (name.value === "add-group" && officialMode.value &&
       (!S.officialEnvironment || !S.officialState || !f.display?.trim() || setup.generating)) ||
+    (name.value === "onebot-import" && (!obImport.backup || obImport.revision < 0)) ||
     (name.value === "reload-plugin" && dirtyCount.value > 0),
 );
 const footAction = computed(() => {
@@ -233,6 +251,8 @@ const footAction = computed(() => {
       return openBatchDelConfirm;
     case "batch-del-confirm":
       return submitBatchDel;
+    case "onebot-import":
+      return submitOnebotImport;
     case "reload-plugin":
       return submitReload;
     default:
@@ -247,11 +267,13 @@ const footVerb = computed(() => {
     return officialMode.value ? (setup.code ? "重新生成" : "生成验证码") : "创建群配置";
   }
   if (name.value === "edit-group") return "保存";
+  if (name.value === "onebot-import") return "导入并替换";
   if (name.value === "batch-del") return `删除 ${selectedNames.value.length} 台服务器`;
   return "保存服务器";
 });
 const footKind = computed(() => (name.value === "del-server" || name.value === "del-group" || name.value === "batch-del" || name.value === "batch-del-confirm" ? "danger" : "pri"));
 const footIcon = computed(() => name.value === "reload-plugin" ? "refresh"
+  : name.value === "onebot-import" ? "upload"
   : CONFIRMS.includes(name.value) || name.value === "batch-del" ? "trash"
   : name.value === "edit-server" || name.value === "edit-group" ? "check"
   : name.value === "add-group" && officialMode.value ? "key" : "plus");
@@ -318,12 +340,14 @@ watch(
     batchResult.message = "";
     batchResult.failed = [];
     resetOfficialSetup();
+    resetOnebotImport();
     previewSeq += 1;
     motdPreview.text = "";
     motdPreview.error = "";
     motdPreview.loading = false;
     motdPreview.runs = [];
     if (!cur) return;
+    if (cur.name === "onebot-import") void loadOnebotRevision();
     srvKey.value = (cur.payload?.server as ServerEntry | undefined)?.name ?? "";
     if (cur.name === "edit-server") {
       const s = cur.payload?.server as ServerEntry;
@@ -991,6 +1015,79 @@ async function removeIgnore(qq: string) {
   });
 }
 
+function resetOnebotImport() {
+  Object.assign(obImport, {
+    name: "", backup: null, error: "", groups: 0, servers: 0, revision: -1, recovery: false,
+  });
+}
+
+/* 修订号必须在打开弹窗时取：提交时再取等于放弃并发校验，别处的改动会被静默覆盖。 */
+async function loadOnebotRevision() {
+  try {
+    const current = await api.onebotExport();
+    if (name.value !== "onebot-import") return;
+    obImport.revision = current.revision;
+  } catch (err) {
+    if (name.value !== "onebot-import") return;
+    const why = err instanceof ApiError ? err.message : String(err);
+    /* 只能为“正式库缺失、legacy/ 留档仍在”开放重建；其它读取失败仍拦住导入。 */
+    if (why.includes("数据库缺失")) {
+      obImport.revision = 0;
+      obImport.recovery = true;
+      return;
+    }
+    obImport.error = `读取当前配置修订失败：${why}`;
+  }
+}
+
+function chooseOnebotFile() {
+  if (!busy.value) obFile.value?.click();
+}
+
+async function onOnebotFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0] ?? null;
+  input.value = "";
+  const revision = obImport.revision;
+  const recovery = obImport.recovery;
+  resetOnebotImport();
+  obImport.revision = revision;
+  obImport.recovery = recovery;
+  if (revision < 0) void loadOnebotRevision();
+  obImport.name = file?.name ?? "";
+  if (!file) return;
+  try {
+    const parsed: unknown = JSON.parse(await file.text());
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("文件不是有效的 JSON 对象。");
+    }
+    const backup = parsed as OneBotBackup;
+    if (backup.format !== "mcsight.onebot.backup" || backup.format_version !== 1) {
+      throw new Error("不是 MCSight OneBot 配置备份。");
+    }
+    if (!Array.isArray(backup.groups)) throw new Error("备份结构不完整。");
+    obImport.backup = backup;
+    obImport.groups = backup.groups.length;
+    obImport.servers = backup.groups.reduce(
+      (count, group) => count + (Array.isArray(group.servers) ? group.servers.length : 0), 0);
+  } catch (err) {
+    obImport.error = err instanceof Error ? `无法读取备份：${err.message}` : "无法读取备份。";
+  }
+}
+
+async function submitOnebotImport() {
+  const backup = obImport.backup;
+  if (!backup || obImport.revision < 0 || busy.value) return;
+  const revision = obImport.revision;
+  await run("onebotimport", async () => {
+    const r = await api.onebotImport(revision, backup);
+    closeDialog();
+    await loadSummary();
+    await loadGroup();
+    toast(`已导入 ${r.summary.groups} 个群、${r.summary.servers} 台服务器`);
+  });
+}
+
 async function submitReload() {
   const dialog = S.dialog;
   await reloadPlugin();
@@ -1147,6 +1244,28 @@ async function submitReload() {
       <p class="dialog-copy">重载会重新建立插件连接。完成后自动刷新页面数据；期间请稍候。</p>
       <UiNotice v-if="dirtyCount" tone="warn">还有 {{ dirtyCount }} 项全局更改未保存，请先保存再重载。</UiNotice>
       <UiNotice v-else tone="ok">当前配置已保存。</UiNotice>
+    </template>
+
+    <template v-else-if="name === 'onebot-import'">
+      <input ref="obFile" type="file" accept=".json,application/json" style="display: none" @change="onOnebotFile" />
+      <div class="backup-pick">
+        <UiButton kind="sec" :disabled="busy" @click="chooseOnebotFile">
+          <UiIcon name="upload" :size="16" />选择备份文件
+        </UiButton>
+        <span v-if="obImport.name" class="backup-name mono">{{ obImport.name }}</span>
+        <span v-else class="field-help">选择此前导出的 OneBot 配置备份（.json）。</span>
+      </div>
+      <UiNotice v-if="obImport.recovery" tone="warn">
+        当前正式库缺失（legacy/ 留档仍在）。导入会从这份备份重建 OneBot 配置；如你刚恢复过数据库，请关闭弹窗刷新后再试。
+      </UiNotice>
+      <UiNotice v-if="obImport.backup" tone="info">
+        将导入 {{ obImport.groups }} 个群、{{ obImport.servers }} 台服务器；命令 Token 按服务器标识保留，不会写进备份文件。
+      </UiNotice>
+      <UiNotice v-if="obImport.revision < 0 && !obImport.error" tone="info">
+        正在读取当前配置修订…
+      </UiNotice>
+      <UiNotice v-if="obImport.error" tone="bad">{{ obImport.error }}</UiNotice>
+      <UiNotice tone="warn">导入会用备份整份替换现有全部群与服务器设置。操作前请先导出当前配置。</UiNotice>
     </template>
 
     <template v-else-if="CONFIRMS.includes(name)">
@@ -1635,6 +1754,18 @@ async function submitReload() {
 .json-code:focus-visible {
   outline: 2px solid var(--ac-line);
   outline-offset: 2px;
+}
+.backup-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.backup-name {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 .setup-code-box {
   display: grid;

@@ -2,16 +2,17 @@
 import { computed } from "vue";
 import {
   ArrowDown, ArrowUp, ArrowUpDown, BookOpen, Braces, Check, ChevronDown, ChevronUp,
-  ChevronRight, CircleAlert, CircleCheck, Code, CodeXml, Copy, Eye, EyeOff, Info,
-  KeyRound, List, ListChecks, ListTree, LoaderCircle, Lock, Menu, MoreHorizontal,
+  ChevronRight, CircleAlert, CircleCheck, Code, CodeXml, Copy, Download, Eye, EyeOff,
+  Info, KeyRound, List, ListChecks, ListTree, LoaderCircle, Lock, Menu, MoreHorizontal,
   Pencil, Plus, RefreshCw, RotateCw, Search, Server, ShieldCheck, SlidersHorizontal,
-  Trash2, TriangleAlert, User, Users, X,
+  Trash2, TriangleAlert, Upload, User, Users, X,
 } from "@lucide/vue";
 const MAP: Record<string, unknown> = {
   "arrow-down": ArrowDown, "arrow-up": ArrowUp, "arrow-up-down": ArrowUpDown,
   "book-open": BookOpen, check: Check, "chevron-down": ChevronDown,
   "chevron-up": ChevronUp, "chevron-right": ChevronRight, braces: Braces,
-  code: Code, "code-xml": CodeXml, copy: Copy, eye: Eye, "eye-off": EyeOff,
+  code: Code, "code-xml": CodeXml, copy: Copy, download: Download, eye: Eye, "eye-off": EyeOff,
+  upload: Upload,
   info: Info, key: KeyRound, "key-round": KeyRound, list: List,
   "list-checks": ListChecks, "list-tree": ListTree, lock: Lock,
   "lock-keyhole": Lock, "more-horizontal": MoreHorizontal, ellipsis: MoreHorizontal,

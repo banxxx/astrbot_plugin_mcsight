@@ -95,6 +95,7 @@ class CommandIntegrationTests(unittest.TestCase):
         # 中心库改为按群开关；这些集成测试显式开启，覆盖既有中心路径。
         self.groups = core.OfficialStore(self.root / "groups",
                                          policy_defaults=lambda: {"use_central_db": True})
+        self.addCleanup(self.groups.close)
         self.event = prior.scope(message_id="SYNTHETIC_BIND_EVENT_A")
         candidate = self.groups.register(self.event)
         self.group = self.groups.approve(ENV, candidate["candidate_id"], self.groups.list_state(ENV)["revision"],
@@ -387,6 +388,7 @@ class SettingsTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="official-settings-synthetic-")
         self.addCleanup(self.temp.cleanup)
         self.groups = core.OfficialStore(self.temp.name)
+        self.addCleanup(self.groups.close)
         self.host = host_module.OfficialBindingHost(self.groups, lambda: prior.SELECTION)
         self.path = Path(self.temp.name) / ENV / "center_settings.json"
         self.data = dict(schema_version=1, environment_id=ENV, enabled=True, storage_mode="hybrid", connection=center_tests.settings())
@@ -455,7 +457,9 @@ class RuntimeIngressTests(unittest.IsolatedAsyncioTestCase):
         fixture = prior.RuntimeTests("test_setup_code_creates_group_and_help_only_before_activation")
         fixture.setUp()
         self.addCleanup(fixture.temp.cleanup)
+        self.addCleanup(fixture.store.close)
         runtime = fixture.make_runtime()
+        self.addCleanup(runtime._original_store.close)
         _, group = fixture.approve()
         fixture.store.update(ENV, group["config_id"], group["revision"], {"enabled": True, "servers": [prior.server()]})
         calls = []

@@ -435,9 +435,11 @@ class OfficialRuntime:
     def state(self, environment):
         self.environment(environment)
         data = self.store.list_state(environment)
+        remarks = self.store.server_remarks(environment)
         for group in data["groups"]:
             for server in group["servers"]:
-                remark = self.store.server_remark(environment, server["server_id"])
+                remark = remarks.get(server["server_id"]) or {
+                    "remark_src": "manual", "remark_motd": "", "remark_motd_at": 0}
                 server["remark_src"] = remark["remark_src"]
                 server["remark_motd"] = remark["remark_motd"]
                 server["remark_motd_at"] = remark["remark_motd_at"]
@@ -492,9 +494,8 @@ class OfficialRuntime:
             return
         sender = self.sender(event, scope, record)
         try:
-            state = self.store.list_state(scope.environment_id)
-            group = next((g for g in state["groups"] if g["group_openid"] == scope.group_id), None)
-            environment_admins = state["environment_administrators"]
+            group = self.store.group(scope.environment_id, group_id=scope.group_id)
+            environment_admins = self.store.environment_administrators(scope.environment_id)
             page_revision = (group["revision"], tuple(sorted(environment_admins))) if group is not None else None
             if group is not None and self.store.access_level(scope, group, environment_admins) == 0:
                 await sender.text("您已被列入本群插件黑名单，无法使用本插件。")
@@ -607,19 +608,19 @@ class OfficialRuntime:
             if command in WRITE_COMMANDS:
                 minimum_permission = 3 if self.store.access_level(scope, group, environment_admins) >= 3 else 1
                 title,lines=await asyncio.to_thread(self.write_commands.execute,scope,command,arguments)
-                current=self.store.list_state(scope.environment_id)
-                latest=next((g for g in current["groups"] if g["group_openid"]==scope.group_id),None)
+                latest=self.store.group(scope.environment_id,group_id=scope.group_id)
                 if latest is None:
                     raise OfficialError("当前官方群配置已撤销，请重新查询。")
-                result_revision=(latest["revision"],tuple(sorted(current["environment_administrators"])))
+                admins=self.store.environment_administrators(scope.environment_id)
+                result_revision=(latest["revision"],tuple(sorted(admins)))
                 def write_revalidate():
                     self.environment(scope.environment_id,active=True)
-                    latest=self.store.list_state(scope.environment_id)
-                    current=next((g for g in latest["groups"] if g["group_openid"]==scope.group_id),None)
+                    current=self.store.group(scope.environment_id,group_id=scope.group_id)
+                    admins=self.store.environment_administrators(scope.environment_id)
                     if (current is None or not current["enabled"]
-                            or self.store.access_level(scope,current,latest["environment_administrators"])<minimum_permission
+                            or self.store.access_level(scope,current,admins)<minimum_permission
                             or current["revision"]!=result_revision[0]
-                            or tuple(sorted(latest["environment_administrators"]))!=result_revision[1]):
+                            or tuple(sorted(admins))!=result_revision[1]):
                         raise OfficialError("当前身份已不能接收操作结果。")
                 write_revalidate()
                 if isinstance(sender,OfficialSender): sender.revalidate=write_revalidate
@@ -688,14 +689,14 @@ class OfficialRuntime:
             self.environment(scope.environment_id, active=True)
             def revalidate():
                 self.environment(scope.environment_id, active=True)
-                latest_state = self.store.list_state(scope.environment_id)
-                latest = next((g for g in latest_state["groups"] if g["group_openid"] == scope.group_id), None)
+                latest = self.store.group(scope.environment_id, group_id=scope.group_id)
+                admins = self.store.environment_administrators(scope.environment_id)
                 if (latest is None or not latest["enabled"]
-                        or self.store.access_level(scope, latest, latest_state["environment_administrators"]) == 0
+                        or self.store.access_level(scope, latest, admins) == 0
                         or latest["revision"] != group["revision"]
-                        or tuple(sorted(latest_state["environment_administrators"])) != page_revision[1]):
+                        or tuple(sorted(admins)) != page_revision[1]):
                     raise OfficialError("查询期间配置或权限已变化，请重新查询。")
-                self.pages.authorize(scope, page_revision, self.store.access_level(scope, latest, latest_state["environment_administrators"]))
+                self.pages.authorize(scope, page_revision, self.store.access_level(scope, latest, admins))
             revalidate()
             # 媒体上传有等待窗口，消息发布前仍须检查；假发送器无需网络接口。
             image_output = self._supports_images(sender)
@@ -783,15 +784,15 @@ class OfficialRuntime:
 
         def guide_revalidate():
             self.environment(scope.environment_id, active=True)
-            state = self.store.list_state(scope.environment_id)
-            latest = next((g for g in state["groups"] if g["group_openid"] == scope.group_id), None)
-            current = (self.store.access_level(scope, latest, state["environment_administrators"])
+            latest = self.store.group(scope.environment_id, group_id=scope.group_id)
+            admins = self.store.environment_administrators(scope.environment_id)
+            current = (self.store.access_level(scope, latest, admins)
                        if latest is not None else 0)
             if latest is not None and current == 0:
                 raise OfficialError("当前身份已被禁止使用本群插件。")
             if page == 2 and (latest is None or not latest["enabled"] or current < 3
                               or latest["revision"] != group["revision"]
-                              or tuple(sorted(state["environment_administrators"])) != environment_admins):
+                              or tuple(sorted(admins)) != environment_admins):
                 raise OfficialError("当前群管理权限或配置已变化，请重新发送 /mc guide 2。")
         guide_revalidate()
         if isinstance(sender, OfficialSender):
@@ -888,11 +889,11 @@ class OfficialRuntime:
         """与 OneBot /mc token 同一套语法与校验：每服 console token，仅超管可改。"""
         def guard():
             self.environment(scope.environment_id, active=True)
-            state = self.store.list_state(scope.environment_id)
-            latest = next((g for g in state["groups"] if g["group_openid"] == scope.group_id), None)
+            latest = self.store.group(scope.environment_id, group_id=scope.group_id)
+            admins = self.store.environment_administrators(scope.environment_id)
             if (latest is None or not latest["enabled"] or latest["revision"] != group["revision"]
-                    or tuple(sorted(state["environment_administrators"])) != page_revision[1]
-                    or self.store.access_level(scope, latest, state["environment_administrators"]) < 4):
+                    or tuple(sorted(admins)) != page_revision[1]
+                    or self.store.access_level(scope, latest, admins) < 4):
                 raise OfficialError("当前群管理权限或配置已变化，停止修改命令 Token。")
         guard()
         words = arguments.split()
@@ -949,11 +950,11 @@ class OfficialRuntime:
 
         def revalidate():
             self.environment(scope.environment_id, active=True)
-            state = self.store.list_state(scope.environment_id)
-            latest = next((g for g in state["groups"] if g["group_openid"] == scope.group_id), None)
+            latest = self.store.group(scope.environment_id, group_id=scope.group_id)
+            admins = self.store.environment_administrators(scope.environment_id)
             if (latest is None or not latest["enabled"] or latest["revision"] != group["revision"]
-                    or self.store.access_level(scope, latest, state["environment_administrators"]) < minimum_permission
-                    or tuple(sorted(state["environment_administrators"])) != page_revision[1]):
+                    or self.store.access_level(scope, latest, admins) < minimum_permission
+                    or tuple(sorted(admins)) != page_revision[1]):
                 raise OfficialError("请求期间配置或权限已变化，请用新消息查询原操作。")
         revalidate()
         if isinstance(sender, OfficialSender):
@@ -968,11 +969,11 @@ class OfficialRuntime:
     async def _member_command(self,scope,sender,command,arguments,group,page_revision):
         def guard():
             self.environment(scope.environment_id,active=True)
-            state=self.store.list_state(scope.environment_id)
-            current=next((g for g in state["groups"] if g["group_openid"]==scope.group_id),None)
+            current=self.store.group(scope.environment_id,group_id=scope.group_id)
+            admins=self.store.environment_administrators(scope.environment_id)
             if (current is None or not current["enabled"] or current["revision"]!=group["revision"]
-                    or tuple(sorted(state["environment_administrators"]))!=page_revision[1]
-                    or self.store.access_level(scope,current,state["environment_administrators"])<3):
+                    or tuple(sorted(admins))!=page_revision[1]
+                    or self.store.access_level(scope,current,admins)<3):
                 raise OfficialError("当前群管理权限或配置已变化，停止成员扫描。")
         guard()
         if command=="checknick" and arguments.strip():raise OfficialError("格式检测用 /mc checknick；开关和忽略名单用 /mc nicknamecheck。")
@@ -1105,6 +1106,7 @@ class OfficialRuntime:
     def close(self):
         self.closed = True
         self.binding_admin.close()
+        self.store.close()
         self.pages.clear()
         self.help_image = None
         self.bind_help_image = None

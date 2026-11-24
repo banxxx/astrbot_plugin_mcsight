@@ -105,9 +105,9 @@ class OfficialWriteCommands:
         selected=self.selection() or {}
         if (selected.get("platform"),selected.get("environment_id"),selected.get("instance_id"))!=("qq_official",event.environment_id,event.instance_id):
             raise OfficialError("原官方实例已失效。")
-        state=self.groups.list_state(event.environment_id)
-        group=next((g for g in state["groups"] if g["group_openid"]==event.group_id),None)
-        level=self.groups.access_level(event,group,state["environment_administrators"]) if group else 0
+        group=self.groups.group(event.environment_id,group_id=event.group_id)
+        admins=self.groups.environment_administrators(event.environment_id)
+        level=self.groups.access_level(event,group,admins) if group else 0
         if group is None or not group["enabled"] or level<(3 if admin else 1):
             raise OfficialError("当前身份无权执行此操作。")
         if revision is not None and group["revision"]!=revision:

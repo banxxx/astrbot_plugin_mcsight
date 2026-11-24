@@ -137,12 +137,12 @@ class OfficialBindingHost:
 
         active()
         with self.groups.lock:
-            state = self.groups.list_state(event_scope.environment_id)
-            group = next((g for g in state["groups"] if g["group_openid"] == event_scope.group_id), None)
-            if group is None or not group["enabled"] or self.groups.access_level(event_scope, group, state["environment_administrators"]) == 0:
+            group = self.groups.group(event_scope.environment_id, group_id=event_scope.group_id)
+            admins = self.groups.environment_administrators(event_scope.environment_id)
+            if group is None or not group["enabled"] or self.groups.access_level(event_scope, group, admins) == 0:
                 raise BindingError("UNAUTHORIZED", "当前官方群或身份未获授权。")
             group = deepcopy(group)
-            administrators = tuple(sorted(state["environment_administrators"]))
+            administrators = tuple(sorted(admins))
         # 中心库开关跟随本群策略；关闭时不读取环境级中心文件，直接使用模组本地权威。
         if group["policy"]["use_central_db"]:
             settings = self.settings_source(event_scope.environment_id)
@@ -159,11 +159,11 @@ class OfficialBindingHost:
             if not settings.unchanged():
                 raise BindingError("CONFLICT", "官方中心配置已变化，请使用新消息。")
             with self.groups.lock:
-                state = self.groups.list_state(event_scope.environment_id)
-                latest = next((g for g in state["groups"] if g["group_openid"] == event_scope.group_id), None)
+                latest = self.groups.group(event_scope.environment_id, group_id=event_scope.group_id)
+                admins = self.groups.environment_administrators(event_scope.environment_id)
                 if (latest is None or not latest["enabled"] or latest["revision"] != group["revision"]
-                        or tuple(sorted(state["environment_administrators"])) != administrators
-                        or self.groups.access_level(event_scope, latest, state["environment_administrators"]) == 0):
+                        or tuple(sorted(admins)) != administrators
+                        or self.groups.access_level(event_scope, latest, admins) == 0):
                     raise BindingError("CONFLICT", "官方群配置或权限已变化，请使用新消息。")
 
         revalidate()
