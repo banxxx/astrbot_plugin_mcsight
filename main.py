@@ -7,7 +7,8 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from .commands.mc_handler import handle_mc_command
 from .commands.common import attach_db_keepalive_context, start_db_keepalive, stop_db_keepalive
-from .config.server_config import migrate_legacy_group_configs
+from .config.server_config import ensure_store_ready
+from .config import onebot_store
 from .config.whitelist_config import WhitelistManager
 from .utils import mod_http, platform_activation, stats_sampler, official_runtime
 from .utils.official_core import event_scope
@@ -104,7 +105,7 @@ def _rest_after_command(event: AstrMessageEvent) -> str:
     return parts[1].strip() if len(parts) > 1 else ""
 
 
-@register("astrbot_plugin_mcsight", "poso", "Minecraft 多服务器状态监控插件", "v2.1.1")
+@register("astrbot_plugin_mcsight", "poso", "Minecraft 多服务器状态监控插件", "v2.2.0")
 class MCWatcher(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -122,13 +123,13 @@ class MCWatcher(Star):
             WhitelistManager().set_context(context)
             # 仅 OneBot 注入旧名单与连接配置；官方使用独立环境存储。
             WhitelistManager().set_config(config)
-        # 旧版 OneBot 群文件一次性迁到 onebot/<群号>/state.json；旧文件保留不删。
-        try:
-            migrated, failed = migrate_legacy_group_configs()
-            if migrated or failed:
-                logger.info(f"[群配置] 旧目录迁移：成功 {migrated}，失败 {failed}")
-        except Exception as e:
-            logger.error(f"[群配置] 旧目录迁移异常: {e}")
+        # OneBot 生效时提前打开/迁移 SQLite；官方平台下保持惰性，不碰 OneBot 数据。
+        if legacy_platform == "onebot":
+            try:
+                ensure_store_ready()
+                logger.info("[群配置] OneBot 配置存储已就绪（SQLite）")
+            except Exception as e:
+                logger.error(f"[群配置] OneBot 配置存储打开失败: {e}")
         # config 是 data/config/<插件名>_config.json 的内存对象，配置页写它就等于面板改配置
         register_view_api(context, config)
 
@@ -421,6 +422,7 @@ class MCWatcher(Star):
 
     async def terminate(self):
         self._official.close()
+        onebot_store.close_store()
         platform_activation.shutdown(self._activation)
         if self._startup_task is not None:
             self._startup_task.cancel()

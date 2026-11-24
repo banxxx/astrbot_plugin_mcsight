@@ -2,6 +2,29 @@
 
 版本号写法：`metadata.yaml` 的 `version` 不带 `v`（如 `1.1.2`），GitHub 的 tag 与 Release 用带 `v` 的同名版本号（`v1.1.2`）。下面的标题按前者书写。
 
+## 2.2.0 — 2026-11-24（QQ 官方配置改用 SQLite）
+
+本次把 QQ 官方每个环境原先集中在一个 `state.json` 里的群配置、名单、候选、验证码和备注拆进同目录的 `config.sqlite3`；OneBot 也从每群一个 `state.json` 改为单个 `onebot/config.sqlite3`。命令、权限和数据模型不变。
+
+### 本次更新
+
+- 官方环境配置改为 `qq_official/<环境UUID>/config.sqlite3`（SQLite/WAL），按 `groups`、`servers`、`group_members`、`environment_admins`、`candidates`、`environment_access`、`setup_codes`、`audit_log`、`server_remarks` 分表保存；环境级修订号在 `meta.revision`，每个群另有自己的 `revision`。群配置、候选、管理员与授权审计在同一事务中提交，写入使用 `BEGIN IMMEDIATE`。
+- 兼容旧数据：环境首次打开时自动把旧 `state.json`、`access.json`、`setup_codes/*.json`、`remarks/*.json` 导入 SQLite，导入成功后才把原文件移到同目录 `legacy/` 留档；导入失败不创建正式库，也不覆盖旧文件。v1 群配置仍只补齐缺失的 `policy` 字段，v2 缺字段按损坏处理。数据库损坏、版本或环境 UUID 不符时失败关闭，不回退读取旧 JSON。
+- 群数量上限从 100 提高到 10,000（每群仍最多 20 台服务器，候选 1,000、环境管理员 1,000、授权审计 10,000 条）。旧版 8 MB JSON 文件上限只继续用于兼容迁移与命令回执等独立 JSON。
+- 每条官方群消息的权限检查改为点读当前群和环境管理员，不再加载全部群；`/mc status` 等状态页批量读取备注；控制台 Token 仍按服保存在 `console_tokens/<server_id>.json`，进入 SQLite 的只有 Token 是否存在。实测 2,000 群 / 40,000 服时点读一个群约 0.5 ms、改一个群约 1 ms，管理页全量读取约 210 ms。
+- `OfficialRuntime.close()` 会一并关闭 SQLite 连接，便于 Windows 下释放文件句柄；官方运行时重载、测试清理和插件卸载不再长期占用数据库文件。
+- 后台「更多群操作」新增「导出配置备份 / 导入配置备份」：导出可编辑 JSON（群、服务器、policy、名单、备注），导入时整份校验并单事务替换、提升修订号；不导出验证码、控制台 Token 与审计明细，保留 `server_id` 时控制台 Token 继续匹配。这样保留批量修改和备份便利性，不必直接改 SQLite。
+- 正式库缺失但 `legacy/` 仍有迁移留档时改为失败关闭，避免静默创建空库；显式导入备份时允许在留档存在的情况下重建并恢复配置，导入失败会删除临时空库。
+- OneBot 配置改为 `onebot/config.sqlite3`（SQLite/WAL），群与私聊作用域统一按 `groups(scope_kind, scope_id)`、`servers`、`server_tokens` 分表保存；首次打开时自动迁移 `onebot/<群号>/state.json` 与 `group_configs/servers_<群号>.json`，原文件移到 `onebot/legacy/` 留档。写入走 `BEGIN IMMEDIATE` 单事务，读改写不再丢更新；每台服务器有稳定的 `server_id`，改名或移动分组后控制台 Token 仍能匹配；Token 单独存表，导出备份不含 Token，只保留是否存在。
+- OneBot 权限检查改为只读当前群的 policy，不再加载全部 Token；后台采样与状态页继续汇总所有启用服务器。后台「导出配置备份 / 导入配置备份」同时支持 OneBot，导入整份校验并单事务替换。
+- 测试与文档：官方只读、绑定命令、绑定服务、恢复与生命周期测试迁移到 SQLite，并新增旧 JSON 迁移、policy 版本校验、环境绑定失败关闭、保留服务器备注、备份导出/导入与缺失库保护等用例；OneBot 新增 SQLite 结构、旧文件迁移留档、私聊作用域、并发写入、备份导出/导入与失败清理等用例。当前全套 439 项测试通过。
+
+### 兼容性
+
+- 首次启动 2.2.0 后会自动迁移官方 JSON，原文件保留在 `legacy/`；迁移后请不要把旧 JSON 放回原路径继续使用。
+- 备份/恢复官方配置时以后台导出的 JSON 备份或 `config.sqlite3` 为准；`center_settings.json` 和 `console_tokens/` 仍分别保存。`legacy/` 只读留档，不作为运行配置。
+- OneBot 首次启动 2.2.0 时会自动迁移旧群文件，原文件保留在 `onebot/legacy/`；迁移后请以 `onebot/config.sqlite3` 为准，不要再把旧 JSON 放回原路径。命令、权限与服务器字段含义不变。QQ 官方与配套 QQBindMod 的协议、绑定与写操作没有变化。
+
 ## 2.1.1 — 2026-11-24（上架规范修复）
 
 本次修复 AstrBot 插件市场上架审查发现的日志依赖问题；功能与 2.1.0 相同，作为 2.1.0 的重新送审版本。
