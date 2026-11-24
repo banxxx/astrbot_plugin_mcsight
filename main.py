@@ -104,7 +104,7 @@ def _rest_after_command(event: AstrMessageEvent) -> str:
     return parts[1].strip() if len(parts) > 1 else ""
 
 
-@register("astrbot_plugin_mcsight", "poso", "Minecraft 多服务器状态监控插件", "v2.0.1")
+@register("astrbot_plugin_mcsight", "poso", "Minecraft 多服务器状态监控插件", "v2.1.0")
 class MCWatcher(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)

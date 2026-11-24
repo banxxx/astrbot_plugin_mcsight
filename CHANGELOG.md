@@ -2,6 +2,31 @@
 
 版本号写法：`metadata.yaml` 的 `version` 不带 `v`（如 `1.1.2`），GitHub 的 tag 与 Release 用带 `v` 的同名版本号（`v1.1.2`）。下面的标题按前者书写。
 
+## 2.1.0 — 2026-11-24（官方命令指引、独立帮助图与两端行为对齐）
+
+本次在 2.0.1 基础上新增 QQ 官方群命令指引（Markdown + 自定义按钮）和官方群独立帮助图，补齐官方超管名单、命令 Token 与隐藏服务器管理，并让两个平台的查询、绑定、管理提示尽量保持一致。OneBot 的既有数据与权限模型不变。
+
+### 本次更新
+
+- QQ 官方群新增 `/mc guide [1|2]`（别名 `/mc 命令指引`）：通过官方 Markdown + 自定义按钮发送命令菜单，绕开平台群命令面板 10 项限制。按钮为命令填充型（`action.type=2`），群聊点击只把 `@机器人 /mc …` 填入输入框，仍需用户发送，不会自动执行；第 1 页面向普通成员，2 列 5 行，提供常用查询与帮助入口；第 2 页需群管理员（级别 ≥3）并通过 `/mc guide 2` 进入，3 列 4 行，不显示“管理指引”、令牌 / 名单等额外按钮。正文使用原生 `***` 分割线，无 Emoji；管理页发送前及发送中复核群状态、权限与配置修订，仅在平台明确拒绝 Markdown 时回退纯文本，未知或审核中结果不重发。
+- QQ 官方帮助图独立：`/mc help` 与 `/mc bindhelp` 不再复用 OneBot 图片，改为官方专属内容（`setup`、`operation`、`command`、`page`、官方身份与成员检测限制等），避免继续展示“数字 QQ 号”“旧 OneBot 绑定流程”等不适用信息；图片生成或上传失败时回退官方文字。
+- QQ 官方平台的图片命令与 OneBot 完全对齐：`/mc status`、`/mc tps`、`/mc rank`、`/mc stats`、`/mc bindcheck` 改为复用 OneBot 的同一套生成器与同一份内容（状态卡片的版本 / 延迟 / 上次在线显示项按本群策略开关），头像、排行榜与未绑定名单保持一致；`/mc page` 可翻看图片分页。
+- 两个平台的选服语法与命令集合统一：`/mc status` 支持 `-s`，`/mc tps`、`/mc stats`、`/mc say` 同时接受位置服务器名与 `-s`；`/mc hide|show`、`/mc del`、`/mc token`、`/mc whitelist` 在官方平台同样可用；两平台的防抖窗口、进度提示、裸 `/mc` 帮助图与 `/mc list` 输出（主机、模组端口、隐藏标记）保持一致。
+- OneBot 新增 `/mc hide|show`，只切换服务器的隐藏标记，不删除条目、绑定或 Token；`/mc status`、`/mc tps`、`/mc stats` 与 `/mc list` 统一按隐藏标记过滤。指定已隐藏的服务器时明确提示，不再发起查询或生成状态卡片。
+- QQ 官方群新增超管命令 `/mc token <服务器名> <Token|清除>`：复用 OneBot 的 16–128 位可见 ASCII 校验和回执，Token 不回显；服务器未配置 API 端口时提示先补端口。`/mc whitelist list` 同时显示公共名单与本环境补充名单（脱敏）。
+- QQ 官方群新增超管名单管理：`/mc whitelist add|remove @成员`、`/mc whitelist super add|remove @成员`、`/mc blacklist add|remove @成员`。只接受 @ 唯一一位成员，按 `member_openid` 写入本环境独立的 `qq_official/<环境UUID>/access.json`，与公共名单合并只对官方平台生效；官方成员标识按群匹配，换群后需重新添加。不写入、不修改 OneBot 共用名单，群内不显示或回显完整官方标识。
+- 绑定与管理细节对齐：OneBot `/绑定 <码> -s <服务器名>` 不再丢弃选服参数；官方 `/mc unbind` 不带参数时与 OneBot 一样解绑自己名下全部账号；官方 `add/edit host/batchadd` 复用 OneBot 的地址归一化、端口拆分与内网地址限制（仅超管可添加内网主机）；官方配置修改成功时先显示与 OneBot 相同的结果文案，再附操作回执；无服务器、全部隐藏、指定服未装模组等提示也与 OneBot 对齐。
+- 两端细节收敛：`/mc say all <消息>` 与 `/解绑 all` 现在按「全部服务器 / 解绑自己名下全部账号」处理，和官方平台一致；OneBot 群功能关闭时仍可发送 `/mc help`、`/mc bindhelp` 找回启用入口；裸 `/mc` 等同 `/mc help`，`/mc del` 作为 `/mc remove` 的别名；官方 `add/batchadd/edit name/remark` 增加与 OneBot 相同的名称空格、方括号、显示宽度与备注长度校验，避免保存时才报笼统错误。
+- 官方管理命令补齐 OneBot 口径：`add` 回执附带主机与模组端口；`batchadd`/`batchremove` 显示成功数量；重名、每群 20 台上限、批量重名都会直接给出与 OneBot 相同的中文原因；已登记但被关闭的官方群改为提示“本群功能已关闭”，不再引导重复执行 `/mc setup`。
+- 内部结构：排行榜文档构建抽到 `utils/leaderboard_doc.py`，由 OneBot 与官方查询共用；官方只读查询新增结构化 `QueryDocument`，状态、TPS、排行和统计统一交给共享生成器绘图，文字分页仍作为图片不可用时的降级。
+- 测试与文档：新增 `tests/test_onebot_command_edges.py`（帮助豁免、`/mc say all`、`/解绑 all`）和 `tests/test_official_help_content.py`（官方帮助图与指引内容），扩充官方只读、传输与激活回归测试；同步更新 README 及官方交付、实现契约、验收清单中的命令、分页与按钮口径。当前全套 424 项测试通过。
+
+### 兼容性
+
+- OneBot v11 / aiocqhttp 的既有命令、群配置与绑定数据保持不变；`/mc hide|show` 只改隐藏标记，不迁移或删除既有数据。
+- QQ 官方继续使用配套 QQBindMod 2.0.1+，本版未新增模组 API；官方绑定与写操作仍走 `/api/v2/binding/*`。
+- `/mc guide` 的自定义按钮与 Markdown 依赖 QQ 客户端和应用能力；群聊点击只填入命令，仍需用户发送，平台明确拒绝时会回退到纯文本命令清单。
+
 ## 2.0.1 — 2026-11-23（群配置标准化、官方群登记改版与备注彩色渲染）
 
 本次在 2.0.0 基础上统一了群配置格式，改写了 QQ 官方群的登记与管理方式，并补充备注/MOTD 彩色显示与若干前端、文案修复。
@@ -17,15 +42,7 @@
 - QQ 官方「登录限制」支持在线切换（需模组 2.0.1+）：通过 `POST /api/v2/binding/settings/whitelist` 立即修改 `enableWhitelistCheck`、写回模组配置并重新校验在线受限玩家；插件按 `/api/status` 的 `whitelist_check_writable` 自动识别能力，旧模组保持只读。
 - 前端「群与服务器」页改为跟随当前生效平台显示，移除顶部 OneBot / QQ 官方切换；新增官方服务器管理弹窗、群级标准字段编辑与备注文本组件；QQ 官方页重写为本群规则配置（绑定昵称规则 / 模板、登录限制、显示项），移除旧操作与授权页。
 - 修复输入框聚焦时蓝色焦点环被对话框主体裁切的问题；纠正“QQ 官方仅只读 / 尚未开放”等过期文案（现已支持绑定与远程写操作）。
-- QQ 官方平台的图片命令与 OneBot 完全对齐：`/mc status`、`/mc tps`、`/mc rank`、`/mc stats`、`/mc bindcheck` 改为复用 OneBot 的同一套生成器与同一份内容（状态卡片的版本 / 延迟 / 上次在线显示项按本群策略开关），头像、排行榜与未绑定名单保持一致；`/mc help` 与 `/mc bindhelp` 因官方流程不同，见下方独立帮助图说明；图片生成或上传失败时仍回退到分页文字。
-- 两个平台的选服语法与命令集合统一：`/mc status` 支持 `-s`，`/mc tps`、`/mc stats`、`/mc say` 同时接受位置服务器名与 `-s`；`/mc hide|show`、`/mc del`、`/mc token`、`/mc whitelist` 在官方平台同样可用；两平台的防抖窗口、进度提示、裸 `/mc` 帮助图与 `/mc list` 输出（主机、模组端口、隐藏标记）保持一致。
-- 绑定与管理细节对齐：OneBot `/绑定 <码> -s <服务器名>` 不再丢弃选服参数；官方 `/mc unbind` 不带参数时与 OneBot 一样解绑自己名下全部账号；官方 `add/edit host/batchadd` 复用 OneBot 的地址归一化、端口拆分与内网地址限制（仅超管可添加内网主机）；官方配置修改成功时先显示与 OneBot 相同的结果文案，再附操作回执；无服务器、全部隐藏、指定服未装模组等提示也与 OneBot 对齐。
-- 两端细节收敛：`/mc say all <消息>` 与 `/解绑 all` 现在按「全部服务器 / 解绑自己名下全部账号」处理，和官方平台一致；OneBot 群功能关闭时仍可发送 `/mc help`、`/mc bindhelp` 找回启用入口；官方 `add/batchadd/edit name/remark` 增加与 OneBot 相同的名称空格、方括号、显示宽度与备注长度校验，避免保存时才报笼统错误。
-- QQ 官方帮助图独立：`/mc help` 与 `/mc bindhelp` 不再复用 OneBot 图片，改为官方专属内容（`setup`、`operation`、`command`、`page`、官方身份与成员检测限制等），避免继续展示“数字 QQ 号”“旧 OneBot 绑定流程”等不适用信息。
-- 官方管理命令补齐 OneBot 口径：`add` 回执附带主机与模组端口；`batchadd`/`batchremove` 显示成功数量；重名、每群 20 台上限、批量重名都会直接给出与 OneBot 相同的中文原因；已登记但被关闭的官方群改为提示“本群功能已关闭”，不再引导重复执行 `/mc setup`。
-- QQ 官方群新增超管名单管理：`/mc whitelist add|remove @成员`、`/mc whitelist super add|remove @成员`、`/mc blacklist add|remove @成员`。只接受 @ 唯一一位成员，按 `member_openid` 写入本环境独立的 `qq_official/<环境UUID>/access.json`，与公共名单合并只对官方平台生效；官方成员标识按群匹配，换群后需重新添加。不写入、不修改 OneBot 共用名单，群内不显示或回显完整官方标识，`/mc whitelist list` 统一脱敏。
-- QQ 官方群新增 `/mc guide [1|2]`（别名 `/mc 命令指引`）：通过官方 Markdown + 自定义按钮发送命令菜单，绕开平台群命令面板 10 项限制。按钮为命令填充型（`action.type=2`），群聊点击只把 `@机器人 /mc …` 填入输入框，仍需用户发送，不会自动执行；第 1 页面向普通成员，2 列 5 行，提供常用查询与帮助入口；第 2 页需群管理员（级别 ≥3）并通过 `/mc guide 2` 进入，3 列 4 行，不再显示“管理指引”、令牌 / 名单等额外按钮。正文使用原生 `***` 分割线，无 Emoji；仅在平台明确拒绝 Markdown 时回退纯文本，未知或审核中结果不重发。
-- 新增 `tests/test_group_config_standard.py`、`tests/test_motd_color.py`、`tests/test_onebot_command_edges.py`（帮助豁免、`/mc say all`、`/解绑 all`）、`tests/test_official_help_content.py`（官方帮助图内容），并扩充官方只读、传输与激活回归测试；移除前端离线组件测试脚本（其覆盖的操作 / 授权 UI 已按设计移除）。
+- 新增 `tests/test_group_config_standard.py`、`tests/test_motd_color.py`，并扩充官方只读、传输与激活回归测试；移除前端离线组件测试脚本（其覆盖的操作 / 授权 UI 已按设计移除）。
 
 ### 兼容性
 
