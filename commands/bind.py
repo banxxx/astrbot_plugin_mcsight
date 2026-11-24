@@ -3,7 +3,7 @@ import re
 import pymysql
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
-from ..config.server_config import ConfigManager
+from ..config.server_config import ConfigManager, is_hidden
 from ..config.whitelist_config import WhitelistManager
 from ..utils.permission import check_permission
 from ..utils import bind_guard, bind_route, bind_rule, mod_http
@@ -447,8 +447,8 @@ async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: lis
     if len(parts) < 2:
         yield event.plain_result(
             "请从游戏窗口中复制绑定码，格式：\n"
-            "/绑定 <6位数字> 或 /bind <6位数字>\n"
-            "（令牌在游戏内 Title/ActionBar 中显示）"
+            "/绑定 <6位数字> [-s 服务器名] 或 /bind <6位数字> [-s 服务器名]\n"
+            "（令牌在游戏内 Title/ActionBar 中显示；多服时可用 -s 指定验证哪一台）"
         )
         return
 
@@ -459,6 +459,15 @@ async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: lis
             "请从游戏窗口中复制正确的绑定码。"
         )
         return
+
+    target_server_name = None
+    extra = parts[2:]
+    if extra:
+        if len(extra) == 2 and extra[0] == "-s":
+            target_server_name = extra[1]
+        else:
+            yield event.plain_result("用法: /mc bind <6位绑定码> [-s 服务器名]")
+            return
 
     qq = str(event.get_sender_id())
     servers = config.get_all_servers()
@@ -482,7 +491,20 @@ async def handle_bind(event: AstrMessageEvent, config: ConfigManager, parts: lis
         return
 
     # ---- 步骤1：并发验证令牌（需要至少一台模组服务器在线，因为令牌存在内存里） ----
-    mod_servers = [s for s in servers if wm.has_mod_api(s)]
+    if target_server_name is not None:
+        target = next((s for s in servers if s["name"] == target_server_name), None)
+        if target is None:
+            yield event.plain_result(f"未找到名为「{target_server_name}」的服务器。")
+            return
+        if is_hidden(target):
+            yield event.plain_result(f"服务器「{target_server_name}」不参与绑定验证，请先取消隐藏。")
+            return
+        if not wm.has_mod_api(target):
+            yield event.plain_result(f"服务器「{target_server_name}」未安装模组，无法验证绑定码。")
+            return
+        mod_servers = [target]
+    else:
+        mod_servers = [s for s in servers if wm.has_mod_api(s)]
     if not mod_servers:
         yield event.plain_result("❌ 没有安装模组的服务器，无法验证绑定码。")
         return
@@ -699,8 +721,8 @@ async def handle_unbind(event: AstrMessageEvent, config: ConfigManager, parts: l
     # ============================================================
     # 分支 2：默认模式 /解绑 [game_id] 或 /解绑
     # ============================================================
-    # 无参时：直接以当前 QQ 为目标，解绑该 QQ 在本群绑定的所有 game_id
-    if not explicit_value:
+    # 无参或 all：直接以当前 QQ 为目标，解绑该 QQ 在本群绑定的所有 game_id
+    if not explicit_value or explicit_value.lower() == "all":
         async for r in _do_unbind_by_qq(
             event, config, wm, use_central, current_qq, target_server_name
         ):
@@ -834,17 +856,35 @@ async def handle_check(event: AstrMessageEvent, config: ConfigManager, parts: li
     query_type = None
     query_value = None
     target_server_name = None
+    usage = "用法: /查绑定 [游戏ID] [-s 服务器名] 或 /查绑定 ID|QQ <目标> [-s 服务器名]"
 
-    if len(parts) >= 3 and parts[1].upper() in ("ID", "QQ"):
-        query_type = parts[1].upper()
-        query_value = parts[2]
-        if len(parts) >= 4:
-            target_server_name = parts[3]
-    elif len(parts) >= 2:
-        query_value = parts[1]
-        if len(parts) >= 3:
-            if parts[2].upper() not in ("ID", "QQ"):
-                target_server_name = parts[2]
+    args = parts[1:]
+    if "-s" in args:
+        index = args.index("-s")
+        if len(args) <= index + 1:
+            yield event.plain_result(usage)
+            return
+        target_server_name = args[index + 1]
+        args = args[:index] + args[index + 2:]
+
+    if args and args[0].upper() in ("ID", "QQ"):
+        if len(args) < 2:
+            yield event.plain_result(usage)
+            return
+        query_type = args[0].upper()
+        query_value = args[1]
+        if len(args) == 3 and target_server_name is None:
+            target_server_name = args[2]
+        elif len(args) > 2:
+            yield event.plain_result(usage)
+            return
+    elif args:
+        if len(args) == 2 and target_server_name is None:
+            target_server_name = args[1]
+        elif len(args) > 1:
+            yield event.plain_result(usage)
+            return
+        query_value = args[0]
         if query_value.isdigit():
             query_type = "SMART"
         else:
@@ -853,9 +893,7 @@ async def handle_check(event: AstrMessageEvent, config: ConfigManager, parts: li
         query_value = str(event.get_sender_id())
         if not query_value:
             yield event.plain_result(
-                "无法获取您的身份，请手动指定查询参数。\n"
-                "用法: /查绑定 <游戏ID> 或 /查绑定 QQ <QQ号> 或 /查绑定 ID <游戏ID>"
-            )
+                "无法获取您的身份，请手动指定查询参数。\n" + usage)
             return
         query_type = "QQ"
 

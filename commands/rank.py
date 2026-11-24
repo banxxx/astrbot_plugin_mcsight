@@ -7,7 +7,6 @@
 
 import asyncio
 import re
-import time
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain
@@ -15,16 +14,11 @@ from astrbot.api.message_components import Image as AstrImage
 
 from ..config.server_config import ConfigManager, is_hidden
 from ..config.whitelist_config import WhitelistManager
+from ..utils.leaderboard_doc import build_doc, error_doc
 from ..features.leaderboard.image_generator import draw_leaderboard_image
 from ..utils import mod_http
 from ..utils.temp_image import make_temp_png, remove_quietly
 
-TYPE_KEY = {
-    "时长": "play_time",
-    "死亡": "deaths",
-    "击杀生物": "mob_kills",
-    "钓鱼": "fish_caught",
-}
 TYPE_ALIAS = {
     "时长": "时长",
     "死亡": "死亡",
@@ -32,7 +26,6 @@ TYPE_ALIAS = {
     "击杀": "击杀生物",
     "钓鱼": "钓鱼",
 }
-WINDOW_MS = {"周": 7 * 86_400_000, "月": 30 * 86_400_000}
 DEFAULT_N = 10
 MAX_N = 50
 BULK_TIMEOUT = 10.0
@@ -141,56 +134,6 @@ async def _resolve_self_names(event: AstrMessageEvent, wm: WhitelistManager,
     return [str(game_id)] if game_id else []
 
 
-def _format_value(key: str, value: int) -> str:
-    if key != "play_time":
-        return f"{value} 次"
-    minutes = value // 20 // 60
-    if minutes <= 0:
-        return "不到1分钟"
-    days, hours, mins = minutes // 1440, (minutes % 1440) // 60, minutes % 60
-    if days > 0:
-        return f"{days}天{hours}小时" if hours else f"{days}天"
-    if hours > 0:
-        return f"{hours}小时{mins}分" if mins else f"{hours}小时"
-    return f"{mins}分钟"
-
-
-def _hint_for(type_label: str) -> str:
-    return "其他榜：" + " / ".join(t for t in TYPE_KEY if t != type_label)
-
-
-def _now_str() -> str:
-    return time.strftime("%Y/%m/%d  %H:%M:%S")
-
-
-def _doc_shell(server: str, type_label: str, window: str) -> dict:
-    subtitle = f"{server} · {type_label} · {window}榜"
-    if window in ("周", "月"):
-        days = 7 if window == "周" else 30
-        subtitle += f"（近 {days} 天活跃）"
-    return {
-        "title": "排行榜",
-        "subtitle": subtitle,
-        "server": server,
-        "chip": f"{window}榜",
-        "type_label": type_label,
-        "rows": [],
-        "self": None,
-        "compact": False,
-        "empty": False,
-        "error": None,
-        "hint": _hint_for(type_label),
-        "time": _now_str(),
-    }
-
-
-def _error_doc(server: str, type_label: str, window: str, message: str) -> dict:
-    doc = _doc_shell(server, type_label, window)
-    doc["chip"] = "不可用"
-    doc["error"] = message
-    return doc
-
-
 def _bulk_error_text(payload) -> str:
     """把批量接口失败翻译成给用户看的文案。
 
@@ -202,88 +145,6 @@ def _bulk_error_text(payload) -> str:
     if getattr(payload, "status", 0) == 404:
         return "该服务器模组版本过旧，暂不支持排行榜"
     return str(payload) or "该服务器暂不可用"
-
-
-def _build_doc(server: str, type_label: str, window: str, n: int,
-               players: list, self_names: list) -> dict:
-    key = TYPE_KEY[type_label]
-    cutoff = (time.time() * 1000 - WINDOW_MS[window]) if window in WINDOW_MS else None
-
-    candidates = []
-    for player in players:
-        if not isinstance(player, dict):
-            continue
-        name = str(player.get("name") or "").strip()
-        if not name:
-            continue
-        stats = player.get("stats") or {}
-        try:
-            value = int(stats.get(key, 0))
-        except (TypeError, ValueError):
-            value = 0
-        if value <= 0:
-            continue
-        if cutoff is not None:
-            try:
-                seen = int(player.get("last_seen") or 0)
-            except (TypeError, ValueError):
-                seen = 0
-            if seen < cutoff:
-                continue
-        candidates.append({"name": name, "uuid": player.get("uuid"),
-                           "value": value})
-
-    candidates.sort(key=lambda c: (-c["value"], c["name"].lower()))
-    prev = None
-    rank = 0
-    for idx, item in enumerate(candidates):
-        if item["value"] != prev:
-            rank = idx + 1
-            prev = item["value"]
-        item["rank"] = rank
-
-    rows = [dict(item) for item in candidates[:n]]
-
-    self_doc = None
-    if self_names:
-        by_name = {c["name"].lower(): c for c in candidates}
-        best = None
-        for name in self_names:
-            hit = by_name.get(str(name).lower())
-            if hit and (best is None or hit["rank"] < best["rank"]):
-                best = hit
-        if best:
-            self_doc = {
-                "name": best["name"],
-                "uuid": best["uuid"],
-                "value": f"#{best['rank']} · {_format_value(key, best['value'])}",
-                "ranked": True,
-            }
-        else:
-            by_player = {str(p.get("name") or "").lower(): p for p in players
-                         if isinstance(p, dict)}
-            display = next((by_player[str(nm).lower()] for nm in self_names
-                            if str(nm).lower() in by_player), None)
-            self_doc = {
-                "name": str(display.get("name")) if display else str(self_names[0]),
-                "uuid": display.get("uuid") if display else None,
-                "value": "未上榜",
-                "ranked": False,
-            }
-
-    for row in rows:
-        row["value"] = _format_value(key, row["value"])
-        row["is_self"] = bool(
-            self_doc and self_doc.get("ranked")
-            and row["name"].lower() == self_doc["name"].lower())
-
-    doc = _doc_shell(server, type_label, window)
-    doc["rows"] = rows
-    doc["self"] = self_doc
-    doc["compact"] = len(rows) > 20
-    doc["empty"] = not rows
-    doc["chip"] = f"{window}榜 · Top {len(rows)}" if rows else "暂无数据"
-    return doc
 
 
 async def handle_rank(event: AstrMessageEvent, config: ConfigManager,
@@ -314,20 +175,20 @@ async def handle_rank(event: AstrMessageEvent, config: ConfigManager,
         method="GET", token=token, timeout=BULK_TIMEOUT)
 
     if not ok or not isinstance(payload, dict):
-        doc = _error_doc(target["name"], type_label, window,
-                         _bulk_error_text(payload))
+        doc = error_doc(target["name"], type_label, window,
+                        _bulk_error_text(payload))
     else:
         data = payload.get("data") or {}
         players = data.get("players")
         if not isinstance(players, list):
-            doc = _error_doc(target["name"], type_label, window,
-                             "模组返回了无法解析的响应")
+            doc = error_doc(target["name"], type_label, window,
+                            "模组返回了无法解析的响应")
         else:
             if data.get("truncated"):
                 logger.warning(f"[rank] {target['name']} 玩家数超过上限，结果已截断")
             self_names = await _resolve_self_names(event, wm, config, target, token)
-            doc = _build_doc(target["name"], type_label, window, n,
-                             players, self_names)
+            doc = build_doc(target["name"], type_label, window, n,
+                            players, self_names)
 
     path = make_temp_png("mc_rank_")
     try:

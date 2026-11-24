@@ -123,6 +123,14 @@ class OfficialMembers:
         return "官方群昵称检测",lines
 
     @staticmethod
+    def unbound_members(roster,active):
+        """返回 (未绑定名单[{user_id,name,qq}], 非机器人成员总数)，供名单图与文本共用。"""
+        members=[m for m in roster["members"] if not m["bot"]]
+        unbound=[{"user_id":m["user_id"],"name":m["display"],"qq":m["user_id"]}
+                 for m in members if m["user_id"] not in active]
+        return unbound,len(members)
+
+    @staticmethod
     def binding_audit(roster,name,active):
         members=[m for m in roster["members"] if not m["bot"]]
         unbound=[m for m in members if m["user_id"] not in active]

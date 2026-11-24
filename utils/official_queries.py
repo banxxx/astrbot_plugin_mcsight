@@ -7,6 +7,7 @@ import re
 import time
 
 from .official_core import OfficialError, PLAYER_RE
+from .leaderboard_doc import build_doc
 from .stats_schema import CATEGORIES
 
 
@@ -23,6 +24,23 @@ class StatisticsQuery:
     player_name: str
     server_name: str
     today: object
+
+    def __iter__(self):
+        yield self.title
+        yield self.lines
+
+
+@dataclass
+class QueryDocument:
+    """状态 / TPS / 排行查询结果。
+
+    title/lines 供文字分页与降级；data 是结构化数据，交给与 OneBot 共用的
+    生成器绘图，保证两个平台出图一致。可解包为 (title, lines)。
+    """
+    kind: str
+    title: str
+    lines: list
+    data: object
 
     def __iter__(self):
         yield self.title
@@ -111,31 +129,74 @@ class QueryService:
         self.mod, self.status, self.clock = mod, status, clock
         self.history = history
 
+    @staticmethod
+    def _select_servers(group, name, label):
+        """与 OneBot 相同的选服口径：点名时不看隐藏标记，但隐藏服不参与查询。"""
+        servers = group["servers"]
+        if not servers:
+            raise OfficialError("还没有添加任何服务器。")
+        if name is not None:
+            matching = [s for s in servers if s["name"] == name]
+            if not matching:
+                raise OfficialError(f"未找到名为「{name}」的服务器。")
+            if matching[0]["hidden"]:
+                raise OfficialError(f"服务器「{name}」不参与{label}查询。")
+            return matching
+        visible = [s for s in servers if not s["hidden"]]
+        if not visible:
+            raise OfficialError(f"本群 {len(servers)} 条服务器都被隐藏了，先取消隐藏再试。")
+        return visible
+
     async def query(self, command, raw, group, token):
         parts, name = arguments(raw)
-        targets = [s for s in group["servers"] if not s["hidden"] and (name is None or s["name"] == name)]
-        if not targets:
-            raise OfficialError("没有可查询的服务器，请在官方群配置中添加或取消隐藏。")
-        if command in ("stats", "rank"):
+        if command == "status":
+            if parts:
+                raise OfficialError("用法：/mc status [-s 服务器名]")
+            targets = self._select_servers(group, name, "在线状态")
+        elif command == "tps":
+            # 与 OneBot 一致：既支持 -s 服名，也接受位置参数 /mc tps 服名
+            if name is None and len(parts) == 1:
+                name, parts = parts[0], []
+            if parts:
+                raise OfficialError("用法：/mc tps [-s 服务器名]")
+            targets = self._select_servers(group, name, "TPS")
+        elif command == "stats":
+            # 与 OneBot 一致：/mc stats 玩家 [-s 服名] 或 /mc stats 玩家 服名
+            if not parts or not PLAYER_RE.fullmatch(parts[0]):
+                raise OfficialError("用法：/mc stats <1–16 位游戏名> [-s 服务器名]")
+            if len(parts) > 2 or (len(parts) == 2 and name is not None):
+                raise OfficialError("用法：/mc stats <1–16 位游戏名> [-s 服务器名]")
+            if len(parts) == 2:
+                name = parts[1]
+            parts = parts[:1]
+            targets = self._select_servers(group, name, "统计")
             targets = [s for s in targets if s["api_port"] is not None]
             if not targets:
-                raise OfficialError("该查询需要已配置模组 API 的服务器。")
-        if command == "rank" and len(targets) != 1:
-            raise OfficialError("有多台可查服务器，请用 -s <服务器名> 指定排行目标。")
+                raise OfficialError(f"服务器「{name}」未安装模组，无法查询统计数据。" if name is not None
+                                    else "没有可查询的服务器（需安装模组且未隐藏）。")
+        elif command == "rank":
+            targets = self._select_servers(group, name, "排行")
+            targets = [s for s in targets if s["api_port"] is not None]
+            if not targets:
+                raise OfficialError(f"服务器「{name}」未开启模组 API，无法查询排行榜。" if name is not None
+                                    else "本群没有开启模组 API 的服务器，无法查询排行榜。")
+            if len(targets) != 1:
+                raise OfficialError("本群有多台可查询的服务器，请用 -s 指定：\n"
+                                    "/排行 时长 周 -s <服务器名>")
+        else:
+            raise OfficialError("尚未开放该只读命令。")
         if command in ("status", "tps"):
-            if parts:
-                raise OfficialError("用法：/mc status [-s 服务器名] 或 /mc tps [-s 服务器名]")
-            lines = []
             semaphore = asyncio.Semaphore(4)
             async def one(server):
                 async with semaphore:
                     return await self._server(command, server, token, group["policy"])
-            for result in await asyncio.gather(*(one(server) for server in targets)):
-                lines.extend(result)
-            return "服务器在线状态" if command == "status" else "服务器 TPS", lines
+            lines, data = [], []
+            for rows, structured in await asyncio.gather(*(one(server) for server in targets)):
+                lines.extend(rows)
+                data.append(structured)
+            title = "服务器在线状态" if command == "status" else "服务器 TPS"
+            return QueryDocument(command, title, lines, data)
         if command == "stats":
-            if len(parts) != 1 or not PLAYER_RE.fullmatch(parts[0]):
-                raise OfficialError("用法：/mc stats <1–16 位游戏名> [-s 服务器名]")
             errors = []
             for server in targets:
                 try:
@@ -173,17 +234,21 @@ class QueryService:
                                        datetime.fromtimestamp(self.clock(), timezone.utc).date())
             raise OfficialError("查询未完成：" + "；".join(errors)[:600])
         if command == "rank":
-            return await self._rank(parts,targets[0],token,group.get("self_games"),group.get("self_games_note"))
+            title, lines, doc = await self._rank(parts, targets[0], token,
+                                                 group.get("self_games"), group.get("self_games_note"))
+            return QueryDocument("rank", title, lines, doc)
         raise OfficialError("尚未开放该只读命令。")
 
     async def _server(self, command, server, token, policy):
+        name = server["name"]
         try:
             if command == "tps":
                 if server["api_port"] is None:
-                    return [f"{server['name']} · 未配置模组 API"]
+                    return [f"{name} · 未配置模组 API"], {"name": name, "tps": None}
                 data = await self.mod(server, token, "/api/tps")
                 tps = number(data.get("tps"), -1)
-                return [f"{server['name']} · TPS {tps:.2f}" if tps >= 0 else f"{server['name']} · TPS 暂不可用"]
+                return ([f"{name} · TPS {tps:.2f}" if tps >= 0 else f"{name} · TPS 暂不可用"],
+                        {"name": name, "tps": tps if tps >= 0 else None})
             source = "模组"
             try:
                 if server["api_port"] is None:
@@ -192,32 +257,47 @@ class QueryService:
             except OfficialError:
                 data = await self.status(server)
                 source = "mcstatus（玩家名单为采样）"
-            rows = [f"{server['name']} · {int(number(data.get('online_players')))}/{int(number(data.get('max_players')))} 人 · {source}"]
+            # 与 OneBot 的 /在线 卡片同构，交给共享的 draw_status_pages 绘图
+            card = {
+                "name": name,
+                "online": int(number(data.get("online_players"))),
+                "max": int(number(data.get("max_players"))),
+                "version": clean(data.get("version", "未知"), 60),
+                "latency": number(data["latency"]) if "latency" in data else None,
+                "remark": server.get("remark") or "",
+                "last_activity_time": number(data.get("last_activity_time")),
+                "players": [{"name": clean(p.get("name"), 32), "uuid": p.get("uuid"),
+                             "is_premium": p.get("is_premium", True)}
+                            for p in (data.get("players") or [])
+                            if isinstance(p, dict) and p.get("name")],
+                "error": None,
+            }
+            rows = [f"{name} · {card['online']}/{card['max']} 人 · {source}"]
             if policy["show_server_version"]:
-                rows.append("版本：" + clean(data.get("version", "未知"), 60))
-            if policy["show_server_latency"] and "latency" in data:
-                rows.append(f"延迟：{number(data['latency']):.0f} ms")
+                rows.append("版本：" + card["version"])
+            if policy["show_server_latency"] and card["latency"] is not None:
+                rows.append(f"延迟：{card['latency']:.0f} ms")
             players = data.get("players", [])
             names = [clean(p.get("name"), 32) for p in players[:100] if isinstance(p, dict)] if isinstance(players, list) else []
             if names:
                 rows.append("玩家：" + "、".join(names))
             if policy["show_last_online"]:
-                timestamp=number(data.get("last_activity_time"))
-                player=data.get("last_activity_player")
-                if timestamp>0 and isinstance(player,str) and PLAYER_RE.fullmatch(player):
-                    elapsed=max(0,int(self.clock()-timestamp/1000))
-                    shown=(f"{elapsed//86400}天前" if elapsed>=86400 else f"{elapsed//3600}小时前" if elapsed>=3600
-                        else f"{elapsed//60}分钟前" if elapsed>=60 else "刚刚")
+                timestamp = card["last_activity_time"]
+                player = data.get("last_activity_player")
+                if timestamp > 0 and isinstance(player, str) and PLAYER_RE.fullmatch(player):
+                    elapsed = max(0, int(self.clock() - timestamp / 1000))
+                    shown = (f"{elapsed//86400}天前" if elapsed >= 86400 else f"{elapsed//3600}小时前" if elapsed >= 3600
+                             else f"{elapsed//60}分钟前" if elapsed >= 60 else "刚刚")
                     rows.append(f"最后活动：{player} · {shown}")
                 else:
                     rows.append("最后活动：当前数据源没有可靠记录")
-            if server["remark"]:
-                rows.append("备注：" + clean(server["remark"], 80))
-            if data.get("storage_type")=="qq_official" and data.get("binding_ready") is False:
+            if card["remark"]:
+                rows.append("备注：" + clean(card["remark"], 80))
+            if data.get("storage_type") == "qq_official" and data.get("binding_ready") is False:
                 rows.append("绑定运行条件暂未齐备；在线和统计查询独立可用。")
-            return rows + [""]
+            return rows + [""], card
         except OfficialError as error:
-            return [f"{server['name']} · {error}", ""]
+            return [f"{name} · {error}", ""], {"name": name, "error": str(error)}
 
     async def _rank(self,parts,server,token,self_games=None,self_games_note=None):
         limit = 10
@@ -274,7 +354,11 @@ class QueryService:
             lines.extend(["本人在本权威范围内的有效账号："]+personal if personal else ["本人有效账号在此排行窗口内无记录。" if self_games else "本人在当前权威范围内尚无有效绑定。"])
         elif self_games_note:
             lines.append(self_games_note)
-        return f"{kind} · {window}榜", lines
+        # 与 OneBot 排行榜共用同一构建器，保证出图一致（文字行仍按官方口径）
+        type_label = "击杀生物" if kind == "击杀" else kind
+        doc = build_doc(server["name"], type_label, window, limit, players,
+                        list(self_games) if self_games else [])
+        return f"{kind} · {window}榜", lines, doc
 
 
 def render_text_pages(title, lines):
@@ -355,3 +439,87 @@ def render_statistics_pages(document):
     if len(payload) > 3 * 1024 * 1024:
         raise OfficialError("统计图片编码体积过大，请改用分页文字。")
     return [payload]
+
+
+def _encode_png(image):
+    from io import BytesIO
+    stream = BytesIO()
+    image.save(stream, format="PNG", compress_level=6)
+    payload = stream.getvalue()
+    if len(payload) > 4 * 1024 * 1024:
+        raise OfficialError("图片体积超过上限，请缩小查询范围。")
+    return payload
+
+
+async def render_official_pages(document, policy):
+    """用与 OneBot 完全相同的生成器渲染状态 / TPS / 排行图。
+
+    生成器按需下载玩家头像，与 OneBot 行为一致。仅在默认渲染器下调用；
+    测试注入的假渲染器仍走 renderer(title, lines) 分支。生成器带 AstrBot
+    依赖，故在此惰性导入，避免影响官方模块的纯逻辑隔离。
+    """
+    policy = policy or {}
+    if document.kind == "status":
+        from ..features.player_status.image_generator import draw_status_pages
+        images = await draw_status_pages(
+            document.data,
+            show_last_online=bool(policy.get("show_last_online")),
+            show_version=bool(policy.get("show_server_version")),
+            show_latency=bool(policy.get("show_server_latency")))
+        return [_encode_png(image) for image in images]
+    if document.kind == "tps":
+        from ..features.player_status.tps_image_generator import draw_tps_image
+        image = await asyncio.to_thread(draw_tps_image, document.data)
+        return [_encode_png(image)]
+    if document.kind == "rank":
+        from ..features.leaderboard.image_generator import draw_leaderboard_image
+        image = await draw_leaderboard_image(document.data)
+        return [_encode_png(image)]
+    raise OfficialError("不支持的图片渲染类型。")
+
+
+async def render_statistics_pages_async(document):
+    """与 OneBot 统计图一致：先下载头像，再交给同一生成器。"""
+    from ..features.player_status.player_stats_generator import draw_player_stats_image
+    avatar = None
+    try:
+        import aiohttp
+        from ..utils.avatar_cache import download_avatar
+        async with aiohttp.ClientSession() as session:
+            avatar = await download_avatar(session, document.player_name, 72,
+                                           is_premium=None, uuid=None)
+    except Exception:
+        avatar = None
+    image = await asyncio.to_thread(
+        draw_player_stats_image, document.data, document.player_name,
+        server_name=document.server_name,
+        is_online=document.data.get("online", False),
+        avatar_img=avatar, snapshots=document.snapshots, today=document.today)
+    return [_encode_png(image)]
+
+
+def render_official_help_image(kind="help"):
+    """生成官方群独立的帮助图（/mc help、/mc bindhelp）。
+
+    官方平台的登记、绑定与未决操作流程和 OneBot 不同，不再复用 OneBot 的
+    帮助图。只在默认渲染器下调用；测试注入的假渲染器仍走文本/自定义分支。
+    生成器带 AstrBot 依赖，故惰性导入，避免官方纯逻辑测试在 import 阶段受牵连。
+    """
+    from pathlib import Path
+    if kind == "bind":
+        from ..features.help_image.bind_help_generator import get_official_bind_help_image_path
+        path = get_official_bind_help_image_path()
+    else:
+        from ..features.help_image.official_help_generator import get_official_help_image_path
+        path = get_official_help_image_path()
+    payload = Path(path).read_bytes()
+    if len(payload) > 4 * 1024 * 1024:
+        raise OfficialError("帮助图片体积超过上限。")
+    return payload
+
+
+async def render_unbound_pages(unbound, info):
+    """与 OneBot /绑定检测 共用同一份未绑定名单图，返回编码后的 PNG 页。"""
+    from ..features.bindcheck_image.image_generator import draw_unbound_pages
+    images = await draw_unbound_pages(unbound, info)
+    return [_encode_png(image) for image in images]

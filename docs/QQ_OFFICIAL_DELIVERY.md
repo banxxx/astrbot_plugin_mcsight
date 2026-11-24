@@ -17,6 +17,7 @@
 | `/mc add/edit/del/hide/show …` | 当前管理员修改官方服务器条目，原子配置修订，持久事件回执防重复 |
 | `/mc command <编号>` | 本人或本群管理员查询写命令回执，不重复执行正文 |
 | `/mc lastonline [开或关]` | 查看/修改最后活动显示，数据缺失明确提示；后台同一策略 |
+| `/mc guide [1|2]`、`/mc 命令指引` | 官方 Markdown + 自定义按钮菜单；点击只填入命令，仍需用户发送；页1为2列5行常用与帮助，页2为3列4行管理命令、需管理员且用 `/mc guide 2` 进入；明确拒绝时回退纯文本，未知结果不重发 |
 | `/mc batchadd 名称:主机[:API端口],…`、`batchremove 名1,名2` | 管理员整批校验、一次配置修订及持久防重，最多20项 |
 | `/mc move 名称 位置`、`swap 名1 名2` | 管理员排序，位置从0开始；服务器稳定标识不变 |
 | `/mc check @成员 -s 服`、`unbind @成员 -s 服` | 使用当前事件可靠mentions；他人完整关联/解绑限管理员，也可显式user官方标识 |
@@ -32,12 +33,13 @@
 
 - 插件仍只选一个官方实例和一个应用环境；官方群和玩家重新登记/绑定，禁止导入旧OneBot身份或表。
 - 插件数据目录中的 `qq_official/<environment_uuid>/center_settings.json`：中心模式使用 `examples/qq-official-center.json.example`；纯local使用 `examples/qq-official-local.json.example`。用户自行填写真实值。`enabled` 默认false，只在维护准备完成后改true。
+- 超管在官方群内用 `/mc whitelist add|remove @成员`、`/mc whitelist super add|remove @成员`、`/mc blacklist add|remove @成员` 维护的补充名单保存在 `qq_official/<environment_uuid>/access.json`，与 OneBot 共用的公共名单只读合并。该文件按群成员标识生效，换群需重新添加；备份/恢复官方配置时与 `state.json` 一并处理。官方列表命令与回执脱敏，不要求用户提供或回显 openid。
 - `storage_mode` 为默认模式，`server_modes` 是可选的稳定服务器UUID→hybrid/remote/local映射；空映射沿用默认值。它不是同群多身份域：中心分区仍必须共享同一账号体系，各local服是独立权威。官方环境不进行双平台双活。
 - hybrid/remote使用同一官方中心两表、相同结构核验和断库策略。remote现也持久保留自己的可信镜像/副作用待办；断库保留既有登录，暂停新增/解绑，不自动切换local权威。
 - local只使用本服单个官方原子状态文件；绑定、操作、预占墓碑和白名单/在线待办同次提交，不依赖中心。local不接受中心sync。配置中省略official.database，allowCenterSync=false。
 - 模组中心模板为 `QQBindMod/examples/qq-official-config.template.json`，remote将storageMode设为remote；local用 `QQBindMod/examples/qq-official-local.json.example`。环境、群标识和serverId必须与插件一致，中心模式allowCenterSync需显式true。
 - 新安装仅一次：用户先确认目标目录不存在，再设createFreshState=true启动初始化。此时业务不开放；完整停服、改false后再次启动。不删除已存在状态/选择标记来重建，更不能把local与center文件互换。local的权威目录在既定官方scope目录下额外使用 `local/` 隔离。
-- 控制台需模组独立consoleToken，与apiToken不能相同。插件按 `examples/qq-official-console-token.json.example` 手工放到 `qq_official/<环境>/console_tokens/<server_uuid>.json`；真实值只由用户本地处理。空令牌表示关闭。不要在QQ消息或对话中配置令牌。
+- 控制台需模组独立consoleToken，与apiToken不能相同。仅超级管理员可在群内用 `/mc token <服务器名> <Token>` 设置、用 `/mc token <服务器名> 清除` 关闭；Token 不会回显、不会写入日志，但消息本身会经过 QQ 平台，请自行评估。也可按 `examples/qq-official-console-token.json.example` 手工放到 `qq_official/<环境>/console_tokens/<server_uuid>.json`；真实值只由用户本地处理。空令牌表示关闭。
 - 普通后台页面不读取中心秘密来猜测整体就绪；运行条件逐次握手确认。capabilities必须通过本服名单桥/初始镜像和适用中心结构/读写权限核验后才声明就绪。
 
 ## 数据库DDL和权限
@@ -59,6 +61,7 @@
 - 每种计划部署的hybrid/remote/local分别完成一用户两账号、解绑A保留B、撤销后旧同步不复活、进程重启与数据库失联恢复。中心验证事务/锁/TLS/权限；local验证本服隔离及跨服部分失败。
 - 原生管理员解绑/查询/中止及原用户新消息恢复；不允许后台/其它管理员替QQ本人提交。
 - 官方WebSocket或Webhook实际权限/昵称/角色、分页文本、媒体上传与会话限制；权限不满足的功能应明确降级。
+- `/mc guide` 的 Markdown 自定义内容与自定义按钮需在 QQ 开放平台确认客户端版本和应用能力（自定义按钮当前为内邀 / 按钮模版能力）；验证群聊点击只填入命令而不自动发送、页2管理员限制、超管按钮显隐，以及平台明确拒绝时只回退一次纯文本。
 - 成员列表/详情为QQ内邀能力（未获权11253）；bindcheck/checknick有权时才可扫描，达到边界明确部分结果。群消息事件提供当前作者和mentions目标的member_nickname，插件对近期处理的群命令事件缓存5分钟；未发言且未被提及成员仍无法核验。列表接口username不冒充全群群名片；管理员撤权后旧管理分页失效。
 - 广播/控制台重复同事件或请求超时不重复执行，未知结果由管理员核对；控制台正文和输出不进入插件/模组API审计日志，MC本身及其它模组日志由用户另行核对。
 - 框架WebUI未登录/会话过期拒绝，官方配置与local服务器操作页、浏览器布局和弹层。离线Vue挂载不能代替浏览器验收。

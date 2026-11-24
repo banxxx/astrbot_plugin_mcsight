@@ -15,7 +15,7 @@ from .checker import (
 from ...config.whitelist_config import WhitelistManager
 from ...config.server_config import (
     REMARK_SRC_MOTD, clean_motd, effective_remark, motd_runs, remark_src_of,
-    visible_servers,
+    is_hidden, visible_servers,
 )
 from .player_stats_generator import draw_player_stats_image
 from ...utils.avatar_cache import download_avatar
@@ -157,11 +157,21 @@ def store_remark_motd(config_manager, entries: list, cards: list) -> None:
                     card["remark_runs"] = runs
 
 
-async def run_player_status(event: AstrMessageEvent, config_manager):
+async def run_player_status(event: AstrMessageEvent, config_manager, target_server=None):
     """获取在线玩家状态，统一使用模组 API，若失败则回退到 mcstatus"""
     all_entries = config_manager.get_all_servers()
     # 隐藏的条目连查询都不发（不是查完再跳过画图）：一台关着的服能白吃一轮超时
-    servers = visible_servers(all_entries)
+    if target_server is not None:
+        target = next((s for s in all_entries if s["name"] == target_server), None)
+        if target is None:
+            yield event.plain_result(f"未找到名为「{target_server}」的服务器。")
+            return
+        if is_hidden(target):
+            yield event.plain_result(f"服务器「{target_server}」不参与在线状态查询。")
+            return
+        servers = [target]
+    else:
+        servers = visible_servers(all_entries)
     if not servers:
         yield event.plain_result(
             "还没有添加任何服务器。" if not all_entries
@@ -331,14 +341,17 @@ async def run_player_stats(event: AstrMessageEvent, config_manager, player_name:
         if not target_srv:
             yield event.plain_result(f"未找到名为「{target_server}」的服务器，请检查配置。")
             return
+        if is_hidden(target_srv):
+            yield event.plain_result(f"服务器「{target_server}」不参与统计查询。")
+            return
         if not wm.has_mod_api(target_srv):
             yield event.plain_result(f"服务器「{target_server}」未安装模组，无法查询统计数据。")
             return
         targets = [target_srv]
     else:
-        targets = [s for s in servers if wm.has_mod_api(s)]
+        targets = [s for s in servers if wm.has_mod_api(s) and not is_hidden(s)]
         if not targets:
-            yield event.plain_result("没有安装模组的服务器，无法查询统计数据。")
+            yield event.plain_result("没有可查询的服务器（需安装模组且未隐藏）。")
             return
 
     # ---- 统一使用模组 API ----

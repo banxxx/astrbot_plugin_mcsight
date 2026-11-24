@@ -30,6 +30,10 @@ REGISTER_GAP = 30
 SETUP_TTL = 300
 SETUP_KEEP = 3600
 MAX_SETUP_CODES = 10
+# 官方群内按 @成员 维护的补充名单；只存本环境目录，不写 OneBot 共用的公共名单。
+ACCESS_LIST_KEYS = ("super_admins", "whitelist_admins", "blacklist")
+MAX_ACCESS_ENTRIES = 200
+ACCESS_FILE_LIMIT = 64 * 1024
 SETUP_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 SETUP_CODE_RE = re.compile(r"^[A-HJ-NP-Z2-9]{6}$")
 SETUP_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -264,18 +268,18 @@ class OfficialStore:
             overrides = None
         return default_policy(overrides)
 
-    def access_lists(self):
-        """读取公共超级管理员/白名单管理员/黑名单，统一成字符串集合。坏值按空处理。"""
+    def _public_access_lists(self):
+        """读取 OneBot 共用的公共名单；只读，官方命令不会改写这里。"""
+        result = {key: frozenset() for key in ACCESS_LIST_KEYS}
         if not callable(self.access_provider):
-            return {}
+            return result
         try:
             data = self.access_provider()
         except Exception:
-            return {}
+            return result
         if not isinstance(data, dict):
-            return {}
-        result = {}
-        for key in ("super_admins", "whitelist_admins", "blacklist"):
+            return result
+        for key in ACCESS_LIST_KEYS:
             value = data.get(key, [])
             if isinstance(value, str):
                 value = re.split(r"[,，\s]+", value)
@@ -284,9 +288,74 @@ class OfficialStore:
             result[key] = frozenset(str(item).strip() for item in value if str(item).strip())
         return result
 
+    def _access_path(self, environment):
+        return self.root / uuid_value(environment) / "access.json"
+
+    def _load_official_access(self, environment):
+        """本官方环境专有的补充名单；坏文件失败关闭，不回落到空名单。"""
+        default = {"schema_version": 1, **{key: [] for key in ACCESS_LIST_KEYS}}
+        with self.lock:
+            data = read_json(self._access_path(environment), default, limit=ACCESS_FILE_LIMIT)
+            expected = {"schema_version", *ACCESS_LIST_KEYS}
+            if (not isinstance(data, dict) or data.get("schema_version") != 1
+                    or set(data) != expected):
+                raise OfficialError("官方群名单配置缺损或格式不受支持。")
+            result = {}
+            for key in ACCESS_LIST_KEYS:
+                value = data[key]
+                if not isinstance(value, list) or len(value) > MAX_ACCESS_ENTRIES:
+                    raise OfficialError("官方群名单配置缺损或格式不受支持。")
+                entries = set()
+                for item in value:
+                    entries.add(identifier(item))
+                result[key] = frozenset(entries)
+            return result
+
+    def access_lists(self, environment=None):
+        """公共名单 + 本官方环境按 @成员 添加的补充名单。"""
+        result = self._public_access_lists()
+        if environment is None:
+            return result
+        official = self._load_official_access(environment)
+        return {key: result[key] | official[key] for key in ACCESS_LIST_KEYS}
+
+    def access_membership(self, environment, key, target):
+        """返回目标是否在官方群补充名单 / OneBot 公共名单中，用于去重与移除提示。"""
+        if key not in ACCESS_LIST_KEYS:
+            raise OfficialError("名单类型无效。")
+        target = identifier(target)
+        official = self._load_official_access(environment)
+        public = self._public_access_lists()
+        return target in official[key], target in public[key]
+
+    def update_official_access(self, environment, key, target, add):
+        """只写本环境 access.json；不触碰 OneBot 共用的公共名单。"""
+        if key not in ACCESS_LIST_KEYS:
+            raise OfficialError("名单类型无效。")
+        target = identifier(target)
+        with self.lock:
+            current = self._load_official_access(environment)
+            values = set(current[key])
+            if add:
+                if target in values:
+                    return False
+                if len(values) >= MAX_ACCESS_ENTRIES:
+                    raise OfficialError(f"官方群名单最多 {MAX_ACCESS_ENTRIES} 项，请先清理。")
+                values.add(target)
+            else:
+                if target not in values:
+                    return False
+                values.discard(target)
+            payload = {"schema_version": 1}
+            for name in ACCESS_LIST_KEYS:
+                payload[name] = sorted(values if name == key else current[name])
+            atomic_json(self._access_path(environment), payload, limit=ACCESS_FILE_LIMIT)
+            return True
+
     def access_level(self, scope, group, environment_administrators=()):
         """官方权限判断的唯一入口：本群名单 + 公共名单 + 环境管理员。"""
-        return permission(scope, group, environment_administrators, self.access_lists())
+        return permission(scope, group, environment_administrators,
+                          self.access_lists(scope.environment_id))
 
     def _path(self, environment):
         return self.root / uuid_value(environment) / "state.json"

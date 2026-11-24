@@ -1,5 +1,6 @@
 from astrbot.api.event import AstrMessageEvent
-from ..config.server_config import ConfigManager, MAX_SERVERS_PER_GROUP, validate_remark, validate_server_name
+from ..config.server_config import (ConfigManager, MAX_SERVERS_PER_GROUP, is_hidden,
+                                    validate_remark, validate_server_name)
 from ..config.whitelist_config import WhitelistManager
 from ..utils.host_validator import normalize_host_input, validate_host
 from ..utils.permission import is_astrbot_super_admin
@@ -146,6 +147,21 @@ async def handle_add(event: AstrMessageEvent, config: ConfigManager, parts: list
     if host.endswith(":25565"):
         lines.append("提示：显式写了默认端口 25565；使用 SRV 的服务器建议只写域名。")
     yield event.plain_result("\n".join(lines))
+
+async def handle_hidden(event: AstrMessageEvent, config: ConfigManager, parts: list,
+                        *, hidden: bool):
+    """与官方 /mc hide|show 同一行为：只切换 hidden，不删条目、不动绑定与 Token。"""
+    if len(parts) < 2:
+        yield event.plain_result(f"用法: /mc {'hide' if hidden else 'show'} <名称>")
+        return
+    name = parts[1]
+    if not config.set_server_hidden(name, hidden):
+        yield event.plain_result(f"❌ 未找到名为「{name}」的服务器。")
+        return
+    yield event.plain_result(
+        f"✅ 已隐藏「{name}」，它不会再出现在查询和状态卡片中。" if hidden
+        else f"✅ 已取消隐藏「{name}」，它会重新参与查询和状态卡片。")
+
 
 async def handle_remove(event: AstrMessageEvent, config: ConfigManager, parts: list):
     if len(parts) < 2:
@@ -323,7 +339,8 @@ async def handle_list(event: AstrMessageEvent, config: ConfigManager):
             # 端口必须能真正拿来调模组才算「装了模组」，否则 /执行、/广播 的可用性会被说反
             port_display = (f" (模组端口: {wm.get_server_port(s)})"
                             if wm.has_mod_api(s) else " (未装模组)")
-            lines.append(f"{s['name']} -> {s['host']}{port_display}")
+            hidden = " （隐藏）" if is_hidden(s) else ""
+            lines.append(f"{s['name']} -> {s['host']}{port_display}{hidden}")
         yield event.plain_result("\n".join(lines))
 
 async def handle_move(event: AstrMessageEvent, config: ConfigManager, parts: list):

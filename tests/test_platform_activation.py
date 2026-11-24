@@ -383,7 +383,7 @@ class EntryIsolationTests(unittest.IsolatedAsyncioTestCase):
             ("online", "/在线", "/mc status"),
             ("query", "/查询 Player_A", "/mc stats Player_A"),
             ("rank", "/排行 时长", "/mc rank 时长"),
-            ("broadcast", "/广播 survival hello", "/mc say -s survival hello"),
+            ("broadcast", "/广播 survival hello", "/mc say survival hello"),
             ("exec_command", "/执行 [survival] say hello",
              "/mc exec [survival] say hello"),
             ("tps_command", "/tps -s survival", "/mc tps -s survival"),

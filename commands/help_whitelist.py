@@ -22,9 +22,9 @@ async def handle_whitelist(event: AstrMessageEvent, parts: list):
     if action == "list":
         msg_list = [
             "当前白名单配置：",
-            f"超级管理员：{', '.join(wm.super_admins) or '无'}",
-            f"白名单管理员：{', '.join(wm.whitelist_admins) or '无'}",
-            f"黑名单：{', '.join(wm.blacklist) or '无'}"
+            f"超级管理员：{', '.join(sorted(wm.super_admins)) or '无'}",
+            f"白名单管理员：{', '.join(sorted(wm.whitelist_admins)) or '无'}",
+            f"黑名单：{', '.join(sorted(wm.blacklist)) or '无'}"
         ]
         yield event.plain_result("\n".join(msg_list))
     elif action in ("add", "remove"):

@@ -11,6 +11,7 @@ from pathlib import Path
 from threading import Lock, RLock
 
 from .official_core import OfficialError, OfficialStore, PageCache, event_scope, uuid_value
+from .debounce import gate as debounce_gate, should_notify as debounce_notify, window_of as debounce_window
 from .official_binding_policy import OfficialBindingPolicy
 from .official_binding_service import OfficialBindingService
 from .official_binding_host import OfficialBindingHost
@@ -18,8 +19,10 @@ from .official_binding_commands import COMMANDS as BINDING_COMMANDS, OfficialBin
 from .official_binding_recovery import OfficialFollowupRecovery
 from .official_binding_admin import OfficialBindingAdmin
 from .official_bindings import BindingError
-from .official_queries import QueryService, StatisticsQuery, render_pages, render_text_pages, render_statistics_pages
-from .official_delivery import transport_for,checked_response
+from .official_queries import (QueryDocument, QueryService, StatisticsQuery, render_pages,
+                               render_text_pages, render_official_pages, render_statistics_pages_async,
+                               render_official_help_image, render_unbound_pages)
+from .official_delivery import OfficialApiError, transport_for, checked_response
 from .official_stats import OfficialStats
 from .official_writes import OfficialWriteCommands, COMMANDS as WRITE_COMMANDS
 from .official_members import OfficialMembers
@@ -32,23 +35,143 @@ HELP = ("MCSight · QQ 官方群\n"
         "/mc stats <游戏名> [-s 服务器名]：公开统计\n"
         "/mc rank [类型] [总|周|月] -s <服务器名> [-n 1–50]\n"
         "/mc page <页码>：查看最近查询的其它页\n"
+        "/mc guide [1|2]：命令指引按钮菜单（官方群；2 为管理员页）\n"
         "/mc bindhelp：查看官方绑定开放状态\n"
-        "/mc bind <六位码> [-s 服务器名]；/mc unbind <游戏名|all> [-s 服务器名]\n"
+        "/mc bind <六位码> [-s 服务器名]；/mc unbind [游戏名|all] [-s 服务器名]\n"
         "/mc check [游戏名|user 官方标识|@成员] [-s 服务器名|all]\n"
         "/mc operation <操作编号> [retry [原六位码]|cancel] [-s 服务器名]\n"
-        "/mc broadcast -s <服务器名|all> <内容>；/mc console -s <服务器名> <命令>\n"
+        "/mc broadcast [服务器名|all] <内容>（也可 -s）；/mc console [-s] <服务器名> <命令>\n"
         "/mc add|edit|del|hide|show：管理员维护服务器；/mc command <编号>：查询写操作回执\n"
         "/mc batchadd|batchremove|move|swap：批量和排序；/mc lastonline 开|关\n"
+        "/mc token <服务器名> <Token|清除>：设置该服控制台 Token；/mc whitelist list：查看权限名单（脱敏）\n"
+        "/mc whitelist add|remove @成员；/mc whitelist super add|remove @成员；/mc blacklist add|remove @成员\n"
         "/mc bindcheck [-s 服务器名]；/mc checknick；/mc nicknamecheck 开|关|忽略|取消忽略|忽略列表\n"
         "成员检测需要QQ平台内邀权限；只用可靠群昵称，缺失者标为无法核验。\n"
         "事件未提供群昵称时不以 username 代替，也不会因退群或名单缺失自动解绑。\n"
         "查询需后台启用本群；绑定按配置权威和模组握手门禁开放。控制台须本服独立令牌，未知结果不会自动重发。")
+
+TOKEN_CLEAR_WORDS = ("清除", "删除", "unset", "clear", "off")
+TOKEN_MIN_CHARS, TOKEN_MAX_CHARS = 16, 128
+
+ACCESS_LABELS = {
+    "super_admins": "超级管理员",
+    "whitelist_admins": "白名单管理员",
+    "blacklist": "黑名单",
+}
+ACCESS_ACTIONS = {
+    "add": "add", "添加": "add",
+    "remove": "remove", "del": "remove", "delete": "remove", "移除": "remove", "删除": "remove",
+}
+ACCESS_LIST_HELP = ("名单管理：/mc whitelist list；/mc whitelist add|remove @成员；"
+                    "/mc whitelist super add|remove @成员；/mc blacklist add|remove @成员。"
+                    "仅超级管理员可用，目标须 @ 唯一一位成员；成员标识按当前群生效。")
+
+
+def _mask_access_value(value):
+    """群内展示权限名单时脱敏；数字 QQ 与短标识完全不显示。"""
+    value = str(value)
+    if value.isdigit() or len(value) <= 8:
+        return "***"
+    return value[:3] + "…" + value[-3:]
+
+
+def _access_value_summary(values, limit=12):
+    values = sorted(values)
+    if not values:
+        return "无"
+    shown = [_mask_access_value(item) for item in values[:limit]]
+    if len(values) > limit:
+        shown.append(f"…等 {len(values)} 项")
+    return "、".join(shown)
+
+
+def _member_label(nickname):
+    nickname = (nickname or "").strip()[:32]
+    return f"「{nickname}」" if nickname else "该成员"
 
 BIND_HELP = ("QQ 官方群须重新配置和绑定，不沿用旧 OneBot 身份或记录。"
              "管理员按交付说明配置 hybrid、remote 或各服 local 权威；每次握手核对范围/结构/名单桥后开放绑定。"
              "未决操作由原请求人发送 /mc operation <完整编号> retry [-s 原服务器]；首次尚未预占可追加原六位码。"
              "中止用 cancel；local 查询须完整编号和原服务器，跨服结果逐服确认。"
              "管理员可 /mc check @成员 或 /mc unbind @成员 -s 原服；数字QQ号不当作官方身份。部署后仍须实际 QQ/MC/数据库验收。")
+
+GUIDE_BUTTON_TIPS = "请升级QQ客户端后重试"
+GUIDE_PAGE1_ROWS = (
+    (("status", "在线状态", "/mc status"), ("tps", "当前 TPS", "/mc tps")),
+    (("stats", "玩家统计", "/mc stats"), ("rank_duration", "时长排行", "/mc rank 时长")),
+    (("rank_death", "死亡排行", "/mc rank 死亡"), ("rank_kill", "击杀排行", "/mc rank 击杀生物")),
+    (("rank_fish", "钓鱼排行", "/mc rank 钓鱼"), ("check", "账号查询", "/mc check")),
+    (("help", "查看帮助", "/mc help"), ("bindhelp", "绑定帮助", "/mc bindhelp")),
+)
+GUIDE_PAGE2_ROWS = (
+    (("add", "添加服务器", "/mc add"), ("edit", "编辑服务器", "/mc edit"),
+     ("hide", "隐藏服务器", "/mc hide")),
+    (("show", "显示服务器", "/mc show"), ("lastonline_on", "开启上次在线", "/mc lastonline 开"),
+     ("lastonline_off", "关闭上次在线", "/mc lastonline 关")),
+    (("batchadd", "批量添加", "/mc batchadd"), ("move", "移动排序", "/mc move"),
+     ("swap", "交换排序", "/mc swap")),
+    (("broadcast", "广播", "/mc broadcast"), ("help", "查看帮助", "/mc help"),
+     ("bindhelp", "绑定帮助", "/mc bindhelp")),
+)
+
+
+def _guide_button(button_id, label, data, style=1):
+    """QQ 自定义按钮；群聊 type=2 只把 @机器人 + data 填入输入框，仍须用户发送。"""
+    if not isinstance(label, str) or not label or len(label) > 10:
+        raise OfficialError("命令指引按钮文字无效。")
+    if not isinstance(data, str) or not data.startswith("/mc "):
+        raise OfficialError("命令指引按钮数据无效。")
+    return {
+        "id": button_id,
+        "render_data": {"label": label, "visited_label": label, "style": style},
+        "action": {"type": 2, "permission": {"type": 2}, "data": data,
+                   "unsupport_tips": GUIDE_BUTTON_TIPS},
+    }
+
+
+def _guide_rows(page, level):
+    if page == 1:
+        rows = [list(row) for row in GUIDE_PAGE1_ROWS]
+    else:
+        if level < 3:
+            raise OfficialError("管理指引仅限本群管理员使用。")
+        rows = [list(row) for row in GUIDE_PAGE2_ROWS]
+    # QQ keyboard.content.rows 的每一项是 {"buttons": [...]}，不是裸按钮数组。
+    return [{"buttons": [_guide_button(*button) for button in row]} for row in rows]
+
+
+def _guide_markdown(page):
+    if page == 1:
+        return "\n".join([
+            "# MCSight · 命令指引",
+            "> 点击按钮只会填入命令，发送后执行",
+            "",
+            "***",
+            "",
+            "在线状态、TPS、玩家统计、排行榜、账号查询与帮助入口。多服务器时，排行榜需用 -s 指定服务器。",
+        ])
+    return "\n".join([
+        "# MCSight · 管理指引",
+        "> 仅群管理员可用，点击按钮填入命令后发送",
+        "",
+        "***",
+        "",
+        "服务器维护、批量排序与运行管理。上次在线开关也在这里。",
+    ])
+
+
+def _guide_text(rows):
+    lines = ["当前客户端未能加载命令按钮，可直接发送以下命令："]
+    for row in rows:
+        labels = []
+        for button in row.get("buttons", ()):
+            label = button.get("render_data", {}).get("label", "")
+            data = button.get("action", {}).get("data", "")
+            if data:
+                labels.append(f"{label} {data}")
+        if labels:
+            lines.append(" · ".join(labels))
+    return "\n".join(lines)[:1800]
 
 
 def _unique_object(pairs):
@@ -165,6 +288,7 @@ class OfficialSender:
         self.api = None
         self.transport = transport_for(event)
         self.message_attempts=0
+        self.last_message_rejected=False
         bot = getattr(event, "bot", None)
         for target in (getattr(bot, "api", None), bot):
             if callable(getattr(target, "post_group_message", None)):
@@ -207,6 +331,12 @@ class OfficialSender:
             if method == "post_group_message" and not isinstance(result.get("id"), str):
                 raise OfficialError("官方群消息缺少回执，结果待确认；本次不重发。")
             return result
+        except OfficialApiError as error:
+            # An explicit rejection proves this message was not accepted, so a
+            # plain-text fallback cannot duplicate a visible reply.
+            if method == "post_group_message" and error.rejected:
+                self.last_message_rejected = True
+            raise
         except OfficialError:
             raise
         except Exception:
@@ -217,12 +347,21 @@ class OfficialSender:
         return self.record["sequence"]
 
     def can_fallback_text(self):
-        # An upload has srv_send_msg=false, so even an unknown upload cannot
-        # already have posted a visible reply. Never repeat a message POST.
-        return self.message_attempts==0 and self.record["calls"]<4 and time.monotonic()<self.record["expires"]
+        # An upload has srv_send_msg=false. A message POST is only safe to
+        # replace when the platform explicitly rejected that single attempt.
+        no_visible_message = (self.message_attempts==0
+                              or (self.message_attempts==1 and self.last_message_rejected))
+        return no_visible_message and self.record["calls"]<4 and time.monotonic()<self.record["expires"]
 
     async def text(self, value):
         return await self._call("post_group_message", content=value[:1800], msg_type=0,
+                                msg_id=self.scope.message_id, msg_seq=self._sequence())
+
+    async def markdown(self, content, rows):
+        """Markdown + 自定义按钮；content 必须为空字段，不能同时发 content 文本。"""
+        return await self._call("post_group_message", msg_type=2,
+                                markdown={"content": content[:4000]},
+                                keyboard={"content": {"rows": rows}},
                                 msg_id=self.scope.message_id, msg_seq=self._sequence())
 
     async def image(self, payload):
@@ -263,6 +402,7 @@ class OfficialRuntime:
         self.sampling = False
         self.last_sample = None
         self.help_image = None
+        self.bind_help_image = None
         self.binding_host = OfficialBindingHost(self.store, lambda: None if self.closed else self.selection(),
                                                 center_defaults=center_defaults)
         self.binding_commands = OfficialBindingCommands(self.binding_host)
@@ -367,6 +507,16 @@ class OfficialRuntime:
             command = parsed[0].lower() if parsed else "help"
             command={"say":"broadcast","remove":"del"}.get(command,command)
             arguments = parsed[1] if len(parsed) > 1 else ""
+            # 与 OneBot 同一套防抖窗口：按用户 + 命令分档；超级管理员不受限。
+            level = self.store.access_level(scope, group, environment_admins) if group is not None else 0
+            if level < 4 and command != "setup":
+                debounce_cmd = {"broadcast":"say","del":"remove","console":"exec"}.get(command, command)
+                allowed, remaining = debounce_gate(scope.key, scope.user_id, debounce_cmd)
+                if not allowed:
+                    if debounce_notify(scope.key, scope.user_id, debounce_cmd):
+                        await sender.text(f"该命令 {debounce_window(debounce_cmd):.0f} 秒内只能"
+                                          f"使用一次，请 {remaining} 秒后再试。")
+                    return
             if command == "setup":
                 code = arguments.split(maxsplit=1)[0] if arguments.strip() else ""
                 if not code:
@@ -386,6 +536,22 @@ class OfficialRuntime:
                     await sender.text(f"本群已配置「{name}」，无需重复登记。")
                 return
             if command == "bindhelp":
+                # 官方群使用独立绑定帮助图；注入的测试渲染器仍走文本分支。
+                if self._supports_images(sender) and self.renderer is render_pages:
+                    if self.bind_help_image is None:
+                        try:
+                            self.bind_help_image = await asyncio.to_thread(
+                                render_official_help_image, "bind")
+                        except Exception:
+                            self.bind_help_image = None
+                    if self.bind_help_image is not None:
+                        try:
+                            await sender.image(self.bind_help_image)
+                            return
+                        except OfficialError:
+                            # 图片消息结果不明时不重发文字，避免重复可见回复。
+                            if isinstance(sender, OfficialSender) and not sender.can_fallback_text():
+                                raise
                 await sender.text(BIND_HELP)
                 return
             if command == "help":
@@ -397,9 +563,14 @@ class OfficialRuntime:
                 if self._supports_images(sender):
                     if self.help_image is None:
                         try:
-                            help_pages = await asyncio.to_thread(self.renderer, "MCSight 官方命令帮助", HELP.splitlines()[1:])
-                            if len(help_pages) == 1 and len(help_pages[0]) <= 3 * 1024 * 1024:
-                                self.help_image = help_pages[0]
+                            if self.renderer is render_pages:
+                                # 官方群使用独立帮助图，包含 setup / operation 等官方命令。
+                                self.help_image = await asyncio.to_thread(
+                                    render_official_help_image, "help")
+                            else:
+                                help_pages = await asyncio.to_thread(self.renderer, "MCSight 官方命令帮助", HELP.splitlines()[1:])
+                                if len(help_pages) == 1 and len(help_pages[0]) <= 3 * 1024 * 1024:
+                                    self.help_image = help_pages[0]
                         except Exception:
                             pass  # No outgoing request yet; the full help text is available.
                     if self.help_image is not None:
@@ -417,9 +588,15 @@ class OfficialRuntime:
                     sender.revalidate = help_revalidate
                 await sender.text(HELP)
                 return
-            if group is None or not group["enabled"]:
+            if command in ("guide", "命令指引", "指引"):
+                await self._guide_command(scope, sender, arguments, group, page_revision[1])
+                return
+            if group is None:
                 await sender.text("本官方群尚未启用。请在后台「新增群」生成验证码，"
                                   "再在群内发送 /mc setup 验证码。")
+                return
+            if not group["enabled"]:
+                await sender.text("本群功能已关闭，请在后台「群与服务器 → 本群规则」中启用本群功能。")
                 return
             if command in BINDING_COMMANDS:
                 await self._binding_command(scope, sender, command, arguments, group, page_revision)
@@ -451,11 +628,26 @@ class OfficialRuntime:
                 await sender.text(pages[0])
                 if len(pages)>1:await sender.text("继续查看：/mc page 2（10分钟内有效）")
                 return
-            if command not in ("status", "tps", "stats", "rank", "page", "list"):
-                await sender.text("该功能尚未在 QQ 官方模式开放。可使用 /mc help 查看当前能力。")
+            if command in ("whitelist", "blacklist"):
+                await self._access_list_command(scope, sender, command, arguments, group, page_revision)
+                return
+            if command == "token":
+                await self._token_command(scope, sender, arguments, group, page_revision)
                 return
             if command == "list":
-                await sender.text("本群服务器：\n" + "\n".join(s["name"] for s in group["servers"] if not s["hidden"]))
+                if not group["servers"]:
+                    await sender.text("当前没有任何服务器。")
+                    return
+                lines = ["已添加的服务器："]
+                for entry in group["servers"]:
+                    port = (f" (模组端口: {entry['api_port']})" if entry["api_port"] is not None
+                            else " (未装模组)")
+                    hidden = " （隐藏）" if entry["hidden"] else ""
+                    lines.append(f"{entry['name']} -> {entry['host']}{port}{hidden}")
+                await sender.text("\n".join(lines))
+                return
+            if command not in ("status", "tps", "stats", "rank", "page"):
+                await sender.text(f"未知子命令: {command}，使用 /mc help 查看帮助。")
                 return
             if command == "page":
                 try:
@@ -463,46 +655,35 @@ class OfficialRuntime:
                 except ValueError:
                     raise OfficialError("用法：/mc page <页码>") from None
             else:
-                if scope.key in self.busy:
-                    raise OfficialError("上一条查询仍在处理中，请稍后重试。")
-                if len(self.busy) >= 16:
-                    raise OfficialError("当前查询较多，请稍后重试。")
-                now = time.monotonic()
-                if now - self.last_queries.get(scope.key, -100) < 5:
-                    raise OfficialError("查询间隔至少 5 秒，请稍后重试。")
-                if len(self.last_queries) >= 4096:
-                    self.last_queries.popitem(last=False)
-                self.last_queries[scope.key] = now
-                self.busy.add(scope.key)
-                try:
-                    self.environment(scope.environment_id, active=True)
-                    token = self.store.runtime_token(scope.environment_id) if any(s["api_port"] is not None and not s["hidden"] for s in group["servers"]) else ""
-                    query_group = dict(group, environment_id=scope.environment_id)
-                    if command=="rank":
-                        try:
-                            games=await asyncio.to_thread(self.binding_commands.owned_games,scope,arguments)
-                            query_group["self_games"]=games
-                        except Exception:
-                            query_group["self_games"]=None
-                            query_group["self_games_note"]="本人绑定暂不可读取；本页继续展示公开排行。"
-                    document = await asyncio.wait_for(self.queries.query(command, arguments, query_group, token), timeout=45)
-                    title, lines = document
-                    self.environment(scope.environment_id, active=True)
-                    text_pages = render_text_pages(title, lines)
-                    pages = []
-                    if self._supports_images(sender):
-                        try:
-                            if isinstance(document, StatisticsQuery) and self.renderer is render_pages:
-                                pages = await asyncio.to_thread(render_statistics_pages, document)
-                            else:
-                                pages = await asyncio.to_thread(self.renderer, title, lines)
-                        except Exception:
-                            pages = []
-                    self.environment(scope.environment_id, active=True)
-                    self.pages.put(scope, page_revision, pages, text_pages)
-                    index = 1
-                finally:
-                    self.busy.discard(scope.key)
+                self.environment(scope.environment_id, active=True)
+                token = self.store.runtime_token(scope.environment_id) if any(s["api_port"] is not None and not s["hidden"] for s in group["servers"]) else ""
+                query_group = dict(group, environment_id=scope.environment_id)
+                if command=="rank":
+                    try:
+                        games=await asyncio.to_thread(self.binding_commands.owned_games,scope,arguments)
+                        query_group["self_games"]=games
+                    except Exception:
+                        query_group["self_games"]=None
+                        query_group["self_games_note"]="本人绑定暂不可读取；本页继续展示公开排行。"
+                document = await asyncio.wait_for(self.queries.query(command, arguments, query_group, token), timeout=45)
+                title, lines = document
+                self.environment(scope.environment_id, active=True)
+                text_pages = render_text_pages(title, lines)
+                pages = []
+                if self._supports_images(sender):
+                    try:
+                        if self.renderer is render_pages and isinstance(document, StatisticsQuery):
+                            pages = await render_statistics_pages_async(document)
+                        elif self.renderer is render_pages and isinstance(document, QueryDocument):
+                            # 与 OneBot 共用同一套状态 / TPS / 排行生成器
+                            pages = await render_official_pages(document, group.get("policy"))
+                        else:
+                            pages = await asyncio.to_thread(self.renderer, title, lines)
+                    except Exception:
+                        pages = []
+                self.environment(scope.environment_id, active=True)
+                self.pages.put(scope, page_revision, pages, text_pages)
+                index = 1
             # 请求期间的停用、权限撤销或修订变化不能继续发送旧结果。
             self.environment(scope.environment_id, active=True)
             def revalidate():
@@ -559,6 +740,203 @@ class OfficialRuntime:
                 except OfficialError:
                     pass
 
+    def _access_mutex(self):
+        lock = getattr(self, "_access_mutex_obj", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._access_mutex_obj = lock
+        return lock
+
+    async def _send_access_lists(self, sender, scope, keys):
+        access = self.store.access_lists(scope.environment_id)
+        lines = ["当前权限名单（公共 + 本环境补充，已脱敏）："]
+        for key in keys:
+            lines.append(f"{ACCESS_LABELS[key]}：" + _access_value_summary(access.get(key, ())))
+        lines.append("官方成员标识按群精确匹配，换群后需重新 @成员 添加；增删请 @ 成员操作。")
+        await sender.text("\n".join(lines))
+
+    async def _guide_command(self, scope, sender, arguments, group, environment_admins):
+        """官方群专用 Markdown + 按钮菜单；群聊点击只填入命令，仍需用户发送。"""
+        text = arguments.strip()
+        try:
+            page = int(text or "1")
+        except ValueError:
+            await sender.text("用法：/mc guide [1|2]（也可发送 /mc 命令指引）")
+            return
+        if page not in (1, 2):
+            await sender.text("用法：/mc guide [1|2]（1=常用，2=管理）")
+            return
+        level = (self.store.access_level(scope, group, environment_admins)
+                 if group is not None else 0)
+        if page == 2:
+            if group is None:
+                await sender.text("本官方群尚未启用。请先完成 /mc setup 登记并由后台启用本群。")
+                return
+            if not group["enabled"]:
+                await sender.text("本群功能已关闭，请在后台「群与服务器 → 本群规则」中启用本群功能。")
+                return
+            if level < 3:
+                await sender.text("权限不足：管理指引仅限本群管理员使用。")
+                return
+        rows = _guide_rows(page, level)
+        markdown = _guide_markdown(page)
+
+        def guide_revalidate():
+            self.environment(scope.environment_id, active=True)
+            state = self.store.list_state(scope.environment_id)
+            latest = next((g for g in state["groups"] if g["group_openid"] == scope.group_id), None)
+            current = (self.store.access_level(scope, latest, state["environment_administrators"])
+                       if latest is not None else 0)
+            if latest is not None and current == 0:
+                raise OfficialError("当前身份已被禁止使用本群插件。")
+            if page == 2 and (latest is None or not latest["enabled"] or current < 3
+                              or latest["revision"] != group["revision"]
+                              or tuple(sorted(state["environment_administrators"])) != environment_admins):
+                raise OfficialError("当前群管理权限或配置已变化，请重新发送 /mc guide 2。")
+        guide_revalidate()
+        if isinstance(sender, OfficialSender):
+            sender.revalidate = guide_revalidate
+        try:
+            await sender.markdown(markdown, rows)
+        except OfficialApiError as error:
+            # Only an explicit rejection proves Markdown was not delivered; an
+            # unknown/pending result must never post a duplicate text reply.
+            if (not error.rejected or not isinstance(sender, OfficialSender)
+                    or not sender.can_fallback_text()):
+                raise
+            await sender.text(_guide_text(rows))
+
+    async def _access_list_command(self, scope, sender, command, arguments, group, page_revision):
+        """官方群专属：按 @成员 维护本环境补充名单，不读写 OneBot 公共名单。"""
+        if self.store.access_level(scope, group, page_revision[1]) < 4:
+            await sender.text("权限不足：该命令仅限超级管理员使用。")
+            return
+        words = arguments.split()
+        first = words[0].lower() if words else ""
+        if command == "blacklist":
+            if not words:
+                await sender.text("用法：/mc blacklist list；/mc blacklist add|remove @成员")
+                return
+            if first in ("list", "列表"):
+                await self._send_access_lists(sender, scope, ("blacklist",))
+                return
+            key, action_word = "blacklist", first
+        else:
+            if not words:
+                await sender.text(ACCESS_LIST_HELP)
+                return
+            if first in ("list", "列表"):
+                await self._send_access_lists(sender, scope, ("super_admins", "whitelist_admins", "blacklist"))
+                return
+            if first == "super":
+                if len(words) < 2:
+                    await sender.text(ACCESS_LIST_HELP)
+                    return
+                key, action_word = "super_admins", words[1].lower()
+            else:
+                key, action_word = "whitelist_admins", first
+        action = ACCESS_ACTIONS.get(action_word)
+        if action is None:
+            await sender.text(ACCESS_LIST_HELP)
+            return
+        if len(scope.mentions) != 1:
+            await sender.text("请 @ 唯一一位成员来指定目标；为避免泄露，不接受直接输入官方标识。")
+            return
+        target = scope.mentions[0]
+        if action == "add" and key == "blacklist" and target == scope.user_id:
+            await sender.text("不能把自己加入黑名单。")
+            return
+        if action == "remove" and key == "super_admins" and target == scope.user_id:
+            await sender.text("不能把自己从超级管理员名单移除。")
+            return
+        label = ACCESS_LABELS[key]
+        who = _member_label(dict(scope.mention_nicknames).get(target))
+        is_environment_admin = target in set(page_revision[1])
+        async with self._access_mutex():
+            in_official, in_public = self.store.access_membership(scope.environment_id, key, target)
+            if action == "add":
+                in_blacklist = False
+                if key != "blacklist":
+                    in_blacklist = any(self.store.access_membership(
+                        scope.environment_id, "blacklist", target))
+                if in_official:
+                    message = f"{who}已在{label}名单中。"
+                elif in_public:
+                    message = f"{who}已在公共{label}名单中（由 WebUI 管理），无需重复添加。"
+                elif in_blacklist:
+                    message = f"{who}当前在黑名单中，黑名单优先；请先移除黑名单。"
+                elif is_environment_admin and key == "super_admins":
+                    message = f"{who}已是本环境管理员，权限已高于{label}名单。"
+                else:
+                    self.store.update_official_access(scope.environment_id, key, target, True)
+                    message = f"✅ 已添加{who}到{label}名单（仅当前官方群生效）。"
+            else:
+                if in_official:
+                    self.store.update_official_access(scope.environment_id, key, target, False)
+                    message = f"✅ 已从{label}名单移除{who}。"
+                    if in_public:
+                        message += f"\n注意：{who}仍在 WebUI 公共名单中，权限不会降低；请在 WebUI 修改。"
+                    elif key == "super_admins" and is_environment_admin:
+                        message += "\n注意：该成员仍是本环境管理员，权限不会降低。"
+                elif in_public:
+                    message = f"{who}来自 WebUI 公共名单，官方群命令不能移除；请在 WebUI 修改。"
+                else:
+                    message = f"{who}不在{label}名单中。"
+        await sender.text(message)
+
+    async def _token_command(self, scope, sender, arguments, group, page_revision):
+        """与 OneBot /mc token 同一套语法与校验：每服 console token，仅超管可改。"""
+        def guard():
+            self.environment(scope.environment_id, active=True)
+            state = self.store.list_state(scope.environment_id)
+            latest = next((g for g in state["groups"] if g["group_openid"] == scope.group_id), None)
+            if (latest is None or not latest["enabled"] or latest["revision"] != group["revision"]
+                    or tuple(sorted(state["environment_administrators"])) != page_revision[1]
+                    or self.store.access_level(scope, latest, state["environment_administrators"]) < 4):
+                raise OfficialError("当前群管理权限或配置已变化，停止修改命令 Token。")
+        guard()
+        words = arguments.split()
+        if len(words) < 2:
+            await sender.text("用法:\n"
+                              "/mc token <服务器名> <Token>   为该服设置命令 Token\n"
+                              "/mc token <服务器名> 清除      关闭该服的 /执行")
+            return
+        name, value = words[0], words[1]
+        target = next((s for s in group["servers"] if s["name"] == name), None)
+        if target is None:
+            await sender.text(f"未找到名为「{name}」的服务器。")
+            return
+        clearing = value in TOKEN_CLEAR_WORDS or value.lower() in TOKEN_CLEAR_WORDS
+        token = "" if clearing else value
+        if not clearing:
+            if len(token) < TOKEN_MIN_CHARS:
+                await sender.text(f"❌ 设置失败：Token 太短（至少 {TOKEN_MIN_CHARS} 个字符），当前 {len(token)} 个")
+                return
+            if len(token) > TOKEN_MAX_CHARS:
+                await sender.text(f"❌ 设置失败：Token 太长（最多 {TOKEN_MAX_CHARS} 个字符），当前 {len(token)} 个")
+                return
+            if any(ord(c) < 0x21 or ord(c) > 0x7e for c in token):
+                await sender.text("❌ 设置失败：Token 只能由不含空格的可见字符组成")
+                return
+        guard()
+        try:
+            self.store.save_console_token(scope.environment_id, group["config_id"],
+                                          target["server_id"], group["revision"], token)
+        except OfficialError as error:
+            await sender.text(f"❌ 设置失败：{error}")
+            return
+        guard()
+        if isinstance(sender, OfficialSender):
+            sender.revalidate = guard
+        if clearing:
+            await sender.text(f"✅ 已清除「{name}」的命令 Token，该服务器的 /执行 已关闭。")
+            return
+        reply = (f"✅ 已为「{name}」设置命令 Token（{len(token)} 个字符）。\n"
+                 f"需与该服务器模组的 consoleToken 完全一致；模组侧改动要重启服务器才生效。")
+        if target["api_port"] is None:
+            reply += f"\n⚠️ 该服务器还没有配置 API 端口，先用 /mc edit {name} port <端口> 补上。"
+        await sender.text(reply)
+
     async def _binding_command(self, scope, sender, command, arguments, group, page_revision):
         minimum_permission = 3 if self.store.access_level(scope, group, page_revision[1]) >= 3 else 1
         if scope.key in self.busy or len(self.busy) >= 16:
@@ -602,17 +980,56 @@ class OfficialRuntime:
         if scope.key in self.busy or len(self.busy)>=16:raise OfficialError("当前请求较多，请稍后重试。")
         self.busy.add(scope.key)
         try:
+            # 与 OneBot 相同的进度提示；扫描可能持续数十秒。
+            try:
+                await sender.text("🔍 正在检测群成员昵称，成员较多时可能需要几秒，请稍候..."
+                                  if command == "checknick" else
+                                  "🔍 正在比对群成员与绑定记录，成员较多时可能需要几秒，请稍候...")
+            except OfficialError:
+                pass
             roster=await self.members.roster(scope,group["revision"],getattr(sender,"transport",None),guard)
+            unbound=member_total=None
             if command=="bindcheck":
                 name,active=await asyncio.to_thread(self.binding_commands.active_user_ids,scope,arguments)
                 title,lines=self.members.binding_audit(roster,name,active)
+                unbound,member_total=self.members.unbound_members(roster,active)
             else:title,lines=self.members.nickname_audit(scope,roster,group)
             guard()
-            pages=render_text_pages(title,lines)
-            self.pages.put(scope,page_revision,[],pages,minimum_permission=3)
+            text_pages=render_text_pages(title,lines)
+            image_pages=[]
+            # 与 OneBot /绑定检测 共用同一份名单图；注入的测试渲染器仍走文本分支。
+            if (command=="bindcheck" and unbound is not None and self._supports_images(sender)
+                    and self.renderer is render_pages):
+                if not unbound:
+                    if isinstance(sender,OfficialSender):sender.revalidate=guard
+                    await sender.text(f"✅ 检测完成！本群 {member_total} 位成员均已绑定游戏账号。")
+                    return
+                try:
+                    info={"group_total":member_total,"unbound_total":len(unbound),
+                          "stamp":time.strftime("检测于 %H:%M:%S")}
+                    image_pages=await render_unbound_pages(unbound,info)
+                except Exception:
+                    image_pages=[]
+            self.pages.put(scope,page_revision,image_pages,text_pages,minimum_permission=3)
             if isinstance(sender,OfficialSender):sender.revalidate=guard
-            await sender.text(pages[0])
-            if len(pages)>1:await sender.text("继续查看：/mc page 2（10分钟内有效）")
+            image_output=bool(image_pages)
+            if image_output:
+                try:
+                    payload,count=self.pages.get(scope,page_revision,1)
+                    await sender.image(payload)
+                except OfficialError:
+                    # 上传失败尚未发出消息可安全改用文字；消息 POST 结果不明时不重发。
+                    if isinstance(sender,OfficialSender) and not sender.can_fallback_text():
+                        raise
+                    image_output=False
+            if not image_output:
+                payload,count=self.pages.get_text(scope,page_revision,1)
+                await sender.text(payload)
+            if count>1:
+                if image_output:
+                    await sender.text(f"第 1/{count} 页。继续查看：/mc page 2（10 分钟内有效）")
+                else:
+                    await sender.text("继续查看：/mc page 2（10分钟内有效）")
         finally:self.busy.discard(scope.key)
 
     def start_recovery(self):
@@ -690,6 +1107,7 @@ class OfficialRuntime:
         self.binding_admin.close()
         self.pages.clear()
         self.help_image = None
+        self.bind_help_image = None
         self.members.close()
         try:
             current = asyncio.current_task()

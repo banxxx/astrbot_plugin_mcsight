@@ -1,6 +1,6 @@
 # QQ 官方机器人兼容实现契约
 
-- 版本：v1.21，2026-11-20；对应主方案v1.25，群昵称事件增量见附录AC；业务决定不变。
+- 版本：v1.22，2026-11-24；对应主方案v1.25，群昵称事件增量见附录AC；2026-11-24 增加官方群 Markdown + 自定义按钮命令指引，业务决定不变。
 - F01–F05已修改源码，并补齐可实现管理/查询差异；nickname检测现消费author与mentions里的member_nickname。本轮不测试、不重编四模块，旧Jar不含本轮增量。既有附录通过数字不适用于未验证修改，真实QQ/MC/SQL/浏览器验收仍未完成。
 - 业务已确认：同进程单一实例生效、官方全新绑定、一用户多账号、中心失联不新增/解绑、独立官方镜像。
 - 既有批准：操作记录表，以及绑定行的撤销状态和版本。本次新增确认：账号体系隔离、昵称支持一对多、群资格与游戏解绑不自动联动。
@@ -41,7 +41,7 @@
 | 官方环境 | environment_id、公开应用引用、实例关联 | 不要求助手读取AppSecret；应用改变不得自动复用旧环境 |
 | 官方群配置 | config_id、environment_id、group_openid、alias、display_group、servers、policy、revision | config_id为安全随机内部键 |
 | 服务器条目 | server_id、name、host、game_port/api_port、绑定目标信息、已有凭据引用 | 同名/同地址不自动合并 |
-| 官方名单 | 环境级超管、群级管理员/黑名单/昵称忽略项 | 范围显式；不沿用旧数字QQ身份 |
+| 官方名单 | 环境级超管、群级管理员/黑名单/昵称忽略项、环境独立 `access.json` 补充名单 | 范围显式；不沿用旧数字QQ身份；群内 @成员 只写补充名单，不改 OneBot 公共名单；openid 按群匹配，换群需重加 |
 
 不将任意OpenID直接拼入文件路径。OneBot继续旧配置路径，官方使用独立目录/安全键；活动范围由统一解析器提供给聊天、WebUI与采样。
 
@@ -326,6 +326,9 @@ V2 的验证码代次统一命名为 `token_generation`；`generation_id` 不作
 
 - 官方一轮计划最多4条实际发送，预留错误提示余量；不得只按event.send调用次数计算，框架拆包/回退须核验。
 - 每页只发送一个图片组件，默认图片编码体积不超过4MiB；超限压缩/减小分页高度，仍不能满足则明确失败，不上传私人图床。
+- 官方群 `/mc guide [1|2]`（别名 `/mc 命令指引`）使用已验证的 BotPy 群发送通道，单次 `msg_type=2`，仅携带 `markdown.content` 与 `keyboard.content.rows`，不携带文本 `content`。`rows` 每项为 `{"buttons": [...]}`；最多5行、每行最多5个按钮，按钮文字不超过10字符。自定义按钮属于QQ内邀/按钮模版能力，插件不假设所有应用已开通；未开通或客户端不支持时由平台拒绝并走文本降级。
+- 按钮为 `action.type=2` 命令填充型：群聊点击只把 `@机器人` 与 `action.data` 填入输入框，不自动执行、不产生 `INTERACTION_CREATE`；插件不对命令填充本身计为业务执行。第1页公开，固定2列5行；第2页要求级别≥3，通过 `/mc guide 2` 进入，固定3列4行，不另设“管理指引”按钮，也不放令牌、权限名单、黑名单按钮。正文使用原生 `***` 分割线，不使用 Emoji。服务端仍对实际命令重新鉴权。
+- Markdown 仅在其发送结果被平台明确拒绝（`OfficialApiError.rejected`）且尚未产生可见消息时回退一次纯文本命令清单；`pending`/`unknown` 或已有其它消息尝试时不得补发，避免重复可见回复。一次指引最多两个 HTTP 发送调用，仍计入一轮4次预算。
 - 下一页使用新事件的回复凭据，不保存旧事件对象长期回复。
 - 分页归属environment/instance/group/requester/query，TTL10分钟；每用户群只保留最新结果，全局最多32个快照且合计128MiB，超出最旧淘汰。
 - 初始最多显示预算内页数，后续提示给完整下一页命令；配置/权限改变、停启、环境改变立即失效。
@@ -571,7 +574,7 @@ CREATE TABLE bindings_qqofficial_ops (
 ## 附录 G：S2 当前实现与验收边界
 
 - 官方入口新增 accepts 实例门禁与独立 official_runtime 分发，allows 仍只授权旧 OneBot 业务；因此已选官方的合法群事件可登记/查询，C2C、频道、身份不一致或非活动实例提前退出。所有别名遵守相同门禁，广播别名也不能先构造旧群配置。
-- 每环境的 state.json 作为一个原子配置提交单元，集中保存 groups、candidates、环境管理员与 authorization_history；这是第 2 节 registry/群配置的具体实现，不声称跨多个文件有事务。OpenID 不参与路径拼接，群和服务器有独立内部 ID。环境超管在环境级存储；群黑名单、群管、昵称忽略分别保留，撤销一种权限不删除其它名单。
+- 每环境的 state.json 作为一个原子配置提交单元，集中保存 groups、candidates、环境管理员与 authorization_history；这是第 2 节 registry/群配置的具体实现，不声称跨多个文件有事务。OpenID 不参与路径拼接，群和服务器有独立内部 ID。环境超管在环境级存储；群黑名单、群管、昵称忽略分别保留，撤销一种权限不删除其它名单。群内 `@成员` 名单管理另写环境目录 `access.json`（schema_version=1，三类名单各限 200 项），与 OneBot 公共名单只读合并；不修改公共名单。名单文件损坏时失败关闭；群内列表与回执不回显完整官方标识。
 - 模组 API Token 与 OneBot 共用插件全局配置 mod_api_token，官方目录不另存凭据；运行时按需从注入的配置读取器取值，普通状态页面只检查是否已配置，不返回凭据内容。旧 OneBot 名单不自动复用；测试用临时目录与虚构值。
 - setup 不访问 MC 或绑定表，普通成员只能建立限量且过期的候选。后台授权检查候选所属群，记录目标身份、来源群、候选回执、授权/撤销种类及时间。后台主体依赖框架认证，不接受请求体 actor 提权。
 - 只读请求仅允许 /api/status、/api/tps、/api/stats/<合法玩家名>、/api/stats/all；关闭重定向、代理环境与自动重试，响应限 4MiB，不打印请求/响应或异常原文。无模组在线查询使用 mcstatus；隐藏条目不查询。官方统计按环境、群和稳定 server_id 写入独立 SQLite，仅存合成/公开数值字段，保留 30 日 UTC 日快照并复用共享六类统计图；同日覆盖，不导入 OneBot 历史，历史不可用时仍可读生涯统计。完整统计图保持单页，超编码限制回退分页文字。本人排行关联仍依赖 S3 当前官方绑定，不能读取旧 bindings 兜底。
@@ -840,7 +843,7 @@ CREATE TABLE bindings_qqofficial_ops (
 
 3. **官方写命令**：新增 POST `/api/v2/binding/command`，公共scope外固定 `operation_id/request_key/action/payload/config_revision`；action为broadcast或console。服务先核对选中scope和鉴权，广播使用绑定API令牌，控制台仅接受独立consoleToken且不得与apiToken相同。插件先校验当前角色/名单并持久DISPATCHED，模组在同一个官方状态文件的可选command_receipts中持久DISPATCHED后再排队执行。两端都不保存payload/控制台正文/回显；失败或重启DISPATCHED一律UNKNOWN，不重发。首次成功可返回经过既有输出过滤的瞬时output/result/truncated，重复请求只有原状态。控制台沿用硬禁及配置禁用规则，必须单服；广播最多4服且逐服报告。
 
-   插件 `/mc add/edit/del/hide/show` 接官方配置原子修订，并以独立command_receipts.json记录事件散列、动作、固定目标、载荷散列、修订和分目标状态；每环境最多10000，不删除旧防重依据。同事件在重启后不重复追加条目。配置写后回执丢失明确UNKNOWN，由用户核对，不推测成功或重新apply。`/mc command <编号>`只允许本人/本群管理员查看状态。真实控制台Token由用户放在环境console_tokens/<server_uuid>.json，不通过QQ命令配置。
+   插件 `/mc add/edit/del/hide/show` 接官方配置原子修订，并以独立command_receipts.json记录事件散列、动作、固定目标、载荷散列、修订和分目标状态；每环境最多10000，不删除旧防重依据。同事件在重启后不重复追加条目。配置写后回执丢失明确UNKNOWN，由用户核对，不推测成功或重新apply。`add`/`edit host`/`batchadd` 复用 OneBot 的地址归一化、端口拆分和 SSRF 校验：内网、回环、链路本地及云元数据地址只有超级管理员可以写入。`/mc command <编号>`只允许本人/本群管理员查看状态。控制台Token仅超级管理员可用 `/mc token <服务器名> <Token|清除>` 设置，也可由用户放在环境console_tokens/<server_uuid>.json；命令路径不回显或记录Token，但消息会经过QQ平台。
 
 4. **本人排行**：排行保留公开统计语义，使用原服务器配置的权威active_snapshot关联当前事件用户；一用户多账号分别标注本人和排名，排名保持并列规则。权威失败单独提示，本页仍显示公开榜单，不查旧bindings兜底。
 

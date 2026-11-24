@@ -15,7 +15,7 @@ from ..utils import debounce, platform_activation, official_runtime
 # 导入拆分的处理函数
 from ..commands import (
     handle_whitelist, handle_help, handle_bindhelp,
-    handle_add, handle_remove, handle_edit, handle_batchadd, handle_batchremove,
+    handle_add, handle_remove, handle_hidden, handle_edit, handle_batchadd, handle_batchremove,
     handle_list, handle_move, handle_swap, handle_lastonline,
     handle_say, handle_tps, handle_status, handle_stats,
     handle_exec, handle_token,
@@ -35,11 +35,6 @@ async def handle_mc_command(event: AstrMessageEvent):
         config = ConfigManager(group_id=group_id)
     else:
         config = ConfigManager(session_id=event.session_id)
-
-    # 本群总开关：关闭后查询、绑定、管理命令与其他群互不影响。
-    if group_id and not config.is_group_enabled():
-        yield event.plain_result("本群功能已关闭，请在后台「群与服务器 → 本群规则」中启用本群功能。")
-        return
 
     # 黑名单闸门：配置承诺黑名单用户无法使用插件的所有功能，
     # 所有命令都汇聚到本入口，在这里统一拦截（在防抖与解析之前）。
@@ -61,11 +56,20 @@ async def handle_mc_command(event: AstrMessageEvent):
     msg = parts[1].strip() if len(parts) > 1 else ""
 
     if not msg:
-        yield event.plain_result("请提供子命令。使用 /mc help 查看帮助。")
-        return
+        # 与官方一致：裸 /mc 等同 /mc help，同样走防抖与帮助图。
+        msg = "help"
 
     parts = msg.split()
     sub_cmd = parts[0].lower()
+    # 与官方一致：/mc del 是 /mc remove 的别名。
+    if sub_cmd == "del":
+        sub_cmd = "remove"
+
+    # 本群总开关：关闭后查询、绑定、管理命令与其他群互不影响。
+    # 帮助类与官方一致仍可查看，方便管理员找回启用入口。
+    if group_id and sub_cmd not in ("help", "bindhelp") and not config.is_group_enabled():
+        yield event.plain_result("本群功能已关闭，请在后台「群与服务器 → 本群规则」中启用本群功能。")
+        return
 
     # 防抖：中文别名、正则别名和裸 /mc 都汇聚到这里，sub_cmd 已是归一后的真命令，
     # 在这一个入口生效即覆盖所有命令。超管不受限，方便连测。
@@ -106,6 +110,12 @@ async def handle_mc_command(event: AstrMessageEvent):
     elif sub_cmd == "remove":
         async for result in handle_remove(event, config, parts):
             yield result
+    elif sub_cmd == "hide":
+        async for result in handle_hidden(event, config, parts, hidden=True):
+            yield result
+    elif sub_cmd == "show":
+        async for result in handle_hidden(event, config, parts, hidden=False):
+            yield result
     elif sub_cmd == "edit":
         async for result in handle_edit(event, config, parts):
             yield result
@@ -141,7 +151,7 @@ async def handle_mc_command(event: AstrMessageEvent):
         async for result in handle_tps(event, config, parts):
             yield result
     elif sub_cmd == "status":
-        async for result in handle_status(event, config):
+        async for result in handle_status(event, config, parts):
             yield result
     elif sub_cmd == "stats":
         async for result in handle_stats(event, config, parts):

@@ -4,9 +4,14 @@
 静默按住（stall），不分命令也不区分成本；这里只管本插件的命令，按命令成本分档，
 并且立刻回一句「请 X 秒后再试」。
 """
+import logging
 import math
 import time
-from astrbot.api import logger
+
+try:  # 官方只读测试只加载 utils/*，此时没有 AstrBot 运行时
+    from astrbot.api import logger
+except Exception:  # pragma: no cover - 生产环境总有 AstrBot
+    logger = logging.getLogger(__name__)
 
 # 三档窗口（秒），判据是一次命令要付出什么：
 # HEAVY 要打全部服务器 + 画图 + 传图；MEDIUM 出图或跨境库往返；LIGHT 本地读写为主

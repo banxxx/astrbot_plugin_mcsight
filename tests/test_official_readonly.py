@@ -19,7 +19,7 @@ sys.modules[PACKAGE] = package
 
 
 def module(name):
-    assert name in {"official_core", "official_queries", "official_runtime", "official_bindings", "official_center", "official_protocol", "official_binding_service", "official_binding_policy", "official_binding_host", "official_binding_commands", "official_binding_recovery", "official_binding_admin", "official_transport", "platform_activation"}
+    assert name in {"official_core", "official_queries", "official_runtime", "official_bindings", "official_center", "official_protocol", "official_binding_service", "official_binding_policy", "official_binding_host", "official_binding_commands", "official_binding_recovery", "official_binding_admin", "official_transport", "official_writes", "platform_activation", "debounce"}
     if PACKAGE + "." + name in sys.modules:
         return sys.modules[PACKAGE + "." + name]
     spec = importlib.util.spec_from_file_location(PACKAGE + "." + name, ROOT / "utils" / (name + ".py"))
@@ -104,6 +104,7 @@ class ScopeTests(unittest.TestCase):
 
 class StoreTests(unittest.TestCase):
     def setUp(self):
+        module("debounce").reset()
         self.temp = tempfile.TemporaryDirectory(prefix="mcwatch-official-synthetic-")
         self.addCleanup(self.temp.cleanup)
         self.now = 1000000.0
@@ -356,6 +357,23 @@ class StoreTests(unittest.TestCase):
             "super_admins": [], "whitelist_admins": [USER], "blacklist": []}
         self.assertEqual(self.store.access_level(self.scope, group), 3)
 
+    def test_official_access_overlay_is_environment_scoped_and_fails_closed(self):
+        public = {"super_admins": [], "whitelist_admins": [], "blacklist": []}
+        self.store.access_provider = lambda: public
+        target = "SYNTHETIC_TARGET_A"
+        self.assertTrue(self.store.update_official_access(ENV, "whitelist_admins", target, True))
+        self.assertFalse(self.store.update_official_access(ENV, "whitelist_admins", target, True))
+        self.assertIn(target, self.store.access_lists(ENV)["whitelist_admins"])
+        self.assertNotIn(target, self.store.access_lists(OTHER_ENV)["whitelist_admins"])
+        self.assertEqual(public["whitelist_admins"], [])
+        path = Path(self.temp.name) / ENV / "access.json"
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["schema_version"], 1)
+        self.assertTrue(self.store.update_official_access(ENV, "whitelist_admins", target, False))
+        self.assertNotIn(target, self.store.access_lists(ENV)["whitelist_admins"])
+        path.write_text("{}", encoding="utf-8")
+        with self.assertRaises(core.OfficialError):
+            self.store.access_lists(ENV)
+
     def test_environment_administrator_is_environment_wide_and_blacklist_still_wins(self):
         candidate, group = self.approve()
         other_candidate = self.store.register(scope(group="SYNTHETIC_GROUP_B", user="SYNTHETIC_USER_B"))
@@ -517,6 +535,197 @@ class QueryTests(unittest.IsolatedAsyncioTestCase):
         _, lines = await queries.QueryService(mod=mod).query("stats", "AnotherPlayer", self.group([server()]), "SYNTHETIC")
         self.assertIn("死亡次数：4", lines)
 
+    async def test_server_selection_matches_onebot_forms_and_hidden_rule(self):
+        calls = []
+        async def mod(s, token, endpoint):
+            calls.append((s["name"], endpoint))
+            if endpoint.startswith("/api/stats/"):
+                return {"playTime": 72000}
+            if endpoint == "/api/tps":
+                return {"tps": 20}
+            return {"online_players": 1, "max_players": 20, "players": []}
+        service = queries.QueryService(mod=mod)
+        group = self.group([server(), server("two"), server("hidden", hidden=True)])
+
+        status = await service.query("status", "-s two", group, "SYNTHETIC")
+        self.assertEqual([card["name"] for card in status.data], ["two"])
+        self.assertEqual(calls, [("two", "/api/status")])
+        calls.clear()
+        with self.assertRaises(core.OfficialError):
+            await service.query("status", "two", group, "SYNTHETIC")
+        with self.assertRaises(core.OfficialError):
+            await service.query("status", "-s hidden", group, "SYNTHETIC")
+        with self.assertRaises(core.OfficialError):
+            await service.query("status", "-s missing", group, "SYNTHETIC")
+        self.assertEqual(calls, [])
+
+        tps = await service.query("tps", "two", group, "SYNTHETIC")
+        self.assertEqual(calls, [("two", "/api/tps")])
+        self.assertEqual(tps.data[0]["name"], "two")
+        calls.clear()
+
+        await service.query("stats", "Player_A -s two", group, "SYNTHETIC")
+        self.assertEqual(calls, [("two", "/api/stats/Player_A")])
+        calls.clear()
+        await service.query("stats", "Player_A two", group, "SYNTHETIC")
+        self.assertEqual(calls, [("two", "/api/stats/Player_A")])
+        calls.clear()
+        with self.assertRaises(core.OfficialError):
+            await service.query("stats", "Player_A -s one two", group, "SYNTHETIC")
+        with self.assertRaises(core.OfficialError):
+            await service.query("stats", "Player_A -s hidden", group, "SYNTHETIC")
+        self.assertEqual(calls, [])
+
+        with self.assertRaises(core.OfficialError):
+            await service.query("tps", "", self.group([server("hidden", hidden=True)]), "SYNTHETIC")
+
+    async def test_status_and_rank_documents_carry_shared_renderer_data(self):
+        """官方查询要交出与 OneBot 生成器同构的数据，才能渲染出一样的图片。"""
+        async def mod(s, token, endpoint):
+            if endpoint == "/api/status":
+                return {"online_players": 2, "max_players": 20, "version": "1.20.1",
+                        "players": [{"name": "Player_A", "uuid": "uuid-a", "is_premium": True}]}
+            if endpoint == "/api/tps":
+                return {"tps": 19.5}
+            if endpoint == "/api/stats/all":
+                return {"players": [{"name": "Player_A", "stats": {"play_time": 72000},
+                                     "last_seen": 10**13}]}
+            raise AssertionError(endpoint)
+        service = queries.QueryService(mod=mod)
+        group = self.group([server()])
+
+        status = await service.query("status", "", group, "SYNTHETIC")
+        self.assertIsInstance(status, queries.QueryDocument)
+        self.assertEqual(status.kind, "status")
+        card = status.data[0]
+        self.assertEqual(card["name"], "one")
+        self.assertEqual(card["online"], 2)
+        self.assertEqual(card["max"], 20)
+        self.assertEqual(card["remark"], "合成测试")
+        self.assertEqual([p["name"] for p in card["players"]], ["Player_A"])
+        title, lines = status
+        self.assertEqual(title, "服务器在线状态")
+
+        tps = await service.query("tps", "", group, "SYNTHETIC")
+        self.assertEqual(tps.kind, "tps")
+        self.assertEqual(tps.data[0]["tps"], 19.5)
+
+        rank = await service.query("rank", "时长 总", group, "SYNTHETIC")
+        self.assertEqual(rank.kind, "rank")
+        self.assertEqual(rank.data["title"], "排行榜")
+        self.assertTrue(rank.data["rows"])
+        self.assertEqual(rank.data["rows"][0]["name"], "Player_A")
+
+
+class WriteParseTests(unittest.TestCase):
+    """官方写命令与 OneBot 共用同一套主机校验和选服语法。"""
+    def setUp(self):
+        self.writes = module("official_writes")
+
+    def group(self, servers):
+        return {"servers": servers, "policy": core.default_policy(),
+                "nickname_ignore": [], "revision": 1}
+
+    def test_add_and_edit_normalize_ports_and_reject_private_hosts(self):
+        group = self.group([server()])
+        parse = self.writes.OfficialWriteCommands._parse
+        with self.assertRaises(core.OfficialError):
+            parse("add", "two 127.0.0.1", group, allow_private=False)
+        command, _, _, changes = parse("add", "two 127.0.0.1 : 25566 8080", group,
+                                       allow_private=True)
+        added = changes["servers"][-1]
+        self.assertEqual(command, "add")
+        self.assertEqual((added["host"], added["game_port"], added["api_port"]),
+                         ("127.0.0.1", 25566, 8080))
+        _, targets, _, changes = parse("edit", "one host mc.example.invalid : 25570", group,
+                                       allow_private=False)
+        self.assertEqual(targets[0]["host"], "mc.example.invalid")
+        self.assertEqual(targets[0]["game_port"], 25570)
+        with self.assertRaises(core.OfficialError):
+            parse("batchadd", "two:10.0.0.8", group, allow_private=False)
+
+    def test_broadcast_and_console_accept_onebot_selector_forms(self):
+        group = self.group([server(), server("two")])
+        parse = self.writes.OfficialWriteCommands._parse
+        _, targets, payload, changes = parse("broadcast", "one hello", group)
+        self.assertIsNone(changes)
+        self.assertEqual((targets[0]["name"], payload), ("one", "hello"))
+        _, targets, payload, _ = parse("broadcast", "hello", group)
+        self.assertEqual([s["name"] for s in targets], ["one", "two"])
+        self.assertEqual(payload, "hello")
+        _, targets, payload, _ = parse("console", "[two] say hi", group)
+        self.assertEqual((targets[0]["name"], payload), ("two", "say hi"))
+        with self.assertRaises(core.OfficialError):
+            parse("broadcast", "x" * 41, group)
+        with self.assertRaises(core.OfficialError):
+            parse("console", "say hi", group)
+
+    def test_hide_show_and_del_match_onebot(self):
+        group = self.group([server(), server("two")])
+        parse = self.writes.OfficialWriteCommands._parse
+        _, targets, _, changes = parse("hide", "two", group)
+        self.assertTrue(changes["servers"][1]["hidden"])
+        _, targets, _, changes = parse("show", "two", group)
+        self.assertFalse(changes["servers"][1]["hidden"])
+        _, targets, _, changes = parse("del", "one", group)
+        self.assertEqual([s["name"] for s in changes["servers"]], ["two"])
+
+    def test_name_and_remark_limits_match_onebot(self):
+        parse = self.writes.OfficialWriteCommands._parse
+        for arguments in ("x" * 21 + " mc.example.invalid",
+                          "a" * 10 + "中" * 6 + " mc.example.invalid",
+                          "[bad] mc.example.invalid"):
+            with self.subTest(arguments=arguments), self.assertRaises(core.OfficialError):
+                parse("add", arguments, self.group([]))
+        with self.assertRaises(core.OfficialError):
+            parse("batchadd", "x" * 21 + ":mc.example.invalid", self.group([]))
+        with self.assertRaises(core.OfficialError):
+            parse("edit", "one name " + "x" * 21, self.group([server()]))
+        with self.assertRaises(core.OfficialError):
+            parse("edit", "one name has space", self.group([server()]))
+        with self.assertRaises(core.OfficialError):
+            parse("edit", "one remark " + "字" * 26, self.group([server()]))
+        parse("add", "x" * 20 + " mc.example.invalid", self.group([]))
+        _, targets, _, _ = parse("edit", "one remark " + "字" * 25, self.group([server()]))
+        self.assertEqual(targets[0]["remark"], "字" * 25)
+
+    def test_add_duplicate_and_capacity_errors_match_onebot(self):
+        parse = self.writes.OfficialWriteCommands._parse
+        with self.assertRaises(core.OfficialError) as caught:
+            parse("add", "one mc.example.invalid", self.group([server()]))
+        self.assertIn("名称「one」已存在", str(caught.exception))
+        full = self.group([server(f"s{i}") for i in range(20)])
+        with self.assertRaises(core.OfficialError) as caught:
+            parse("add", "extra mc.example.invalid", full)
+        self.assertIn("每个群最多绑定 20 个服务器", str(caught.exception))
+        with self.assertRaises(core.OfficialError):
+            parse("batchadd", "extra:mc.example.invalid", full)
+        with self.assertRaises(core.OfficialError) as caught:
+            parse("batchadd", "two:mc.example.invalid,two:mc2.example.invalid",
+                  self.group([]))
+        self.assertIn("名称「two」已存在", str(caught.exception))
+        with self.assertRaises(core.OfficialError) as caught:
+            parse("edit", "one name two", self.group([server(), server("two")]))
+        self.assertIn("名称「two」已存在", str(caught.exception))
+
+    def test_config_success_title_matches_onebot(self):
+        title = self.writes.OfficialWriteCommands._config_title
+        done = {"state": "SUCCEEDED"}
+        self.assertEqual(title("add", "two host", done),
+                         "✅ 添加成功：two\n主机：host\n模组 API 端口：未配置（/执行、/广播 不可用）")
+        self.assertEqual(title("batchadd", "two:host,three:host2 8080", done),
+                         "批量添加：成功 2 个")
+        self.assertEqual(title("batchremove", "two,three", done),
+                         "批量删除：成功 2 个")
+        self.assertEqual(title("del", "two", done), "删除成功：two")
+        self.assertEqual(title("hide", "two", done),
+                         "✅ 已隐藏「two」，它不会再出现在查询和状态卡片中。")
+        self.assertEqual(title("edit", "one host x", done), "修改主机地址成功。")
+        self.assertEqual(title("nicknamecheck", "忽略 user X", done),
+                         "✅ 已更新昵称检测忽略名单。")
+        self.assertEqual(title("hide", "two", {"state": "UNKNOWN"}),
+                         "官方服务器配置结果")
+
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     setUp = StoreTests.setUp
@@ -531,6 +740,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self, event, scoped, record): self.event, self.record = event, record
             async def text(self, value): self.record["calls"] += 1; self.event.sent.append(("text", value))
             async def image(self, value): self.record["calls"] += 2; self.event.sent.append(("image", value))
+            async def markdown(self, content, rows): self.record["calls"] += 1; self.event.sent.append(("markdown", (content, rows)))
         async def query(*args): return "构造标题", ["构造结果"]
         runtime = runtime_module.OfficialRuntime(self.temp.name, Activation(),
                     queries=SimpleNamespace(query=query), renderer=lambda *a: [b"page1", b"page2"], sender=Sender)
@@ -559,7 +769,18 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         other = Event("/mc status", message_id="EVENT_B")
         runtime.queries = SimpleNamespace(query=forbidden)
         await runtime.handle(other)
-        self.assertIn("尚未启用", other.sent[0][1])
+        self.assertIn("本群功能已关闭", other.sent[0][1])
+
+    async def test_registered_but_disabled_group_gets_onebot_closed_message(self):
+        runtime = self.make_runtime()
+        created = self.store.create_setup_code(ENV, "测试群")
+        self.store.claim_setup_code(ENV, created["code"], GROUP)
+        event = Event("/mc status", message_id="EVENT_DISABLED")
+        await runtime.handle(event)
+        self.assertEqual(len(event.sent), 1)
+        self.assertEqual(event.sent[0][0], "text")
+        self.assertIn("本群功能已关闭", event.sent[0][1])
+        self.assertNotIn("/mc setup", event.sent[0][1])
 
     async def test_official_binding_help_does_not_reuse_onebot_binding_steps(self):
         runtime = self.make_runtime()
@@ -592,6 +813,363 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await runtime.handle(event)
         self.assertEqual(len(calls), 1)
         self.assertEqual(event.sent, [])
+
+    async def test_help_and_bindhelp_use_official_images_under_default_renderer(self):
+        runtime = self.make_runtime()
+        runtime.renderer = runtime_module.render_pages
+        kinds = []
+        def official(kind="help"):
+            kinds.append(kind)
+            return ("official_" + kind).encode()
+        with patch.object(runtime_module, "render_official_help_image", official):
+            help_event = Event("/mc help", message_id="EVENT_HELP_IMAGE")
+            await runtime.handle(help_event)
+            self.assertEqual(help_event.sent, [("image", b"official_help")])
+            bind_event = Event("/mc bindhelp", message_id="EVENT_BINDHELP_IMAGE")
+            await runtime.handle(bind_event)
+            self.assertEqual(bind_event.sent, [("image", b"official_bind")])
+        self.assertEqual(kinds, ["help", "bind"])
+
+    async def test_guide_page_one_uses_command_buttons_not_callbacks(self):
+        runtime = self.make_runtime()
+        _, group = self.approve()
+        self.store.update(ENV, group["config_id"], 1,
+                          {"enabled": True, "servers": [server()]})
+        event = Event("/mc guide")
+        await runtime.handle(event)
+        self.assertEqual(len(event.sent), 1)
+        kind, payload = event.sent[0]
+        self.assertEqual(kind, "markdown")
+        content, rows = payload
+        self.assertEqual(content,
+                         "# MCSight · 命令指引\n"
+                         "> 点击按钮只会填入命令，发送后执行\n\n"
+                         "***\n\n"
+                         "在线状态、TPS、玩家统计、排行榜、账号查询与帮助入口。"
+                         "多服务器时，排行榜需用 -s 指定服务器。")
+        self.assertEqual(len(rows), 5)
+        labels, data, ids = [], [], set()
+        for row in rows:
+            self.assertIn("buttons", row)
+            self.assertEqual(len(row["buttons"]), 2)
+            row_labels, row_data = [], []
+            for button in row["buttons"]:
+                self.assertEqual(button["action"]["type"], 2)
+                self.assertEqual(button["action"]["permission"], {"type": 2})
+                self.assertTrue(button["action"]["data"].startswith("/mc "))
+                self.assertLessEqual(len(button["render_data"]["label"]), 10)
+                self.assertEqual(button["render_data"]["label"],
+                                 button["render_data"]["visited_label"])
+                self.assertNotIn("enter", button["action"])
+                ids.add(button["id"])
+                row_labels.append(button["render_data"]["label"])
+                row_data.append(button["action"]["data"])
+            labels.append(row_labels)
+            data.append(row_data)
+        self.assertEqual(len(ids), 10)
+        self.assertEqual(labels, [["在线状态", "当前 TPS"],
+                                  ["玩家统计", "时长排行"],
+                                  ["死亡排行", "击杀排行"],
+                                  ["钓鱼排行", "账号查询"],
+                                  ["查看帮助", "绑定帮助"]])
+        self.assertEqual(data, [["/mc status", "/mc tps"],
+                                ["/mc stats", "/mc rank 时长"],
+                                ["/mc rank 死亡", "/mc rank 击杀生物"],
+                                ["/mc rank 钓鱼", "/mc check"],
+                                ["/mc help", "/mc bindhelp"]])
+
+    async def test_guide_page_one_never_adds_an_admin_entry_for_managers(self):
+        runtime = self.make_runtime()
+        _, group = self.approve()
+        self.store.update(ENV, group["config_id"], 1,
+                          {"enabled": True, "servers": [server()]})
+        self.store.access_provider = lambda: {
+            "super_admins": [], "whitelist_admins": [USER], "blacklist": []}
+        event = Event("/mc 命令指引 1", message_id="EVENT_GUIDE_ADMIN")
+        await runtime.handle(event)
+        kind, (content, rows) = event.sent[0]
+        self.assertEqual(kind, "markdown")
+        self.assertEqual(len(rows), 5)
+        labels = [b["render_data"]["label"] for row in rows for b in row["buttons"]]
+        self.assertEqual(labels, ["在线状态", "当前 TPS", "玩家统计", "时长排行",
+                                  "死亡排行", "击杀排行", "钓鱼排行", "账号查询",
+                                  "查看帮助", "绑定帮助"])
+        self.assertNotIn("管理指引", labels)
+        self.assertNotIn("管理指引", content)
+
+    async def test_guide_page_two_is_admin_only_with_exact_button_set(self):
+        runtime = self.make_runtime()
+        _, group = self.approve()
+        self.store.update(ENV, group["config_id"], 1,
+                          {"enabled": True, "servers": [server()]})
+        denied = Event("/mc guide 2", message_id="EVENT_GUIDE_DENIED")
+        await runtime.handle(denied)
+        self.assertEqual(denied.sent[0][0], "text")
+        self.assertIn("仅限本群管理员", denied.sent[0][1])
+        expected_content = ("# MCSight · 管理指引\n"
+                            "> 仅群管理员可用，点击按钮填入命令后发送\n\n"
+                            "***\n\n"
+                            "服务器维护、批量排序与运行管理。上次在线开关也在这里。")
+        expected_labels = [["添加服务器", "编辑服务器", "隐藏服务器"],
+                           ["显示服务器", "开启上次在线", "关闭上次在线"],
+                           ["批量添加", "移动排序", "交换排序"],
+                           ["广播", "查看帮助", "绑定帮助"]]
+        for access, event_id in (
+                ({"super_admins": [], "whitelist_admins": [USER], "blacklist": []},
+                 "EVENT_GUIDE_MANAGER"),
+                ({"super_admins": [USER], "whitelist_admins": [], "blacklist": []},
+                 "EVENT_GUIDE_SUPER")):
+            self.store.access_provider = lambda access=access: access
+            module("debounce").reset()
+            event = Event("/mc guide 2", message_id=event_id)
+            await runtime.handle(event)
+            kind, (content, rows) = event.sent[0]
+            self.assertEqual(kind, "markdown")
+            self.assertEqual(content, expected_content)
+            self.assertEqual(len(rows), 4)
+            actual = [[b["render_data"]["label"] for b in row["buttons"]] for row in rows]
+            self.assertEqual(actual, expected_labels)
+            self.assertEqual([[b["action"]["data"] for b in row["buttons"]] for row in rows],
+                             [["/mc add", "/mc edit", "/mc hide"],
+                              ["/mc show", "/mc lastonline 开", "/mc lastonline 关"],
+                              ["/mc batchadd", "/mc move", "/mc swap"],
+                              ["/mc broadcast", "/mc help", "/mc bindhelp"]])
+            self.assertTrue(all(len(row) == 3 for row in actual))
+            self.assertNotIn("控制台令牌", [label for row in actual for label in row])
+            self.assertNotIn("返回常用", [label for row in actual for label in row])
+            self.assertNotIn("超管", content)
+
+    async def test_guide_rejected_markdown_falls_back_once_to_plain_text(self):
+        runtime = self.make_runtime()
+        _, group = self.approve()
+        group = self.store.update(ENV, group["config_id"], 1,
+                                  {"enabled": True, "servers": [server()]})
+        self.store.access_provider = lambda: {
+            "super_admins": [], "whitelist_admins": [USER], "blacklist": []}
+        class RejectedSender(runtime_module.OfficialSender):
+            def __init__(self, event, scoped, record):
+                self.record, self.revalidate, self.texts = record, None, []
+            async def markdown(self, content, rows):
+                self.record["calls"] += 1
+                raise runtime_module.OfficialApiError("rejected", "synthetic", rejected=True)
+            def can_fallback_text(self): return True
+            async def text(self, value):
+                self.record["calls"] += 1
+                self.texts.append(value)
+        sender = RejectedSender(None, self.scope, {"calls": 0})
+        await runtime._guide_command(self.scope, sender, "", group, [])
+        self.assertEqual(len(sender.texts), 1)
+        self.assertIn("/mc status", sender.texts[0])
+        self.assertIn("在线状态", sender.texts[0])
+        self.assertIn("查看帮助 /mc help", sender.texts[0])
+        self.assertNotIn("服务器状态", sender.texts[0])
+        self.assertNotIn("/mc guide 2", sender.texts[0])
+
+    async def test_unknown_markdown_result_never_posts_duplicate_text(self):
+        runtime = self.make_runtime()
+        _, group = self.approve()
+        group = self.store.update(ENV, group["config_id"], 1,
+                                  {"enabled": True, "servers": [server()]})
+        class UnknownSender(runtime_module.OfficialSender):
+            def __init__(self, event, scoped, record):
+                self.record, self.revalidate, self.texts = record, None, []
+            async def markdown(self, content, rows):
+                self.record["calls"] += 1
+                raise runtime_module.OfficialApiError("unknown", "synthetic")
+            def can_fallback_text(self): return True
+            async def text(self, value): self.texts.append(value)
+        sender = UnknownSender(None, self.scope, {"calls": 0})
+        with self.assertRaises(runtime_module.OfficialApiError):
+            await runtime._guide_command(self.scope, sender, "", group, [])
+        self.assertEqual(sender.texts, [])
+
+    async def test_token_command_matches_onebot_and_never_echoes(self):
+        runtime = self.make_runtime()
+        _, group = self.approve()
+        group = self.store.update(ENV, group["config_id"], 1,
+                                  {"enabled": True, "servers": [server()]})
+        self.store.access_provider = lambda: {
+            "super_admins": [USER], "whitelist_admins": [], "blacklist": []}
+        server_id = group["servers"][0]["server_id"]
+        token = "SYNTHETIC_CONSOLE_TOKEN_123"
+        event = Event(f"/mc token one {token}")
+        await runtime.handle(event)
+        self.assertEqual(event.sent[0][0], "text")
+        self.assertIn("已为「one」设置命令 Token", event.sent[0][1])
+        self.assertNotIn(token, event.sent[0][1])
+        self.assertEqual(self.store.console_token_ids(ENV), [server_id])
+        cleared = Event("/mc token one 清除", message_id="EVENT_TOKEN_CLEAR")
+        await runtime.handle(cleared)
+        self.assertIn("已清除", cleared.sent[0][1])
+        self.assertEqual(self.store.console_token_ids(ENV), [])
+
+    async def test_whitelist_list_masks_official_ids_and_server_list_matches_onebot(self):
+        runtime = self.make_runtime()
+        _, group = self.approve()
+        group = self.store.update(ENV, group["config_id"], 1,
+                                  {"enabled": True,
+                                   "servers": [server(), server("two", hidden=True, api_port=None)]})
+        self.store.access_provider = lambda: {
+            "super_admins": ["SYNTHETIC_ADMIN_B", USER], "whitelist_admins": [],
+            "blacklist": ["SYNTHETIC_BLOCKED"]}
+        listing = Event("/mc list")
+        await runtime.handle(listing)
+        lines = listing.sent[0][1].splitlines()
+        self.assertEqual(lines[0], "已添加的服务器：")
+        self.assertIn("one -> mc.example.invalid (模组端口: 8080)", lines[1])
+        self.assertIn("two -> mc.example.invalid (未装模组) （隐藏）", lines[2])
+        whitelist = Event("/mc whitelist list", message_id="EVENT_WHITELIST")
+        await runtime.handle(whitelist)
+        text = whitelist.sent[0][1]
+        for value in ("SYNTHETIC_ADMIN_B", USER, "SYNTHETIC_BLOCKED"):
+            self.assertNotIn(value, text)
+            self.assertIn(runtime_module._mask_access_value(value), text)
+        self.assertIn("已脱敏", text)
+
+    async def test_official_mention_access_lists_are_separate_from_onebot_public_lists(self):
+        runtime = self.make_runtime()
+        _, group = self.approve()
+        self.store.update(ENV, group["config_id"], 1, {"enabled": True})
+        public = {"super_admins": [USER], "whitelist_admins": [], "blacklist": []}
+        self.store.access_provider = lambda: public
+        target = "SYNTHETIC_TARGET_A"
+
+        def mentioned(message, message_id, mention=target, nickname="目标玩家"):
+            event = Event(message, message_id=message_id)
+            event.message_obj.raw_message["mentions"] = [{
+                "member_openid": mention, "member_nickname": nickname,
+                "scope": "single", "bot": False, "is_you": False}]
+            return event
+
+        added = mentioned("/mc whitelist add @成员", "EVENT_ACCESS_ADD")
+        await runtime.handle(added)
+        self.assertIn("目标玩家", added.sent[0][1])
+        self.assertNotIn(target, added.sent[0][1])
+        self.assertEqual(public["whitelist_admins"], [])
+        official = self.store.access_lists(ENV)
+        self.assertIn(target, official["whitelist_admins"])
+        target_scope = core.event_scope(Event(user=target), SELECTION)
+        self.assertEqual(self.store.access_level(
+            target_scope, self.store.group(ENV, group_id=GROUP)), 3)
+
+        removed = mentioned("/mc whitelist remove @成员", "EVENT_ACCESS_REMOVE")
+        await runtime.handle(removed)
+        self.assertIn("已从白名单管理员名单移除", removed.sent[0][1])
+        self.assertNotIn(target, self.store.access_lists(ENV)["whitelist_admins"])
+        self.assertEqual(public["whitelist_admins"], [])
+
+        super_added = mentioned("/mc whitelist super add @成员", "EVENT_ACCESS_SUPER")
+        await runtime.handle(super_added)
+        self.assertIn("已添加", super_added.sent[0][1])
+        self.assertEqual(public["super_admins"], [USER])
+        self.assertIn(target, self.store.access_lists(ENV)["super_admins"])
+        target_group = self.store.group(ENV, group_id=GROUP)
+        self.assertEqual(self.store.access_level(target_scope, target_group), 4)
+        super_removed = mentioned("/mc whitelist super remove @成员", "EVENT_ACCESS_SUPER_REMOVE")
+        await runtime.handle(super_removed)
+        self.assertIn("已从超级管理员名单移除", super_removed.sent[0][1])
+        self.assertNotIn(target, self.store.access_lists(ENV)["super_admins"])
+
+        blacklisted = mentioned("/mc blacklist add @成员", "EVENT_ACCESS_BLACKLIST")
+        await runtime.handle(blacklisted)
+        self.assertIn("已添加", blacklisted.sent[0][1])
+        self.assertEqual(public["blacklist"], [])
+        self.assertIn(target, self.store.access_lists(ENV)["blacklist"])
+        self.assertEqual(self.store.access_level(target_scope, target_group), 0)
+
+        blocked_white = mentioned("/mc whitelist add @成员", "EVENT_ACCESS_BLACKLIST_CONFLICT")
+        await runtime.handle(blocked_white)
+        self.assertIn("黑名单优先", blocked_white.sent[0][1])
+        self.assertNotIn(target, self.store.access_lists(ENV)["whitelist_admins"])
+
+    async def test_official_access_list_rejects_indirect_or_ambiguous_targets(self):
+        runtime = self.make_runtime()
+        _, group = self.approve()
+        self.store.update(ENV, group["config_id"], 1, {"enabled": True})
+        self.store.access_provider = lambda: {
+            "super_admins": [USER], "whitelist_admins": [], "blacklist": []}
+
+        no_mention = Event("/mc whitelist add 123456", message_id="EVENT_ACCESS_NONE")
+        await runtime.handle(no_mention)
+        self.assertIn("请 @ 唯一一位成员", no_mention.sent[0][1])
+        self.assertEqual(self.store.access_lists(ENV)["whitelist_admins"], frozenset())
+
+        many = Event("/mc whitelist add @成员", message_id="EVENT_ACCESS_MANY")
+        many.message_obj.raw_message["mentions"] = [
+            {"member_openid": "SYNTHETIC_TARGET_A", "scope": "single"},
+            {"member_openid": "SYNTHETIC_TARGET_B", "scope": "single"}]
+        await runtime.handle(many)
+        self.assertIn("请 @ 唯一一位成员", many.sent[0][1])
+        self.assertEqual(self.store.access_lists(ENV)["whitelist_admins"], frozenset())
+
+        self_remove = Event("/mc whitelist super remove @成员", message_id="EVENT_ACCESS_SELF")
+        self_remove.message_obj.raw_message["mentions"] = [
+            {"member_openid": USER, "scope": "single"}]
+        await runtime.handle(self_remove)
+        self.assertIn("不能把自己从超级管理员名单移除", self_remove.sent[0][1])
+
+    async def test_official_access_list_requires_super_admin(self):
+        runtime = self.make_runtime()
+        _, group = self.approve()
+        self.store.update(ENV, group["config_id"], 1, {"enabled": True})
+        self.store.access_provider = lambda: {
+            "super_admins": [], "whitelist_admins": [USER], "blacklist": []}
+        event = Event("/mc whitelist add @成员", message_id="EVENT_ACCESS_DENIED")
+        event.message_obj.raw_message["mentions"] = [
+            {"member_openid": "SYNTHETIC_TARGET_A", "scope": "single"}]
+        await runtime.handle(event)
+        self.assertIn("仅限超级管理员", event.sent[0][1])
+        self.assertNotIn("SYNTHETIC_TARGET_A", self.store.access_lists(ENV)["whitelist_admins"])
+
+    async def test_official_access_list_cannot_remove_onebot_public_entry(self):
+        runtime = self.make_runtime()
+        _, group = self.approve()
+        self.store.update(ENV, group["config_id"], 1, {"enabled": True})
+        self.store.access_provider = lambda: {
+            "super_admins": [USER], "whitelist_admins": [], "blacklist": ["SYNTHETIC_TARGET_A"]}
+        event = Event("/mc blacklist remove @成员", message_id="EVENT_ACCESS_PUBLIC")
+        event.message_obj.raw_message["mentions"] = [
+            {"member_openid": "SYNTHETIC_TARGET_A", "member_nickname": "目标玩家", "scope": "single"}]
+        await runtime.handle(event)
+        self.assertIn("来自 WebUI 公共名单", event.sent[0][1])
+        self.assertIn("SYNTHETIC_TARGET_A",
+                      self.store.access_lists(ENV)["blacklist"])
+
+    async def test_bindcheck_uses_shared_unbound_image_under_default_renderer(self):
+        runtime = self.make_runtime()
+        _, group = self.approve()
+        self.store.update(ENV, group["config_id"], 1, {"enabled": True, "servers": [server()]})
+        self.store.access_provider = lambda: {
+            "super_admins": [USER], "whitelist_admins": [], "blacklist": []}
+        roster = {"members": [{"user_id": "MEMBER_ONE", "display": "玩家一", "bot": False},
+                              {"user_id": "MEMBER_TWO", "display": "玩家二", "bot": False}],
+                  "complete": True}
+        def unbound_members(value, active):
+            members = [m for m in value["members"] if not m["bot"]]
+            return ([{"user_id": m["user_id"], "name": m["display"], "qq": m["user_id"]}
+                     for m in members if m["user_id"] not in active], len(members))
+        async def read_roster(*args):
+            return roster
+        runtime.members = SimpleNamespace(
+            observe=lambda *args: None, roster=read_roster,
+            unbound_members=unbound_members,
+            binding_audit=lambda *args: ("官方群绑定检测", ["文本兜底"]))
+        runtime.binding_commands = SimpleNamespace(
+            active_user_ids=lambda scope, arguments: ("one", frozenset({"MEMBER_ONE"})))
+        runtime.renderer = runtime_module.render_pages
+        captured = {}
+        async def fake_pages(unbound, info):
+            captured["unbound"], captured["info"] = unbound, info
+            return [b"unbound_png"]
+        with patch.object(runtime_module, "render_unbound_pages", fake_pages):
+            event = Event("/mc bindcheck", message_id="EVENT_BINDCHECK_IMAGE")
+            await runtime.handle(event)
+        self.assertEqual(event.sent[0][0], "text")
+        self.assertIn("正在比对", event.sent[0][1])
+        self.assertEqual(event.sent[1:], [("image", b"unbound_png")])
+        self.assertEqual([item["user_id"] for item in captured["unbound"]], ["MEMBER_TWO"])
+        self.assertEqual(captured["info"]["group_total"], 2)
+        self.assertEqual(captured["info"]["unbound_total"], 1)
 
     async def test_nonselected_c2c_and_channel_do_not_create_data_or_send(self):
         runtime = self.make_runtime()
@@ -717,6 +1295,58 @@ class SenderTests(unittest.IsolatedAsyncioTestCase):
         for kind, values in calls[1:]:
             self.assertEqual(values["msg_id"], scoped.message_id)
         self.assertEqual([x[1]["msg_seq"] for x in calls[1:]], [1, 2])
+
+    async def test_markdown_with_keyboard_is_one_passive_call_without_text_content(self):
+        calls = []
+        async def message(**kwargs):
+            calls.append(kwargs)
+            return {"id": "SYNTHETIC_REPLY"}
+        event = Event()
+        event.bot = SimpleNamespace(api=SimpleNamespace(post_group_message=message))
+        scoped = scope()
+        sender = runtime_module.OfficialSender(
+            event, scoped, runtime_module.ReplyLedger().claim(scoped))
+        rows = runtime_module._guide_rows(1, 1)
+        await sender.markdown("# 命令指引", rows)
+        self.assertEqual(len(calls), 1)
+        payload = calls[0]
+        self.assertEqual(payload["msg_type"], 2)
+        self.assertEqual(payload["markdown"], {"content": "# 命令指引"})
+        self.assertEqual(payload["keyboard"], {"content": {"rows": rows}})
+        self.assertNotIn("content", payload)
+        self.assertEqual(payload["msg_id"], scoped.message_id)
+        self.assertEqual(payload["msg_seq"], 1)
+        self.assertEqual(sender.record["calls"], 1)
+
+    async def test_only_explicit_message_rejection_allows_a_text_fallback(self):
+        responses = [{"code": 40001}, {"id": "SYNTHETIC_REPLY"}]
+        calls = []
+        async def message(**kwargs):
+            calls.append(kwargs)
+            return responses[len(calls) - 1]
+        event = Event()
+        event.bot = SimpleNamespace(api=SimpleNamespace(post_group_message=message))
+        scoped = scope()
+        sender = runtime_module.OfficialSender(
+            event, scoped, runtime_module.ReplyLedger().claim(scoped))
+        with self.assertRaises(runtime_module.OfficialApiError):
+            await sender.markdown("# 命令指引", runtime_module._guide_rows(1, 1))
+        self.assertTrue(sender.can_fallback_text())
+        await sender.text("命令指引文字版")
+        self.assertEqual([call["msg_type"] for call in calls], [2, 0])
+
+        async def unknown(**kwargs):
+            calls.append(kwargs)
+            return None
+        event = Event(message_id="SYNTHETIC_UNKNOWN")
+        event.bot = SimpleNamespace(api=SimpleNamespace(post_group_message=unknown))
+        scoped = scope()
+        sender = runtime_module.OfficialSender(
+            event, scoped, runtime_module.ReplyLedger().claim(scoped))
+        calls.clear()
+        with self.assertRaises(runtime_module.OfficialApiError):
+            await sender.markdown("# 命令指引", runtime_module._guide_rows(1, 1))
+        self.assertFalse(sender.can_fallback_text())
 
     async def test_unknown_send_result_is_not_retried_or_fallen_back(self):
         calls = []

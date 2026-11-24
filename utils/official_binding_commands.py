@@ -21,7 +21,7 @@ COMMANDS = frozenset({"bind", "unbind", "check", "operation"})
 NAMESPACE = UUID("19f72d93-52ca-4e50-9829-39295fc04968")
 USAGE = {
     "bind": "用法：/mc bind <六位码> [-s 服务器名]；取码账号须满足当前群昵称规则。",
-    "unbind": "用法：/mc unbind <游戏名|all|@成员> [-s 服务器名]；管理员可用 user <官方用户标识>。",
+    "unbind": "用法：/mc unbind [游戏名|all|@成员] [-s 服务器名]；不带参数解绑自己名下全部账号，管理员可用 user <官方用户标识>。",
     "check": "用法：/mc check [游戏名|user 官方标识|@成员] [-s 服务器名]；他人完整关联需要管理员权限。",
     "operation": "用法：/mc operation <操作编号或至少8位前缀> [retry [原六位码]|cancel] [-s 服务器名]。",
 }
@@ -69,6 +69,7 @@ def parse(command, arguments,event=None):
     if command in ("check","unbind"):
         target=mentioned_user(event,positionals)
         if target is not None: positionals=["user",target]
+    if command=="unbind" and not positionals: positionals=["all"]
     user_check=len(positionals)==2 and positionals[0].lower()=="user"
     if user_check: identifier(positionals[1])
     game_check=len(positionals)==2 and positionals[0].upper()=="ID" and GAME_RE.fullmatch(positionals[1])

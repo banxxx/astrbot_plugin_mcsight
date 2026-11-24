@@ -3,7 +3,7 @@ import asyncio
 from astrbot.api.event import AstrMessageEvent, MessageChain
 from astrbot.api import logger
 from astrbot.api.message_components import Image as AstrImage
-from ..config.server_config import ConfigManager
+from ..config.server_config import ConfigManager, is_hidden
 from ..config.whitelist_config import WhitelistManager
 from ..features.player_status.checker import send_broadcast_via_mod, fetch_tps_via_mod
 from ..features.player_status.controller import run_player_status, run_player_stats
@@ -15,6 +15,7 @@ async def handle_say(event: AstrMessageEvent, config: ConfigManager, parts: list
     if len(parts) < 2:
         yield event.plain_result("用法: /mc say <消息> 或 /mc say -s <服务器名> <消息>")
         return
+    servers = config.get_all_servers()
     target_server = None
     msg_start = 1
     if parts[1] == "-s":
@@ -23,6 +24,16 @@ async def handle_say(event: AstrMessageEvent, config: ConfigManager, parts: list
             return
         target_server = parts[2]
         msg_start = 3
+    elif parts[1] == "all":
+        # 与官方一致：all 表示全部启用模组 API 的服务器，不作为消息内容。
+        msg_start = 2
+    elif any(s["name"] == parts[1] for s in servers):
+        # 与 /广播 <服务器名> <消息> 一致：首段命中服务器名时当作选服。
+        target_server = parts[1]
+        msg_start = 2
+    if target_server == "all":
+        # /mc say -s all <消息>
+        target_server = None
     message = " ".join(parts[msg_start:])
     if not message:
         yield event.plain_result("消息内容不能为空")
@@ -31,7 +42,6 @@ async def handle_say(event: AstrMessageEvent, config: ConfigManager, parts: list
     if len(message) > MAX_LENGTH:
         yield event.plain_result(f"广播消息过长（最多 {MAX_LENGTH} 个字符），当前长度：{len(message)}")
         return
-    servers = config.get_all_servers()
     if not servers:
         yield event.plain_result("还没有添加任何服务器。")
         return
@@ -75,15 +85,13 @@ async def handle_say(event: AstrMessageEvent, config: ConfigManager, parts: list
 # ---------- TPS ----------
 async def handle_tps(event: AstrMessageEvent, config: ConfigManager, parts: list):
     target_server = None
-    if len(parts) >= 2:
-        if parts[1] == "-s":
-            if len(parts) >= 3:
-                target_server = parts[2]
-            else:
-                yield event.plain_result("用法: /mc tps [-s 服务器名]")
-                return
-        else:
-            target_server = parts[1]
+    if len(parts) == 2 and parts[1] != "-s":
+        target_server = parts[1]
+    elif len(parts) == 3 and parts[1] == "-s":
+        target_server = parts[2]
+    elif len(parts) > 1:
+        yield event.plain_result("用法: /mc tps [服务器名] 或 /mc tps -s 服务器名")
+        return
     servers = config.get_all_servers()
     if not servers:
         yield event.plain_result("还没有添加任何服务器。")
@@ -97,9 +105,15 @@ async def handle_tps(event: AstrMessageEvent, config: ConfigManager, parts: list
         if not target:
             yield event.plain_result(f"未找到名为「{target_server}」的服务器。")
             return
+        if is_hidden(target):
+            yield event.plain_result(f"服务器「{target_server}」不参与TPS查询。")
+            return
         targets = [target]
     else:
-        targets = servers
+        targets = [s for s in servers if not is_hidden(s)]
+        if not targets:
+            yield event.plain_result("没有可查询的服务器，请先在配置中取消隐藏。")
+            return
 
     # 未启用模组 API 的服务器不发请求（否则每台必等一次连接超时），TPS 直接记为 None
     pending = [(i, srv) for i, srv in enumerate(targets) if wm.has_mod_api(srv)]
@@ -136,24 +150,30 @@ async def handle_tps(event: AstrMessageEvent, config: ConfigManager, parts: list
         await asyncio.to_thread(remove_quietly, img_path)
 
 # ---------- 状态和统计 ----------
-async def handle_status(event: AstrMessageEvent, config: ConfigManager):
-    async for result in run_player_status(event, config):
+async def handle_status(event: AstrMessageEvent, config: ConfigManager, parts: list):
+    target_server = None
+    if len(parts) > 1:
+        if len(parts) == 3 and parts[1] == "-s":
+            target_server = parts[2]
+        else:
+            yield event.plain_result("用法: /mc status [-s 服务器名]")
+            return
+    async for result in run_player_status(event, config, target_server):
         yield result
 
 async def handle_stats(event: AstrMessageEvent, config: ConfigManager, parts: list):
+    usage = "用法: /mc stats <玩家名> [服务器名] 或 /mc stats <玩家名> -s <服务器名>"
     if len(parts) < 2:
-        yield event.plain_result("用法: /mc stats <玩家名> <服务器名> 或 /mc stats <玩家名> -s <服务器名>")
+        yield event.plain_result(usage)
         return
     player_name = parts[1]
     target_server = None
-    if len(parts) >= 3:
-        if parts[2] == "-s":
-            if len(parts) >= 4:
-                target_server = parts[3]
-            else:
-                yield event.plain_result("用法: /mc stats <玩家名> -s <服务器名>")
-                return
-        else:
-            target_server = parts[2]
+    if len(parts) == 3 and parts[2] != "-s":
+        target_server = parts[2]
+    elif len(parts) == 4 and parts[2] == "-s":
+        target_server = parts[3]
+    elif len(parts) > 2:
+        yield event.plain_result(usage)
+        return
     async for result in run_player_stats(event, config, player_name, target_server):
         yield result

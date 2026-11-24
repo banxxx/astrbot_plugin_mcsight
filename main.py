@@ -7,7 +7,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from .commands.mc_handler import handle_mc_command
 from .commands.common import attach_db_keepalive_context, start_db_keepalive, stop_db_keepalive
-from .config.server_config import ConfigManager, migrate_legacy_group_configs
+from .config.server_config import migrate_legacy_group_configs
 from .config.whitelist_config import WhitelistManager
 from .utils import mod_http, platform_activation, stats_sampler, official_runtime
 from .utils.official_core import event_scope
@@ -224,10 +224,8 @@ class MCWatcher(Star):
         """服务器状态卡片：在线玩家、版本、延迟与上次在线；「-s 服务器名」可只看单台，隐藏的服务器不出卡。等同于 /mc status"""
         if not platform_activation.accepts(event):
             return
-        if event.get_platform_name() in ("qq_official", "qq_official_webhook"):
-            event.message_str = f"/mc status {_rest_after_command(event)}".rstrip()
-        else:
-            event.message_str = "/mc status"
+        rest = _rest_after_command(event)
+        event.message_str = f"/mc status {rest}".rstrip() if rest else "/mc status"
         async for result in handle_mc_command(event):
             yield result
 
@@ -263,35 +261,7 @@ class MCWatcher(Star):
         if not platform_activation.accepts(event):
             return
         rest = _rest_after_command(event)
-        if event.get_platform_name() in ("qq_official", "qq_official_webhook"):
-            event.message_str = f"/mc say {rest}"
-            async for result in handle_mc_command(event):
-                yield result
-            return
-        if not rest:
-            event.message_str = "/mc say"
-            async for result in handle_mc_command(event):
-                yield result
-            return
-        group_id = event.get_group_id()
-        if group_id:
-            config = ConfigManager(group_id=group_id)
-        else:
-            config = ConfigManager(session_id=event.session_id)
-        servers = config.get_all_servers()
-        server_names = [s["name"] for s in servers]
-        parts = rest.split()
-        if parts and parts[0] in server_names:
-            server_name = parts[0]
-            message = " ".join(parts[1:])
-            if not message:
-                event.message_str = "/mc say"
-                async for result in handle_mc_command(event):
-                    yield result
-                return
-            event.message_str = f"/mc say -s {server_name} {message}"
-        else:
-            event.message_str = f"/mc say {rest}"
+        event.message_str = f"/mc say {rest}".rstrip() if rest else "/mc say"
         async for result in handle_mc_command(event):
             yield result
 
@@ -327,7 +297,7 @@ class MCWatcher(Star):
     # 因此这里的 "/" 必须保持可选；唤醒与否由 is_at_or_wake_command 判定（同 CommandFilter）。
     @filter.regex(r"^/?\s*(绑定|bind)\s*\d{0,6}(?:\s+-s\s+\S{1,20})?$")
     async def bind_command(self, event: AstrMessageEvent):
-        """绑定游戏账号：「/绑定 <6位绑定码>」，官方模式另支持 -s 服务器名。等同于 /mc bind"""
+        """绑定游戏账号：「/绑定 <6位绑定码> [-s 服务器名]」。等同于 /mc bind"""
         if not platform_activation.accepts(event):
             return
         import re
@@ -339,8 +309,6 @@ class MCWatcher(Star):
             return
         token = m.group(2).strip()
         selected = (m.group(3) or "").strip()
-        if selected and event.get_platform_name() not in ("qq_official", "qq_official_webhook"):
-            return
         if token:
             event.message_str = f"/mc bind {token} {selected}".rstrip()
         else:

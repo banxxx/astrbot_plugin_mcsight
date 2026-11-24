@@ -74,6 +74,14 @@ class Peer:
         return self.receipt(scope, operation, self.saved.get(operation["operation_id"], "RESERVED"))
 
 
+class ParseTests(unittest.TestCase):
+    def test_unbind_without_target_defaults_to_all_like_onebot(self):
+        self.assertEqual(commands.parse("unbind", ""), (["all"], None))
+        self.assertEqual(commands.parse("unbind", "-s one"), (["all"], "one"))
+        self.assertEqual(commands.parse("unbind", "Player_A -s one"), (["Player_A"], "one"))
+        self.assertEqual(commands.parse("unbind", "all"), (["all"], None))
+
+
 class CommandIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="official-ingress-synthetic-")
@@ -484,4 +492,5 @@ class RuntimeIngressTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, ["/mc bind 123456 -s one"])
         old = prior.Event("/绑定 123456 -s one", platform="aiocqhttp")
         _ = [item async for item in namespace["bind_command"](None, old)]
-        self.assertEqual(len(calls), 1)
+        # 两个平台都支持显式选服，OneBot 不再丢弃 -s。
+        self.assertEqual(calls, ["/mc bind 123456 -s one", "/mc bind 123456 -s one"])
