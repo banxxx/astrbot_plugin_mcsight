@@ -396,7 +396,16 @@ class EntryIsolationTests(unittest.IsolatedAsyncioTestCase):
             ("checknick_command", "/检测昵称", "/mc checknick"),
             ("bindcheck_command", "/绑定检测", "/mc bindcheck"),
         ]
-        self.assertEqual(set(names), {item[0] for item in cases})
+        official_only = {"guide_common_command", "guide_admin_command"}
+        self.assertEqual(set(names) - official_only, {item[0] for item in cases})
+        # 指引按钮是官方 Markdown 能力：这两个入口在 OneBot 下直接返回、不改写消息。
+        for name in official_only:
+            with self.subTest(entry=name):
+                event = SyntheticEvent(message="/命令指引")
+                self.assertEqual(
+                    [item async for item in getattr(watcher, name)(event)], []
+                )
+                self.assertEqual(event.message_writes, [])
         for name, text, expected in cases:
             with self.subTest(entry=name):
                 event = SyntheticEvent(message=text)

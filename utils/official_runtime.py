@@ -36,6 +36,8 @@ HELP = ("MCSight · QQ 官方群\n"
         "/mc rank [类型] [总|周|月] -s <服务器名> [-n 1–50]\n"
         "/mc page <页码>：查看最近查询的其它页\n"
         "/mc guide [1|2]：命令指引按钮菜单（官方群；2 为管理员页）\n"
+        "/命令指引、/管理指引：直接打开常用 / 管理指引（后者仅群管理员）\n"
+        "/mc sid：显示你自己的官方 member_openid，10 秒后自动撤回\n"
         "/mc bindhelp：查看官方绑定开放状态\n"
         "/mc bind <六位码> [-s 服务器名]；/mc unbind [游戏名|all] [-s 服务器名]\n"
         "/mc check [游戏名|user 官方标识|@成员] [-s 服务器名|all]\n"
@@ -96,6 +98,8 @@ BIND_HELP = ("QQ 官方群须重新配置和绑定，不沿用旧 OneBot 身份�
              "管理员可 /mc check @成员 或 /mc unbind @成员 -s 原服；数字QQ号不当作官方身份。部署后仍须实际 QQ/MC/数据库验收。")
 
 GUIDE_BUTTON_TIPS = "请升级QQ客户端后重试"
+# 官方群消息只能在发出后 2 分钟内撤回；10 秒足够复制 UID，又不会长期暴露。
+SID_RECALL_DELAY_SECONDS = 10
 GUIDE_PAGE1_ROWS = (
     (("status", "在线状态", "/mc status"), ("tps", "当前 TPS", "/mc tps")),
     (("stats", "玩家统计", "/mc stats"), ("rank_duration", "时长排行", "/mc rank 时长")),
@@ -353,6 +357,37 @@ class OfficialSender:
                               or (self.message_attempts==1 and self.last_message_rejected))
         return no_visible_message and self.record["calls"]<4 and time.monotonic()<self.record["expires"]
 
+    async def recall(self, message_id):
+        """尽力撤回自己刚发的群消息；失败不重试，也不向群里补发错误。"""
+        if not isinstance(message_id, str) or not message_id:
+            return False
+        if self.revalidate is not None:
+            try:
+                self.revalidate()
+            except Exception:
+                return False
+        if self.record["calls"] >= 4 or time.monotonic() >= self.record["expires"]:
+            return False
+        self.record["calls"] += 1
+        try:
+            if self.transport is not None:
+                result = self.transport.call("delete_group_message",
+                                             group_openid=self.scope.group_id,
+                                             revalidate=self.revalidate,
+                                             message_id=message_id)
+            else:
+                callback = getattr(self.api, "delete_group_message", None)
+                if not callable(callback):
+                    return False
+                result = callback(group_openid=self.scope.group_id, message_id=message_id)
+            if not inspect.isawaitable(result):
+                return False
+            result = await asyncio.wait_for(result, timeout=20)
+            checked_response(200, result)
+            return True
+        except Exception:
+            return False
+
     async def text(self, value):
         return await self._call("post_group_message", content=value[:1800], msg_type=0,
                                 msg_id=self.scope.message_id, msg_seq=self._sequence())
@@ -399,6 +434,8 @@ class OfficialRuntime:
         self.last_queries = OrderedDict()
         self.closed = False
         self.tasks = set()
+        # 测试可调小；生产固定 10 秒，仍在 QQ 官方 2 分钟撤回窗口内。
+        self.sid_recall_delay = SID_RECALL_DELAY_SECONDS
         self.sampling = False
         self.last_sample = None
         self.help_image = None
@@ -589,8 +626,15 @@ class OfficialRuntime:
                     sender.revalidate = help_revalidate
                 await sender.text(HELP)
                 return
-            if command in ("guide", "命令指引", "指引"):
-                await self._guide_command(scope, sender, arguments, group, page_revision[1])
+            if command in ("guide", "命令指引", "指引", "管理指引"):
+                # “管理指引”本身即管理页入口，不允许通过参数退回第 1 页。
+                await self._guide_command(scope, sender,
+                                          "2" if command == "管理指引" else arguments,
+                                          group, page_revision[1])
+                return
+            if command == "sid":
+                # 引导用命令：不要求群已启用或已有超管，回复后自动撤回。
+                await self._sid_command(scope, sender)
                 return
             if group is None:
                 await sender.text("本官方群尚未启用。请在后台「新增群」生成验证码，"
@@ -762,10 +806,10 @@ class OfficialRuntime:
         try:
             page = int(text or "1")
         except ValueError:
-            await sender.text("用法：/mc guide [1|2]（也可发送 /mc 命令指引）")
+            await sender.text("用法：/命令指引 或 /管理指引；也可发送 /mc guide [1|2]")
             return
         if page not in (1, 2):
-            await sender.text("用法：/mc guide [1|2]（1=常用，2=管理）")
+            await sender.text("用法：/命令指引（常用）或 /管理指引（管理）；也可发送 /mc guide 1|2")
             return
         level = (self.store.access_level(scope, group, environment_admins)
                  if group is not None else 0)
@@ -806,6 +850,31 @@ class OfficialRuntime:
                     or not sender.can_fallback_text()):
                 raise
             await sender.text(_guide_text(rows))
+
+    async def _sid_command(self, scope, sender):
+        """只把发送者自己的 member_openid 发给本人，并在短时间后自动撤回。"""
+        message = ("你的官方成员标识（member_openid）：\n"
+                   f"{scope.user_id}\n"
+                   f"{self.sid_recall_delay:g} 秒后自动撤回；仅用于本插件名单配置，请勿转发。")
+        result = await sender.text(message)
+        message_id = result.get("id") if isinstance(result, dict) else None
+        recall = getattr(sender, "recall", None)
+        if isinstance(message_id, str) and message_id and callable(recall):
+            self._schedule_sid_recall(recall, message_id)
+
+    def _schedule_sid_recall(self, recall, message_id):
+        """延迟撤回；失败静默，避免把撤回错误再发进群。"""
+        async def run():
+            try:
+                await asyncio.sleep(max(0, self.sid_recall_delay))
+                await recall(message_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+        task = asyncio.create_task(run())
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
 
     async def _access_list_command(self, scope, sender, command, arguments, group, page_revision):
         """官方群专属：按 @成员 维护本环境补充名单，不读写 OneBot 公共名单。"""

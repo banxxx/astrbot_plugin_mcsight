@@ -176,6 +176,19 @@ class FixedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 1)
         self.assertNotIn("SYNTHETIC_PRIVATE_ERROR", str(error.exception))
 
+    async def test_delete_group_message_uses_one_delete_and_accepts_empty_body(self):
+        http, calls = fake_http(FakeResponse({}, chunks=[b""]))
+        # 官方消息 id 可以超过 64 字符，撤回不应套用身份字段的短上限。
+        message_id = "ROBOT1.0_" + "A" * 100
+        result = await delivery.BotpyGroupTransport(http).call(
+            "delete_group_message", group_openid=GROUP, message_id=message_id)
+        self.assertEqual(result, {})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["method"], "DELETE")
+        self.assertIn(GROUP, calls[0]["url"])
+        self.assertTrue(calls[0]["url"].endswith("/messages/" + message_id))
+        self.assertIsNone(calls[0]["json"])
+
     async def test_auth_wait_revalidates_permission_before_actual_request(self):
         allowed = [True]
         http, calls = fake_http(on_auth=lambda: allowed.__setitem__(0, False))

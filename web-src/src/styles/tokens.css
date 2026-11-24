@@ -75,7 +75,9 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
   outline: 3px solid #bbc3f7;
   outline-offset: 2px;
 }
-html.modal-open, html.modal-open body { overflow: hidden; }
+/* clip 不会建立新的滚动容器：弹窗打开时仍能禁止页面滚动，但 sticky 侧栏和顶栏
+   不会因滚动参照改变而漂移。iOS 15 不支持 clip，移动端由 UiModal 的固定 body 兜底。 */
+html.modal-open, html.modal-open body { overflow: clip; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
 }

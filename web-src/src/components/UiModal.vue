@@ -1,26 +1,36 @@
 <script lang="ts">
 let lockDepth = 0;
 let lockedScrollY = 0;
+let lockedBodyFixed = false;
 let previousBodyStyle = "";
 const modalStack: HTMLElement[] = [];
 
-function lockPageScroll() {
+function lockPageScroll(fixedBody: boolean) {
   if (lockDepth++ > 0) return;
   lockedScrollY = window.scrollY || document.documentElement.scrollTop || 0;
-  previousBodyStyle = document.body.getAttribute("style") || "";
-  const scrollbar = Math.max(0, window.innerWidth - document.documentElement.clientWidth);
-  document.body.style.position = "fixed";
-  document.body.style.top = `-${lockedScrollY}px`;
-  document.body.style.left = "0";
-  document.body.style.right = "0";
-  document.body.style.width = "100%";
-  if (scrollbar > 0) document.body.style.paddingRight = `${scrollbar}px`;
+  // 桌面端不能把 body 改为 position:fixed：侧边栏是 sticky，固定定位的 body
+  // 会取消它的滚动参照，弹窗打开时侧栏会跟着页面偏移。桌面改用 overflow:clip
+  // 锁滚动（见 tokens.css），滚动条消失时保留页面自身宽度，不再额外补 padding，
+  // 避免遮罩右侧出现一条底色带；iOS 15 不支持 clip，移动端仍使用固定 body。
+  lockedBodyFixed = fixedBody;
+  if (fixedBody) {
+    const scrollbar = Math.max(0, window.innerWidth - document.documentElement.clientWidth);
+    previousBodyStyle = document.body.getAttribute("style") || "";
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${lockedScrollY}px`;
+    document.body.style.left = "0";
+    document.body.style.right = "0";
+    document.body.style.width = "100%";
+    if (scrollbar > 0) document.body.style.paddingRight = `${scrollbar}px`;
+  }
   document.documentElement.classList.add("modal-open");
 }
 function unlockPageScroll() {
   if (lockDepth === 0 || --lockDepth > 0) return;
-  if (previousBodyStyle) document.body.setAttribute("style", previousBodyStyle);
-  else document.body.removeAttribute("style");
+  if (lockedBodyFixed) {
+    if (previousBodyStyle) document.body.setAttribute("style", previousBodyStyle);
+    else document.body.removeAttribute("style");
+  }
   document.documentElement.classList.remove("modal-open");
   window.scrollTo(0, lockedScrollY);
 }
@@ -69,7 +79,7 @@ function trapFocus(event: KeyboardEvent) {
 }
 onMounted(() => {
   previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  lockPageScroll();
+  lockPageScroll(isMobile.value);
   if (modal.value) modalStack.push(modal.value);
   document.addEventListener("keydown", trapFocus);
   void nextTick(() => modal.value?.focus());

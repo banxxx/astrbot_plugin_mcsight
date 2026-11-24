@@ -22,7 +22,8 @@ class OfficialHelpContentTests(unittest.TestCase):
     def test_help_lists_official_commands_and_identity_limit(self):
         text = source_strings(HELP)
         for expected in ("/mc setup ", "/mc operation ", "/mc command ",
-                         "/mc page ", "/mc guide ", "命令指引", "不显示数字 QQ 号",
+                         "/mc page ", "/mc guide ", "/命令指引", "/管理指引",
+                         "/mc sid", "10 秒", "命令指引", "不显示数字 QQ 号",
                          "/mc whitelist ", "super add|remove", "/mc blacklist ",
                          "不回显官方标识"):
             with self.subTest(expected=expected):

@@ -968,7 +968,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             def accepts(event): return core.event_scope(event, SELECTION) is not None
         class Sender:
             def __init__(self, event, scoped, record): self.event, self.record = event, record
-            async def text(self, value): self.record["calls"] += 1; self.event.sent.append(("text", value))
+            async def text(self, value):
+                self.record["calls"] += 1
+                self.event.sent.append(("text", value))
+                return {"id": "SYNTHETIC_REPLY"}
+            async def recall(self, message_id): self.event.sent.append(("recall", message_id))
             async def image(self, value): self.record["calls"] += 2; self.event.sent.append(("image", value))
             async def markdown(self, content, rows): self.record["calls"] += 1; self.event.sent.append(("markdown", (content, rows)))
         async def query(*args): return "构造标题", ["构造结果"]
@@ -1173,6 +1177,37 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("控制台令牌", [label for row in actual for label in row])
             self.assertNotIn("返回常用", [label for row in actual for label in row])
             self.assertNotIn("超管", content)
+
+    async def test_guide_admin_chinese_alias_always_opens_page_two(self):
+        runtime = self.make_runtime()
+        _, group = self.approve()
+        self.store.update(ENV, group["config_id"], 1,
+                          {"enabled": True, "servers": [server()]})
+        denied = Event("/mc 管理指引", message_id="EVENT_GUIDE_ADMIN_ALIAS_DENIED")
+        await runtime.handle(denied)
+        self.assertEqual(denied.sent[0][0], "text")
+        self.assertIn("仅限本群管理员", denied.sent[0][1])
+
+        self.store.access_provider = lambda: {
+            "super_admins": [], "whitelist_admins": [USER], "blacklist": []}
+        module("debounce").reset()
+        event = Event("/mc 管理指引 1", message_id="EVENT_GUIDE_ADMIN_ALIAS")
+        await runtime.handle(event)
+        kind, (content, rows) = event.sent[0]
+        self.assertEqual(kind, "markdown")
+        self.assertEqual(content.splitlines()[0], "# MCSight · 管理指引")
+        self.assertEqual(len(rows), 4)
+
+    async def test_sid_command_reveals_sender_uid_then_recalls_reply(self):
+        runtime = self.make_runtime()
+        runtime.sid_recall_delay = 0
+        event = Event("/mc sid", message_id="EVENT_SID")
+        await runtime.handle(event)
+        self.assertEqual(event.sent[0][0], "text")
+        self.assertIn(USER, event.sent[0][1])
+        self.assertIn("member_openid", event.sent[0][1])
+        await asyncio.sleep(0.02)
+        self.assertIn(("recall", "SYNTHETIC_REPLY"), event.sent)
 
     async def test_guide_rejected_markdown_falls_back_once_to_plain_text(self):
         runtime = self.make_runtime()
@@ -1708,13 +1743,16 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
                  "rank": "/排行 时长", "broadcast": "/广播 one hello", "exec_command": "/执行 -s one say hello",
                  "tps_command": "/tps", "bind_command": "/绑定 123456", "unbind_command": "/解绑 Player_A",
                  "checkbind_command": "/查绑定", "bindhelp_command": "/绑定帮助", "help_command": "/帮助",
-                 "lastonline_command": "/上次在线", "checknick_command": "/检测昵称", "bindcheck_command": "/绑定检测"}
+                 "lastonline_command": "/上次在线", "checknick_command": "/检测昵称", "bindcheck_command": "/绑定检测",
+                 "guide_common_command": "/命令指引", "guide_admin_command": "/管理指引"}
         self.assertEqual(set(names), {m.name for m in methods})
         for name, command in names.items():
             event = Event(command)
             self.assertEqual([x async for x in getattr(handler, name)(event)], [])
         self.assertEqual(len(calls), len(names))
         self.assertIn("/mc status -s one", calls)
+        self.assertIn("/mc guide 1", calls)
+        self.assertIn("/mc guide 2", calls)
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@
     "super_admins": {
         "description": "超级管理员",
         "type": "list",
-        "hint": "OneBot 与 QQ 官方共用。\nQQ 号：5–12 位数字\nopenid：16–64 位英文字母或数字\n按发送者 ID 精确匹配；QQ 官方 openid 通常按群区分，跨群管理需逐群添加或使用环境管理员。",
+        "hint": "OneBot 与 QQ 官方共用。\nQQ 号：5–12 位数字\nopenid：16–64 位英文字母或数字\n按发送者 ID 精确匹配；QQ 官方 openid 通常按群区分，跨群管理需逐群添加或使用环境管理员。\n官方平台首次配置：在目标群发送 /mc sid（回复 10 秒后自动撤回）或 AstrBot 内置指令 /sid，把回复中的成员标识（内置指令显示为 UID）填到这里；保存后即可使用 /mc whitelist super add @成员。",
         "default": [],
         "full_width": true,
         "items": {
@@ -36,7 +36,7 @@
     "whitelist_admins": {
         "description": "白名单管理员",
         "type": "list",
-        "hint": "OneBot 与 QQ 官方共用。\nQQ 号：5–12 位数字\nopenid：16–64 位英文字母或数字\n与群主、群管理员拥有同等管理权限；QQ 官方 openid 通常按群区分，跨群需逐群添加。",
+        "hint": "OneBot 与 QQ 官方共用。\nQQ 号：5–12 位数字\nopenid：16–64 位英文字母或数字\n与群主、群管理员拥有同等管理权限；QQ 官方 openid 通常按群区分，跨群需逐群添加。\n官方平台可在目标群发送 /mc sid（10 秒后自动撤回）或 AstrBot 内置指令 /sid 获取成员标识（即 member_openid）。",
         "default": [],
         "full_width": true,
         "items": {
@@ -47,7 +47,7 @@
     "blacklist": {
         "description": "黑名单",
         "type": "list",
-        "hint": "OneBot 与 QQ 官方共用。\nQQ 号：5–12 位数字\nopenid：16–64 位英文字母或数字\n名单内成员无法使用插件功能；QQ 官方 openid 通常按群区分，跨群封禁需逐群添加。",
+        "hint": "OneBot 与 QQ 官方共用。\nQQ 号：5–12 位数字\nopenid：16–64 位英文字母或数字\n名单内成员无法使用插件功能；QQ 官方 openid 通常按群区分，跨群封禁需逐群添加。\n官方平台可在目标群发送 /mc sid（10 秒后自动撤回）或 AstrBot 内置指令 /sid 获取成员标识（即 member_openid）。",
         "default": [],
         "full_width": true,
         "items": {

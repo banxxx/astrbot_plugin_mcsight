@@ -420,6 +420,31 @@ class MCWatcher(Star):
         async for result in handle_mc_command(event):
             yield result
 
+    # ---------- 官方群命令指引中文入口 ----------
+    # QQ 开放平台的“指令”只能填简短命令名，因此把两页指引各暴露为一个中文命令；
+    # 只对官方平台生效，OneBot 仍使用 /mc help（指引按钮是官方 Markdown 能力）。
+    @filter.command("命令指引")
+    async def guide_common_command(self, event: AstrMessageEvent):
+        """QQ 官方群常用命令指引：Markdown + 自定义按钮菜单，点击只填入命令。等同于 /mc guide 1"""
+        if event.get_platform_name() not in ("qq_official", "qq_official_webhook"):
+            return
+        if not platform_activation.accepts(event):
+            return
+        event.message_str = "/mc guide 1"
+        async for result in handle_mc_command(event):
+            yield result
+
+    @filter.command("管理指引")
+    async def guide_admin_command(self, event: AstrMessageEvent):
+        """QQ 官方群管理命令指引（仅本群管理员，级别 ≥3）。等同于 /mc guide 2"""
+        if event.get_platform_name() not in ("qq_official", "qq_official_webhook"):
+            return
+        if not platform_activation.accepts(event):
+            return
+        event.message_str = "/mc guide 2"
+        async for result in handle_mc_command(event):
+            yield result
+
     async def terminate(self):
         self._official.close()
         onebot_store.close_store()

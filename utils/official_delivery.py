@@ -53,9 +53,22 @@ class BotpyGroupTransport:
         self.supports_images = image_schema_verified
 
     async def call(self, method, *, group_openid, revalidate=None, **payload):
-        suffix = METHOD_PATHS.get(method)
-        if suffix is None:
-            raise OfficialError("不支持的官方群发送动作。")
+        http_method = "POST"
+        if method == "delete_group_message":
+            # 撤回自己的群消息：DELETE /v2/groups/{group_openid}/messages/{message_id}
+            # 官方消息 id 形如 ROBOT1.0_xxx，通常长于身份字段的 64 字符上限，
+            # 因此这里单独校验，而不是复用 identifier()。
+            message_id = payload.pop("message_id", None)
+            if (not isinstance(message_id, str) or not 1 <= len(message_id) <= 256
+                    or message_id != message_id.strip() or message_id in (".", "..")
+                    or any(ord(c) < 33 or ord(c) == 127 for c in message_id)):
+                raise OfficialError("官方群消息标识无效。")
+            suffix = "messages/" + quote(message_id, safe="")
+            http_method = "DELETE"
+        else:
+            suffix = METHOD_PATHS.get(method)
+            if suffix is None:
+                raise OfficialError("不支持的官方群发送动作。")
         if suffix == "files":
             if not self.supports_images:
                 raise OfficialError("当前事件类的本地图片协议尚未核验，请使用分页文字。")
@@ -82,10 +95,11 @@ class BotpyGroupTransport:
                     or not math.isfinite(timeout) or timeout <= 0):
                 raise OfficialError("官方适配器请求预算无效。")
             import aiohttp
-            # POST is intentionally performed exactly once at this layer. Never use
-            # BotHttp.request: its connection-reset branch can transparently replay.
+            # One request is intentionally performed exactly once at this layer. Never
+            # use BotHttp.request: its connection-reset branch can transparently replay.
             async with session.request(
-                method="POST", url=url, headers=headers, json=payload,
+                method=http_method, url=url, headers=headers,
+                json=payload if http_method == "POST" else None,
                 allow_redirects=False, timeout=aiohttp.ClientTimeout(total=min(timeout, 20)),
             ) as response:
                 chunks, size = [], 0
@@ -94,7 +108,11 @@ class BotpyGroupTransport:
                     if size > MAX_REPLY_BYTES:
                         raise OfficialError("QQ 官方回执超过限制，发送结果待确认。")
                     chunks.append(chunk)
-                try:result=json.loads(b"".join(chunks))
+                raw = b"".join(chunks)
+                # 撤回接口成功时可以是空响应体；不要把它当成无法解析的回执。
+                if http_method == "DELETE" and response.status in (200, 204) and not raw.strip():
+                    return {}
+                try:result=json.loads(raw)
                 except (ValueError,UnicodeError):
                     checked_response(response.status,{})
                     raise OfficialApiError("unknown","QQ 官方返回了无法解析的回执，结果待确认。") from None
