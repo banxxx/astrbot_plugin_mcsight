@@ -2,6 +2,27 @@
 
 版本号写法：`metadata.yaml` 的 `version` 不带 `v`（如 `1.1.2`），GitHub 的 tag 与 Release 用带 `v` 的同名版本号（`v1.1.2`）。下面的标题按前者书写。
 
+版本号遵循语义化版本（SemVer）：MAJOR 用于配置、数据、命令或接口的破坏性变更；MINOR 用于向后兼容的新功能；PATCH 用于向后兼容的修复、文案与构建调整。同一版本里既有新功能又有修复时，按较高一级取值。
+
+## 2.3.0 — 2026-11-25（配置页复制修复与官方 ID 展示）
+
+本次集中修复后台配置页在 AstrBot 内嵌 iframe 中无法复制的问题，并把配置模组所需的官方环境 ID、服务器 ID 直接展示在页面上。数据格式、迁移流程、绑定协议和权限等级均不变。
+
+### 本次更新
+
+- 修复配置页部分复制入口在 AstrBot 内嵌 iframe 中失败的问题。AstrBot 以 `sandbox="allow-scripts allow-forms allow-downloads"` 嵌入插件页，页面处于 opaque origin，`navigator.clipboard` 通常不可用或没有 `clipboard-write` 权限；原先只依赖 Clipboard API 的「复制群 OpenID」与新加的环境 ID 复制必然失败。
+- 新增统一复制工具 `web-src/src/lib/clipboard.ts`：先在用户点击手势内用隐藏 `textarea` + `document.execCommand("copy")` 同步复制，失败再退回 Clipboard API；针对 iOS Safari 只读 `textarea` 选区不生效的问题补充 `contentEditable` + `Range` 兜底。
+- 「复制群 OpenID」「官方配置 JSON」「验证码命令」「OneBot JSON」等既有复制入口全部改用同一工具，并移除 `DialogHost.vue` 内部的重复实现；复制失败时的提示文案与手动选择文本的兜底保持不变。
+- 「全局参数 → 生效机器人」新增官方环境 ID 展示与复制：同时存在运行环境与下次启动环境时分别显示，非官方平台不显示；该值用于模组 `qq_official.environmentId`，不是密钥。
+- 「群与服务器」每台服务器的「更多」菜单新增「复制服务器 ID」；「编辑服务器」弹窗新增只读「服务器 ID」区块与复制按钮，并注明需填入模组 `qq_official.serverId`、必须完全一致。服务器 ID 由插件生成，不是敏感字段。
+- 同步更新 `views/config` 前端构建产物。
+
+### 兼容性
+
+- 仅后台 WebUI 的展示与复制行为变化；配置项、SQLite 结构、命令、权限、官方绑定协议和模组接口均无变化，升级不需要迁移。
+- 复制仍受浏览器能力限制：execCommand 与 Clipboard API 都不可用时，页面会提示手动选择文本；服务器 ID、环境 ID 和群 OpenID 都可以在对应弹窗中直接选中复制。
+- 生效机器人的新选择仍需完整重启 AstrBot 后应用，与 2.2.1 一致。
+
 ## 2.2.1 — 2026-11-25（官方中文指引、成员标识查询与配置页修复）
 
 本次在 2.2.0 的 SQLite 配置基础上，补充 QQ 官方群的中文命令入口和成员标识查询，并修复后台配置页弹窗导致侧边栏漂移的问题。数据格式、迁移流程、绑定协议和权限等级均不变。
