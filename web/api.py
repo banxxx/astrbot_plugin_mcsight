@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import re
+import threading
 import time
 from functools import wraps
 
@@ -53,7 +54,7 @@ from ..utils.official_transport import ModTarget, TransportError, V2ModClient
 from ..utils.bind_rule import validate as validate_bind_rule
 from ..utils.host_validator import normalize_host_input, validate_host
 from ..utils.group_policy import POLICY_BOOL_KEYS
-from ..utils.plugin_paths import PLUGIN_NAME
+from ..utils.plugin_paths import PLUGIN_NAME, data_dir
 from .constants import ROWS
 
 ROUTE_PREFIX = f"/{PLUGIN_NAME}/view"
@@ -117,6 +118,61 @@ async def _body() -> tuple[dict, str]:
     if not isinstance(raw, dict):
         return {}, "请求体必须是 JSON 对象"
     return raw, ""
+
+
+# 页面 iframe 是 sandbox 的不透明源：没有 localStorage/cookie，主题偏好只能落盘。
+# 这份偏好是插件级而不是群级，所有会话/设备读同一份。
+UI_THEMES = ("classic", "cream")
+UI_PREFS_FILE = "ui_prefs.json"
+_ui_prefs_lock = threading.Lock()
+
+
+def _ui_prefs_path() -> str:
+    return os.path.join(data_dir(), UI_PREFS_FILE)
+
+
+def _read_ui_prefs() -> dict:
+    """读不到或内容损坏都退回经典主题，不能让外观偏好挡住配置页。"""
+    try:
+        with open(_ui_prefs_path(), "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return {"theme": "classic"}
+    theme = raw.get("theme") if isinstance(raw, dict) else None
+    return {"theme": theme if theme in UI_THEMES else "classic"}
+
+
+def _write_ui_prefs(theme: str) -> None:
+    """先写临时文件再替换，重载/断电时不会留下半份 JSON。"""
+    path = _ui_prefs_path()
+    tmp = f"{path}.tmp"
+    with _ui_prefs_lock:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"theme": theme}, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+
+
+async def view_ui_prefs():
+    return _ok(_read_ui_prefs())
+
+
+async def view_ui_prefs_update():
+    body, err = await _body()
+    if err:
+        return _err(err)
+    if set(body) != {"theme"}:
+        return _err("请求包含不支持的字段。")
+    theme = body.get("theme")
+    if theme not in UI_THEMES:
+        return _err("未知的主题样式。")
+    try:
+        await asyncio.to_thread(_write_ui_prefs, theme)
+    except OSError:
+        logger.exception("[MCSight] 保存主题偏好失败")
+        return _err("主题偏好保存失败，请稍后重试。")
+    return _ok({"theme": theme})
 
 
 def _clean_gid(raw) -> str:
@@ -1596,6 +1652,8 @@ def _active_remote_handler(handler):
 
 
 ROUTES = (
+    ("ui/prefs", view_ui_prefs, ["GET"], "读取页面外观偏好"),
+    ("ui/prefs/update", view_ui_prefs_update, ["POST"], "保存页面外观偏好"),
     ("activation", view_activation, ["GET"], "读取生效机器人与实例列表"),
     ("activation/update", view_activation_update, ["POST"], "整组保存生效机器人选择，完整重启后应用"),
     ("official/state", view_official_state, ["GET"], "读取指定官方环境的登记与配置"),

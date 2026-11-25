@@ -31,6 +31,7 @@ import type {
   RemarkSyncPayload,
   WhitelistPayload,
   TokenPayload,
+  UiPrefs,
 } from "./types";
 
 let bridge: RawBridge | null = null;
@@ -144,5 +145,8 @@ export const api = {
   configJson: () => get<JsonPayload>("config/json"),
   constants: () => get<ConstantsPayload>("constants"),
   commands: () => get<CommandsPayload>("commands"),
+  /* iframe 是不透明源，localStorage 不可用：主题偏好统一存到插件数据目录。 */
+  uiPrefs: () => get<UiPrefs>("ui/prefs"),
+  uiPrefsUpdate: (theme: UiPrefs["theme"]) => post<UiPrefs>("ui/prefs/update", { theme }),
   pluginReload: () => post<ReloadPayload>("plugin/reload", {}),
 };

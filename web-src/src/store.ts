@@ -11,10 +11,12 @@ import { ApiError } from "./lib/bridge";import type {
   ModState,
   OfficialState,
   ServerEntry,
+  UiTheme,
 } from "./lib/types";
 
 export type PageKey = "srv" | "cfg" | "official" | "const" | "map" | "help";
 export type PlatformView = "onebot" | "qq_official";
+export type Skin = UiTheme;
 
 export { api };
 
@@ -34,6 +36,10 @@ interface State {
   officialState: OfficialState | null;
   ready: boolean;
   noBridge: boolean;
+  /** 外观主题；偏好存在插件数据目录，跨会话生效。 */
+  skin: Skin;
+  /** 偏好还没读回来时先别画外壳，避免经典主题闪一下再切到奶油。 */
+  skinReady: boolean;
   /** 在飞的请求数，读与写都算。页面用它把「还没读到」和「真的没有数据」分开 */
   pending: number;
   page: PageKey;
@@ -63,6 +69,8 @@ export const S = reactive<State>({
   officialState: null,
   ready: false,
   noBridge: false,
+  skin: "classic",
+  skinReady: false,
   pending: 0,
   page: "srv",
   error: "",
@@ -114,6 +122,37 @@ export function toast(text: string) {
   toastTimer = window.setTimeout(() => {
     S.toast = "";
   }, 4200);
+}
+
+/** 只改当前外观，不写后端；主题抽屉里「选中即预览」用它。 */
+export function applySkin(skin: Skin) {
+  S.skin = skin;
+  document.documentElement.dataset.skin = skin;
+}
+
+/** 启动时读偏好：读不到就安静地留在经典主题，不能因此挡住配置页。 */
+export async function loadSkinPrefs() {
+  try {
+    const prefs = await api.uiPrefs();
+    applySkin(prefs.theme);
+  } catch {
+    applySkin("classic");
+  } finally {
+    S.skinReady = true;
+  }
+}
+
+/** 「应用并保存」：先写后端，成功后才算持久化；失败保留当前抽屉让用户重试。 */
+export async function saveSkin(skin: Skin): Promise<boolean> {
+  S.error = "";
+  try {
+    await api.uiPrefsUpdate(skin);
+    applySkin(skin);
+    return true;
+  } catch (err) {
+    fail(err);
+    return false;
+  }
 }
 
 export function fail(err: unknown) {
@@ -170,20 +209,24 @@ watch(
   },
 );
 
-/** 读各服登录开关的当前值：整群一次并发，失败的那台由调用侧渲染成 unknown */
-export async function loadModState() {
+/** 读各服登录开关的当前值：整群一次并发，失败的那台由调用侧渲染成 unknown。
+    返回是否拿到了响应，菜单里的「刷新模组状态」据此决定要不要再弹结果提示。 */
+export async function loadModState(): Promise<boolean> {
   const gid = S.gid;
   if (!gid) {
     S.modStates = {};
     S.modStateLoading = false;
-    return;
+    return false;
   }
   S.modStateLoading = true;
   try {
     const r = await inflight(() => api.serverModState(gid));
-    if (S.gid === gid) S.modStates = r.states;
+    if (S.gid !== gid) return false;
+    S.modStates = r.states;
+    return true;
   } catch (err) {
     fail(err);
+    return false;
   } finally {
     if (S.gid === gid) S.modStateLoading = false;
   }
@@ -415,6 +458,7 @@ export async function boot() {
   } catch {
     S.noBridge = true;
     S.ready = true;
+    S.skinReady = true;
     return;
   }
   try {
@@ -423,6 +467,7 @@ export async function boot() {
   } catch {
     /* 桥的 ready 只在面板里 resolve；到这里说明上下文没发过来 */
   }
+  await loadSkinPrefs();
   if (!S.activation) {
     try {
       S.activation = await api.activation();

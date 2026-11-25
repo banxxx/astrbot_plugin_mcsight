@@ -2,6 +2,13 @@
 
 export type Envelope<T> = { status: "ok"; data: T } | { status: "error"; message: string };
 
+/** 外观主题：经典＝原来的侧栏/表格外观，奶油＝画布里的顶栏/卡片外观。 */
+export type UiTheme = "classic" | "cream";
+
+export interface UiPrefs {
+  theme: UiTheme;
+}
+
 export interface ServerEntry {
   name: string;
   host: string;

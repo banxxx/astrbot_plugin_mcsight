@@ -19,6 +19,7 @@ import { useIsMobile } from "../lib/useMediaQuery";
 
 const props = defineProps<{ embedded?: boolean }>();
 const isMobile = useIsMobile();
+const isCream = computed(() => S.skin === "cream");
 
 const state = ref<OfficialState | null>(null);
 const initializing = ref(true);
@@ -176,21 +177,24 @@ function remarkTitle(server: OfficialServer): string {
   }
   return server.remark_motd ? `手填的值 · 另存着上次采到的 motd：${server.remark_motd}` : "手填的值";
 }
-async function loadModStates() {
+async function loadModStates(): Promise<boolean> {
   const current = group.value;
   if (!current || !environment.value) {
     modStates.value = {};
     modStateLoading.value = false;
-    return;
+    return false;
   }
   const configId = current.config_id;
   modStateLoading.value = true;
   try {
     const result = await api.officialModState(environment.value, configId);
-    if (group.value?.config_id === configId) modStates.value = result.states;
+    if (group.value?.config_id !== configId) return false;
+    modStates.value = result.states;
+    return true;
   } catch (e) {
     if (group.value?.config_id === configId) modStates.value = {};
     error.value = e instanceof Error ? e.message : "读取模组状态失败";
+    return false;
   } finally {
     if (group.value?.config_id === configId) modStateLoading.value = false;
   }
@@ -852,17 +856,20 @@ function moveServer(server: OfficialServer, delta: number) {
   [next[index], next[target]] = [next[target], next[index]];
   void saveGroup({ servers: next });
 }
-function serverItems(index: number) {
+function serverItems(server: OfficialServer, index: number) {
   return [
     { value: "up", label: "上移", icon: "arrow-up", disabled: index === 0 },
     { value: "down", label: "下移", icon: "arrow-down", disabled: index === servers.value.length - 1 },
-    { value: "copy-id", label: "复制服务器 ID", icon: "copy", disabled: !servers.value[index]?.server_id },
+    /* 没配模组端口的服没有可读状态；正在刷新时也不再排队点第二次。 */
+    { value: "refresh-mod", label: "刷新模组状态", icon: "refresh", disabled: server.api_port === null || modStateLoading.value },
+    { value: "copy-id", label: "复制服务器 ID", icon: "copy", disabled: !server.server_id },
     { value: "token", label: "命令 Token", icon: "key" },
     { value: "delete", label: "删除服务器", icon: "trash", danger: true },
   ];
 }
 async function serverAction(value: string, server: OfficialServer, index: number) {
   if (value === "up" || value === "down") moveServer(server, value === "up" ? -1 : 1);
+  else if (value === "refresh-mod") await refreshModState(server);
   else if (value === "copy-id") {
     toast(await copyText(server.server_id)
       ? "已复制服务器 ID" : "复制失败，请打开「编辑」手动选择服务器 ID");
@@ -870,10 +877,24 @@ async function serverAction(value: string, server: OfficialServer, index: number
   else if (value === "token") openEditServer(server);
   else if (value === "delete") deleteTarget.value = { server, index };
 }
+
+/** 菜单里点一下就读一次实时状态：官方侧同样整群并发读，读回来直接覆盖徽标。 */
+async function refreshModState(server: OfficialServer) {
+  if (server.api_port === null || modStateLoading.value) return;
+  toast(`正在刷新「${server.name}」的模组状态…`);
+  if (!(await loadModStates())) {
+    toast(error.value || `刷新「${server.name}」的模组状态失败`);
+    return;
+  }
+  const state = modState(server);
+  if (!state) toast(`未读取到「${server.name}」的模组状态`);
+  else if (!state.reachable) toast(`「${server.name}」模组未响应：${state.reason || "连接失败"}`);
+  else toast(`已刷新「${server.name}」的模组状态`);
+}
 </script>
 
 <template>
-  <div class="srv-page official-page" :class="{ 'is-mobile': isMobile }">
+  <div class="srv-page official-page" :class="{ 'is-mobile': isMobile, 'is-cream': isCream }">
     <header v-if="!props.embedded" class="srv-heading">
       <div>
         <h1>群与服务器</h1>
@@ -898,7 +919,13 @@ async function serverAction(value: string, server: OfficialServer, index: number
       </div>
     </section>
 
-    <div v-if="!isMobile" class="srv-summary" aria-label="本群概况">
+    <div v-if="isCream" class="srv-stats" aria-label="本群概况">
+      <div class="srv-stat"><span class="srv-stat-icon tone-lilac"><UiIcon name="users" :size="18" /></span><div><b>{{ groupOptions.length }}</b><span>已配置群</span></div></div>
+      <div class="srv-stat"><span class="srv-stat-icon tone-peach"><UiIcon name="server" :size="18" /></span><div><b>{{ servers.length }}<small> / 20</small></b><span>本群服务器</span></div></div>
+      <div class="srv-stat"><span class="srv-stat-icon tone-sage"><UiIcon name="sliders" :size="18" /></span><div><b>{{ modCount }}</b><span>模组端口</span></div></div>
+      <div class="srv-stat"><span class="srv-stat-icon tone-butter"><UiIcon name="key" :size="18" /></span><div><b>{{ tokenCount }}</b><span>命令 Token</span></div></div>
+    </div>
+    <div v-else-if="!isMobile" class="srv-summary" aria-label="本群概况">
       <span>已配置 {{ groupOptions.length }} 个群</span>
       <span>本群服务器 {{ servers.length }} / 20</span>
       <span>已配模组端口 {{ modCount }} 台</span>
@@ -914,7 +941,7 @@ async function serverAction(value: string, server: OfficialServer, index: number
       '发送防重状态待核验'
     }}</UiNotice>
 
-    <section class="srv-list" :class="{ 'srv-list--mobile': isMobile }" aria-label="服务器列表">
+    <section class="srv-list" :class="{ 'srv-list--mobile': isMobile, 'srv-list--cream': isCream && !isMobile }" aria-label="服务器列表">
       <div class="srv-list-toolbar">
         <h2 v-if="!isMobile">服务器列表</h2><span v-else class="srv-mobile-count">{{ servers.length }} / 20 台服务器</span>
         <div class="srv-toolbar-actions">
@@ -931,7 +958,7 @@ async function serverAction(value: string, server: OfficialServer, index: number
         </div>
       </div>
 
-      <div v-if="!isMobile" class="srv-table-scroll">
+      <div v-if="!isMobile && !isCream" class="srv-table-scroll">
         <div class="srv-table" role="table" aria-label="当前群服务器">
           <div class="srv-table-head srv-grid" role="row">
             <span role="columnheader" aria-label="序号">#</span>
@@ -971,7 +998,7 @@ async function serverAction(value: string, server: OfficialServer, index: number
               <button class="srv-action srv-action--edit" type="button" @click="openEditServer(server)">编辑</button>
               <button class="srv-action" type="button" :title="server.hidden ? '恢复官方群展示与查询' : '从官方群撤下并停止查询'"
                 @click="toggleHidden(server)">{{ server.hidden ? "显示" : "隐藏" }}</button>
-              <UiMenu :items="serverItems(index)" @select="(value) => serverAction(value, server, index)">
+              <UiMenu :items="serverItems(server, index)" @select="(value) => serverAction(value, server, index)">
                 <template #trigger="{ attrs, toggle }"><button v-bind="attrs" class="srv-action srv-action--more"
                     type="button" :aria-label="server.name + '更多操作'" @click="toggle">
                     <UiIcon name="more-horizontal" :size="16" />
@@ -982,7 +1009,7 @@ async function serverAction(value: string, server: OfficialServer, index: number
         </div>
       </div>
 
-      <div v-else-if="servers.length" class="srv-mobile-list">
+      <div v-else-if="(isMobile || isCream) && servers.length" class="srv-mobile-list">
         <article v-for="(server, index) in servers" :key="server.server_id || 'new-' + index" class="srv-mobile-card"
           :class="{ 'is-hidden': server.hidden }">
           <div class="srv-mobile-card-title"><span class="srv-index">{{ String(index + 1).padStart(2, "0") }}</span><b class="srv-server-name">{{ server.name }}</b>
@@ -1020,7 +1047,7 @@ async function serverAction(value: string, server: OfficialServer, index: number
             <UiButton kind="sec" @click="toggleHidden(server)">
               <UiIcon :name="server.hidden ? 'eye' : 'eye-off'" :size="16" />{{ server.hidden ? "显示" : "隐藏" }}
             </UiButton>
-            <UiMenu :items="serverItems(index)" label="更多" @select="(value) => serverAction(value, server, index)" />
+            <UiMenu :items="serverItems(server, index)" label="更多" @select="(value) => serverAction(value, server, index)" />
           </div>
         </article>
       </div>
@@ -1042,8 +1069,8 @@ async function serverAction(value: string, server: OfficialServer, index: number
           </UiButton>
         </template>
       </div>
-      <div v-if="!isMobile" class="srv-table-foot">
-        <UiIcon name="info" :size="15" /><span>隐藏后从 /在线 撤下并停止采集；绑定与 Token 保留。更多菜单可调整顺序、管理 Token 或删除。</span>
+      <div v-if="!isMobile && !isCream" class="srv-table-foot">
+        <UiIcon name="info" :size="15" /><span>隐藏后从 /在线 撤下并停止采集；绑定与 Token 保留。更多菜单可刷新模组状态、调整顺序、管理 Token 或删除。</span>
       </div>
     </section>
 
