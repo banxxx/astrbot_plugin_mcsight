@@ -29,6 +29,7 @@ import {
   type PageKey,
 } from "../store";
 import { ApiError } from "../lib/bridge";
+import { copyText } from "../lib/clipboard";
 import { aliasUnits, clipAlias, clipDigits } from "../lib/groupFields";
 import type { ConfigItem, OneBotBackup, RemarkRun, ServerEntry } from "../lib/types";
 import RemarkText from "./RemarkText.vue";
@@ -412,26 +413,6 @@ function selectJsonText() {
   selection?.addRange(range);
 }
 
-function copyWithSelection(text: string): boolean {
-  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const input = document.createElement("textarea");
-  input.value = text;
-  input.readOnly = true;
-  input.setAttribute("aria-hidden", "true");
-  Object.assign(input.style, { position: "fixed", top: "0", left: "0", width: "1px", height: "1px",
-    opacity: "0", fontSize: "16px" });
-  document.body.appendChild(input);
-  try {
-    input.focus();
-    input.select();
-    input.setSelectionRange(0, text.length);
-    return document.execCommand("copy");
-  } finally {
-    input.remove();
-    previousFocus?.focus();
-  }
-}
-
 async function copyJson() {
   if (!jsonText.text || jsonCopying.value || jsonText.error) return;
   const dialog = S.dialog;
@@ -441,15 +422,8 @@ async function copyJson() {
   jsonCopyError.value = "";
   let copied = false;
   try {
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(visibleText);
-        copied = true;
-      }
-    } catch {
-      // The AstrBot iframe may disallow Clipboard API access.
-    }
-    if (!copied) copied = copyWithSelection(visibleText);
+    // 先走同步选区复制：AstrBot 的 opaque origin iframe 不会放行 Clipboard API。
+    copied = await copyText(visibleText);
     if (S.dialog !== dialog) return;
     if (!copied) throw new Error("copy-not-available");
     jsonCopied.value = true;
@@ -887,19 +861,7 @@ async function generateSetupCode() {
 
 async function copySetupCode() {
   if (!setup.code) return;
-  const command = `/mc setup ${setup.code}`;
-  /* 先走同步选区复制，保住用户点击手势；iframe/旧版手机浏览器更可靠。 */
-  let copied = copyWithSelection(command);
-  if (!copied) {
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(command);
-        copied = true;
-      }
-    } catch {
-      /* 两种方式都不可用时再提示手动复制。 */
-    }
-  }
+  const copied = await copyText(`/mc setup ${setup.code}`);
   toast(copied ? "已复制命令" : "复制失败，请手动输入命令");
 }
 

@@ -13,6 +13,7 @@ import UiSelect from "../components/UiSelect.vue";
 import UiSwitch from "../components/UiSwitch.vue";
 import OfficialServerModal from "../components/OfficialServerModal.vue";
 import RemarkText from "../components/RemarkText.vue";
+import { copyText } from "../lib/clipboard";
 import { aliasUnits, clipAlias, clipDigits } from "../lib/groupFields";
 import { useIsMobile } from "../lib/useMediaQuery";
 
@@ -298,12 +299,8 @@ async function groupAction(value: string) {
     return;
   }
   if (value === "copy-openid" && group.value) {
-    try {
-      await navigator.clipboard.writeText(group.value.group_openid);
-      toast("已复制群 OpenID");
-    } catch {
-      toast("复制失败，请在“编辑群信息”中手动复制");
-    }
+    toast(await copyText(group.value.group_openid)
+      ? "已复制群 OpenID" : "复制失败，请在“编辑群信息”中手动复制");
   }
 }
 function backupStamp(): string {
@@ -506,14 +503,13 @@ async function saveBatchDelete() {
   }
 }
 async function copyJson() {
-  try {
-    await navigator.clipboard.writeText(jsonText.value);
-    jsonCopied.value = true;
-    window.clearTimeout(jsonCopyTimer);
-    jsonCopyTimer = window.setTimeout(() => { jsonCopied.value = false; }, 2000);
-  } catch {
+  if (!await copyText(jsonText.value)) {
     toast("复制失败，请手动选择文本");
+    return;
   }
+  jsonCopied.value = true;
+  window.clearTimeout(jsonCopyTimer);
+  jsonCopyTimer = window.setTimeout(() => { jsonCopied.value = false; }, 2000);
 }
 const bindOptions = [
   { value: "paren", label: "括号内的游戏 ID", description: "玩家（Steve）" },
@@ -860,12 +856,17 @@ function serverItems(index: number) {
   return [
     { value: "up", label: "上移", icon: "arrow-up", disabled: index === 0 },
     { value: "down", label: "下移", icon: "arrow-down", disabled: index === servers.value.length - 1 },
+    { value: "copy-id", label: "复制服务器 ID", icon: "copy", disabled: !servers.value[index]?.server_id },
     { value: "token", label: "命令 Token", icon: "key" },
     { value: "delete", label: "删除服务器", icon: "trash", danger: true },
   ];
 }
-function serverAction(value: string, server: OfficialServer, index: number) {
+async function serverAction(value: string, server: OfficialServer, index: number) {
   if (value === "up" || value === "down") moveServer(server, value === "up" ? -1 : 1);
+  else if (value === "copy-id") {
+    toast(await copyText(server.server_id)
+      ? "已复制服务器 ID" : "复制失败，请打开「编辑」手动选择服务器 ID");
+  }
   else if (value === "token") openEditServer(server);
   else if (value === "delete") deleteTarget.value = { server, index };
 }

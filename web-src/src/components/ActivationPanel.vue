@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { api, configSaving, S, toast } from "../store";
+import { copyText } from "../lib/clipboard";
 import type { ActivationPlatform, ActivationSelection, ActivationStatus } from "../lib/types";
 import UiBadge from "./UiBadge.vue";
 import UiButton from "./UiButton.vue";
+import UiIcon from "./UiIcon.vue";
 import UiNotice from "./UiNotice.vue";
 import UiSelect from "./UiSelect.vue";
 
@@ -28,6 +30,32 @@ const choices = computed(() => {
 });
 const canSave = computed(() => !!S.activation && dirty.value && !busy.value && !!form.instance
   && S.activation.state !== "storage_error");
+const environmentRows = computed(() => {
+  const rows: { key: string; label: string; value: string }[] = [];
+  const current = S.activation?.selection;
+  const saved = S.activation?.saved_selection;
+  if (current?.platform === "qq_official" && current.environment_id) {
+    rows.push({ key: "current", label: "当前运行环境", value: current.environment_id });
+  }
+  if (saved?.platform === "qq_official" && saved.environment_id
+    && saved.environment_id !== current?.environment_id) {
+    rows.push({ key: "saved", label: rows.length ? "下次启动环境" : "官方环境 ID", value: saved.environment_id });
+  }
+  if (rows.length === 1) rows[0].label = "官方环境 ID";
+  return rows;
+});
+const copiedEnvironment = ref("");
+let copiedTimer: number | undefined;
+async function copyEnvironment(value: string, key: string) {
+  if (!await copyText(value)) {
+    toast("复制失败，请手动选择环境 ID");
+    return;
+  }
+  copiedEnvironment.value = key;
+  window.clearTimeout(copiedTimer);
+  copiedTimer = window.setTimeout(() => { copiedEnvironment.value = ""; }, 2000);
+}
+onBeforeUnmount(() => window.clearTimeout(copiedTimer));
 function describe(selection: ActivationSelection | null | undefined) {
   return selection ? `${selection.platform === "onebot" ? "OneBot" : "QQ 官方"} · ${selection.instance_id}` : "尚未选择";
 }
@@ -80,6 +108,20 @@ async function save() {
         <div><span>当前运行选择</span><strong>{{ describe(S.activation.selection) }}</strong></div>
         <div><span>下次完整启动</span><strong>{{ describe(S.activation.saved_selection) }}</strong></div>
       </div>
+      <div v-if="environmentRows.length" class="activation-env">
+        <div v-for="row in environmentRows" :key="row.key" class="activation-env-row">
+          <div>
+            <span>{{ row.label }}</span>
+            <code>{{ row.value }}</code>
+          </div>
+          <UiButton kind="line" size="sm" :aria-label="`复制${row.label}`"
+            @click="copyEnvironment(row.value, row.key)">
+            <UiIcon :name="copiedEnvironment === row.key ? 'check' : 'copy'" :size="15" />
+            {{ copiedEnvironment === row.key ? "已复制" : "复制" }}
+          </UiButton>
+        </div>
+        <p>用于模组 <code>qq_official.environmentId</code> 与插件环境校验；不是密钥，但必须完全一致。</p>
+      </div>
       <UiNotice :tone="S.activation.state === 'storage_error' ? 'bad' : 'info'">{{ S.activation.message }}<br />注册状态：{{ S.activation.registered ? '已注册' : '未注册' }} · 适配器：{{ S.activation.adapter_status }} · 在线状态：未知</UiNotice>
       <UiNotice v-if="S.activation.pending_restart" tone="warn">新选择已保存，当前运行选择保持生效。请在维护窗口完整重启 AstrBot；仅重载插件不会应用。</UiNotice>
       <UiNotice v-if="dirty && expectedRevision !== S.activation.config_revision" tone="warn">选择已在其它页面更新。本页草稿尚未覆盖它，请放弃修改并刷新。</UiNotice>
@@ -111,6 +153,13 @@ async function save() {
 .activation-summary div { display: grid; gap: 6px; min-width: 0; }
 .activation-summary span { font-size: 12px; color: var(--ink3); }
 .activation-summary strong { font-size: 14px; overflow-wrap: anywhere; }
+.activation-env { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--row); border-radius: 8px; background: var(--thead); }
+.activation-env-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.activation-env-row > div { display: grid; gap: 4px; min-width: 0; }
+.activation-env-row span { color: var(--ink3); font-size: 12px; }
+.activation-env-row code { color: var(--ink); font: 12px/1.5 var(--fm); overflow-wrap: anywhere; }
+.activation-env p { margin: 0; color: var(--ink3); font-size: 12px; }
+.activation-env p code { font-family: var(--fm); }
 .activation-fields label { display: grid; gap: 8px; min-width: 0; font-size: 13px; }
 .activation-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 4px; }
 .activation-actions p { flex: 1 1 220px; }
@@ -119,6 +168,7 @@ async function save() {
   .activation-heading { padding: 16px; align-items: flex-start; }
   .activation-body { padding: 16px; }
   .activation-summary, .activation-fields { grid-template-columns: minmax(0, 1fr); }
+  .activation-env-row { align-items: flex-start; }
   .activation-actions p { flex-basis: 100%; }
 }
 </style>

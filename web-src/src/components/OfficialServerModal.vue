@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
-import { api } from "../store";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { api, toast } from "../store";
+import { copyText } from "../lib/clipboard";
 import UiBadge from "./UiBadge.vue";
 import UiButton from "./UiButton.vue";
 import UiField from "./UiField.vue";
@@ -57,6 +58,20 @@ const form = reactive({
   token: "",
 });
 const errors = reactive<Record<string, string>>({});
+const copiedId = ref(false);
+let copiedTimer: number | undefined;
+async function copyServerId() {
+  const id = props.server?.server_id;
+  if (!id) return;
+  if (!await copyText(id)) {
+    toast("复制失败，请手动选择服务器 ID");
+    return;
+  }
+  copiedId.value = true;
+  window.clearTimeout(copiedTimer);
+  copiedTimer = window.setTimeout(() => { copiedId.value = false; }, 2000);
+}
+onBeforeUnmount(() => window.clearTimeout(copiedTimer));
 
 /* 父级保存备注来源后会把新的 server 对象传回来：只同步 MOTD 缓存，不覆盖正在输入的表单。 */
 watch(() => props.server, (server) => {
@@ -265,6 +280,20 @@ async function setRemarkSrc(value: boolean) {
         </UiField>
       </div>
 
+      <section v-if="isEdit && server?.server_id" class="server-id-field" aria-label="服务器 ID">
+        <div class="server-id-head">
+          <span class="field-label">服务器 ID</span>
+          <UiBadge tone="neutral">模组 qq_official.serverId</UiBadge>
+        </div>
+        <div class="server-id-row">
+          <code>{{ server.server_id }}</code>
+          <UiButton kind="line" size="sm" @click="copyServerId">
+            <UiIcon :name="copiedId ? 'check' : 'copy'" :size="15" />{{ copiedId ? "已复制" : "复制" }}
+          </UiButton>
+        </div>
+        <p class="field-help">填到模组 <code>qq_official.serverId</code>，必须与这里完全一致；不是密钥。</p>
+      </section>
+
       <UiField for="official-server-remark" label="手填备注" help="最多 50 个字符，切换来源不会丢失。" :err="errors.remark">
         <UiInput id="official-server-remark" v-model="form.remark" :maxlength="50" placeholder="请输入服务器备注"
           :error="!!errors.remark" />
@@ -378,6 +407,35 @@ async function setRemarkSrc(value: boolean) {
 }
 .switch-copy .field-help {
   margin-top: 4px;
+}
+.server-id-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 6px;
+  background: var(--thead);
+}
+.server-id-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.server-id-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.server-id-row code {
+  min-width: 0;
+  color: var(--ink);
+  font: 12px/1.5 var(--fm);
+  overflow-wrap: anywhere;
+}
+.server-id-field .field-help code {
+  font-family: var(--fm);
 }
 .motd-field {
   display: flex;
